@@ -2,17 +2,25 @@ package backingpin
 
 type holder struct {
 	b []byte
+	s string
 }
 
-var sink []byte
+var (
+	sinkBytes  []byte
+	sinkString string
+)
 
 var table = map[string][]byte{}
 
-var big [65536]byte
+var big [65537]byte
 
-var head = big[:16] // want `subslice keeps a 65536-byte backing array alive: copy the bytes with slices.Clone`
+var head = big[:16] // want `subslice keeps a 65537-byte backing array alive: copy the bytes with slices.Clone`
 
-func keep(b []byte) { sink = b }
+func keep(b []byte) { sinkBytes = b }
+
+func use(b []byte) int { return len(b) }
+
+func identity(b []byte) []byte { return b }
 
 func arrayBelow() []byte {
 	var buf [65535]byte
@@ -21,7 +29,12 @@ func arrayBelow() []byte {
 
 func arrayAt() []byte {
 	var buf [65536]byte
-	return buf[:10] // want `subslice keeps a 65536-byte backing array alive: copy the bytes with slices.Clone`
+	return buf[:10]
+}
+
+func arrayAbove() []byte {
+	var buf [65537]byte
+	return buf[:10] // want `subslice keeps a 65537-byte backing array alive: copy the bytes with slices.Clone`
 }
 
 func wordsBelow() []int64 {
@@ -31,7 +44,12 @@ func wordsBelow() []int64 {
 
 func wordsAt() []int64 {
 	var buf [8192]int64
-	return buf[:10] // want `subslice keeps a 65536-byte backing array alive`
+	return buf[:10]
+}
+
+func wordsAbove() []int64 {
+	var buf [8193]int64
+	return buf[:10] // want `subslice keeps a 65544-byte backing array alive`
 }
 
 func makeBelow() []byte {
@@ -41,125 +59,285 @@ func makeBelow() []byte {
 
 func makeAt() []byte {
 	b := make([]byte, 65536)
-	return b[:10] // want `subslice keeps a 65536-byte backing array alive`
-}
-
-func makeCapacity() []byte {
-	b := make([]byte, 0, 65536)
-	return b[:10] // want `subslice keeps a 65536-byte backing array alive`
-}
-
-func makeWordsBelow() []int32 {
-	b := make([]int32, 16383)
 	return b[:10]
+}
+
+func makeAbove() []byte {
+	b := make([]byte, 65537)
+	return b[:10] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func makeCapAbove() []byte {
+	b := make([]byte, 0, 65537)
+	return b[:10] // want `subslice keeps a 65537-byte backing array alive`
 }
 
 func makeWordsAt() []int32 {
 	b := make([]int32, 16384)
-	return b[:10] // want `subslice keeps a 65536-byte backing array alive`
+	return b[:10]
 }
 
-func makeConstant() []byte {
+func makeWordsAbove() []int32 {
+	b := make([]int32, 16385)
+	return b[:10] // want `subslice keeps a 65540-byte backing array alive`
+}
+
+func makeConstSize() []byte {
 	const n = 1 << 17
-	var b = make([]byte, n)
+	b := make([]byte, n)
 	return b[:10] // want `subslice keeps a 131072-byte backing array alive`
 }
 
-func pointerToArray(p *[65536]byte) []byte {
-	return p[:10] // want `subslice keeps a 65536-byte backing array alive`
+func makeVarDecl() []byte {
+	var b = make([]byte, 1<<17)
+	return b[:10] // want `subslice keeps a 131072-byte backing array alive`
 }
 
-func dynamicBounds(n int) []byte {
-	var buf [65536]byte
-	return buf[n:] // want `subslice keeps a 65536-byte backing array alive`
+func makeOnceAssignedSize() []byte {
+	n := 1 << 17
+	b := make([]byte, n)
+	return b[:10] // want `subslice keeps a 131072-byte backing array alive`
+}
+
+func makeIncrementedSize() []byte {
+	n := 1 << 17
+	n++
+	b := make([]byte, n)
+	return b[:10]
+}
+
+func newArrayAbove() []byte {
+	p := new([65537]byte)
+	return p[:10] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func newArrayAt() []byte {
+	p := new([65536]byte)
+	return p[:10]
+}
+
+func arrayPointerParam(p *[65537]byte) []byte {
+	return p[:10] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func arrayPointerParamAt(p *[65536]byte) []byte {
+	return p[:10]
+}
+
+func resliced() []byte {
+	var buf [65537]byte
+	b := buf[:]
+	return b[:10] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func reslicedAddressTaken() []byte {
+	var buf [65537]byte
+	b := buf[:]
+	p := &b
+	_ = p
+	return b[:10]
+}
+
+func dynamicBound(n int) []byte {
+	var buf [65537]byte
+	return buf[:n] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func lowBound(n int) []byte {
+	var buf [65537]byte
+	return buf[n:] // want `subslice keeps a 65537-byte backing array alive`
 }
 
 func threeIndex() []byte {
-	var buf [65536]byte
-	return buf[:10:10] // want `subslice keeps a 65536-byte backing array alive`
+	var buf [65537]byte
+	return buf[:10:10] // want `subslice keeps a 65537-byte backing array alive`
 }
 
 func parenthesized() []byte {
-	var buf [65536]byte
-	return (buf[:10]) // want `subslice keeps a 65536-byte backing array alive`
+	var buf [65537]byte
+	return (buf[:10]) // want `subslice keeps a 65537-byte backing array alive`
 }
 
 func storedGlobal() {
-	var buf [65536]byte
-	sink = buf[:10] // want `subslice keeps a 65536-byte backing array alive`
+	var buf [65537]byte
+	sinkBytes = buf[:10] // want `subslice keeps a 65537-byte backing array alive`
 }
 
-func storedField(h *holder) {
-	var buf [65536]byte
-	h.b = buf[:10] // want `subslice keeps a 65536-byte backing array alive`
+func passedToLeakingParam() {
+	var buf [65537]byte
+	keep(buf[:10]) // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func passedToNonLeakingParam() int {
+	var buf [65537]byte
+	return use(buf[:10])
+}
+
+func passedToReturningParam() int {
+	var buf [65537]byte
+	return len(identity(buf[:10]))
+}
+
+func sentOnChannel(ch chan []byte) {
+	var buf [65537]byte
+	ch <- buf[:10] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func storedInParameter(h *holder) {
+	var buf [65537]byte
+	h.b = buf[:10] // want `subslice keeps a 65537-byte backing array alive`
 }
 
 func storedMap() {
-	b := make([]byte, 65536)
-	table["k"] = b[:10] // want `subslice keeps a 65536-byte backing array alive`
+	b := make([]byte, 65537)
+	table["k"] = b[:10] // want `subslice keeps a 65537-byte backing array alive`
 }
 
 func structLiteral() holder {
-	var buf [65536]byte
-	return holder{b: buf[:10]} // want `subslice keeps a 65536-byte backing array alive`
+	var buf [65537]byte
+	return holder{b: buf[:10]} // want `subslice keeps a 65537-byte backing array alive`
 }
 
 func sliceLiteral() [][]byte {
-	var buf [65536]byte
-	parts := [][]byte{buf[:10]} // want `subslice keeps a 65536-byte backing array alive`
+	var buf [65537]byte
+	parts := [][]byte{buf[:10]} // want `subslice keeps a 65537-byte backing array alive`
 	return parts
 }
 
-func sentOnChannel(ch chan<- []byte) {
+func substringBelow() string {
+	var buf [65535]byte
+	s := string(buf[:])
+	return s[:10]
+}
+
+func substringAt() string {
 	var buf [65536]byte
-	ch <- buf[:10] // want `subslice keeps a 65536-byte backing array alive`
+	s := string(buf[:])
+	return s[:10]
+}
+
+func substringAbove() string {
+	var buf [65537]byte
+	s := string(buf[:])
+	return s[:10] // want `substring keeps a 65537-byte backing string alive: copy it with strings\.Clone`
+}
+
+func substringOfMade() string {
+	s := string(make([]byte, 1<<17))
+	return s[:10] // want `substring keeps a 131072-byte backing string alive`
+}
+
+func substringOfMadeCapacity() string {
+	s := string(make([]byte, 0, 1<<17))
+	return s[:0]
+}
+
+func substringStored() {
+	var buf [65537]byte
+	s := string(buf[:])
+	sinkString = s[2:12] // want `substring keeps a 65537-byte backing string alive`
+}
+
+func substringStoredInField(h *holder) {
+	var buf [65537]byte
+	s := string(buf[:])
+	h.s = s[2:12] // want `substring keeps a 65537-byte backing string alive`
+}
+
+func substringOfBoundedConversion() string {
+	var buf [65537]byte
+	s := string(buf[:65537])
+	return s[1:] // want `substring keeps a 65537-byte backing string alive`
+}
+
+func substringOfPartial() string {
+	var buf [65537]byte
+	s := string(buf[:100])
+	return s[1:]
+}
+
+func substringOfConstant() string {
+	const text = "constant strings live in read-only data"
+	return text[1:]
 }
 
 func wholeArray() []byte {
-	var buf [65536]byte
-	return buf[:] // want `subslice keeps a 65536-byte backing array alive`
+	var buf [65537]byte
+	return buf[:]
 }
 
-func wholeArrayFromZero() []byte {
-	var buf [65536]byte
-	return buf[0:] // want `subslice keeps a 65536-byte backing array alive`
+func wholeArrayZero() []byte {
+	var buf [65537]byte
+	return buf[0:]
 }
 
-func localOnly() int {
-	var buf [65536]byte
+func wholeArrayHigh() []byte {
+	var buf [65537]byte
+	return buf[0:65537]
+}
+
+func wholeArrayLen() []byte {
+	var buf [65537]byte
+	return buf[:len(buf)]
+}
+
+func wholeWords() []int64 {
+	var buf [8193]int64
+	return buf[:8193]
+}
+
+func wholeMade() []byte {
+	b := make([]byte, 65537)
+	return b[:len(b)]
+}
+
+func wholeString() string {
+	var buf [65537]byte
+	s := string(buf[:])
+	return s[:]
+}
+
+func notEscaping() int {
+	var buf [65537]byte
 	s := buf[:10]
 	return len(s)
 }
 
 func localAssign() int {
-	var buf [65536]byte
+	var buf [65537]byte
 	var s []byte
 	s = buf[:10]
 	return len(s)
 }
 
-func passedToCall() {
-	var buf [65536]byte
-	keep(buf[:10])
+func notEscapingMake() int {
+	b := make([]byte, 65537)
+	s := b[:10]
+	return len(s)
 }
 
-func reassigned(n int) []byte {
-	b := make([]byte, 65536)
-	b = make([]byte, n)
-	return b[:10]
+func notEscapingString() int {
+	var buf [65537]byte
+	s := string(buf[:])
+	return len(s[:10])
 }
 
-func dynamicMake(n int) []byte {
+func smallLiteral() []byte {
+	var buf [100]byte
+	return buf[:10]
+}
+
+func unknownSize(b []byte, n int) []byte {
+	return b[:n]
+}
+
+func unknownMake(n int) []byte {
 	b := make([]byte, n)
 	return b[:10]
 }
 
-func parameterSlice(b []byte) []byte {
-	return b[:10]
-}
-
-func resliced() []byte {
-	var buf [65536]byte
-	b := buf[:]
+func reassigned(n int) []byte {
+	b := make([]byte, 65537)
+	b = make([]byte, n)
 	return b[:10]
 }

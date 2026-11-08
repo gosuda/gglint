@@ -6,8 +6,9 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
-	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/go/types/typeutil"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 const message = "time.After in a loop allocates a timer per iteration: create one time.Timer before the loop and Reset it"
@@ -17,18 +18,18 @@ var Analyzer = &analysis.Analyzer{
 	Doc: `report calls to time.After inside a loop body
 
 Each pass through the body of a for or range statement that calls time.After
-allocates a new timer that stays alive until it fires. The loop header runs
-outside the body, and a function literal inside the body is a function of its
-own, so neither is reported.`,
+allocates a new timer that stays alive until it fires. A function literal
+inside the body counts as inside it; the loop header (init, condition, post
+statement, range operand) runs outside the body and is not reported.`,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	ins := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	ins := inspection.Of(pass)
 	calls := []ast.Node{(*ast.CallExpr)(nil)}
 	ins.WithStack(calls, func(n ast.Node, push bool, stack []ast.Node) bool {
-		call := n.(*ast.CallExpr)
+		call := inspection.As[*ast.CallExpr](n)
 		if push && isTimeAfter(pass.TypesInfo, call) && inLoopBody(stack) {
 			pass.Report(analysis.Diagnostic{Pos: call.Pos(), End: call.End(), Message: message})
 		}
@@ -46,8 +47,6 @@ func isTimeAfter(info *types.Info, call *ast.CallExpr) bool {
 func inLoopBody(stack []ast.Node) bool {
 	for i := len(stack) - 2; i >= 0; i-- {
 		switch n := stack[i].(type) {
-		case *ast.FuncDecl, *ast.FuncLit:
-			return false
 		case *ast.ForStmt:
 			if stack[i+1] == n.Body {
 				return true
