@@ -207,6 +207,8 @@ func TestRunText(t *testing.T) {
 	aFinding := expect{file: "a/a.go", needle: printfVerb("x"), message: printfMessage("a", "x"), token: "printf"}
 	cFinding := expect{file: "c/c.go", needle: printfVerb("y"), message: printfMessage("c", "y"), token: "printf"}
 	unused := expect{file: "b/b.go", needle: "//nolint", message: "unused nolint directive for printf", token: rules.NolintName}
+	tFinding := expect{file: "t/t.go", needle: printfVerb("x"), message: printfMessage("t", "x"), token: "printf"}
+	tTestFinding := expect{file: "t/t_test.go", needle: printfVerb("y"), message: printfMessage("t", "y"), token: "printf"}
 	cases := []struct {
 		name string
 		toml string
@@ -220,6 +222,9 @@ func TestRunText(t *testing.T) {
 		{name: "exclude path", toml: "[[exclude]]\npaths = [\"^c/\"]\n", args: []string{"run", "./a", "./c"}, want: []expect{aFinding}},
 		{name: "nolint suppresses", edit: withNolint("a/a.go", `logf("`), args: []string{"run", "./a"}},
 		{name: "unused nolint", edit: withNolint("b/b.go", "fmt.Printf"), args: []string{"run", "./b"}, want: []expect{unused}},
+		{name: "test file finding", args: []string{"run", "./t"}, want: []expect{tFinding, tTestFinding}},
+		{name: "exclude tests", toml: "[[exclude]]\ntests = true\nrules = [\"printf\"]\n", args: []string{"run", "./t"}, want: []expect{tFinding}},
+		{name: "exclude non-tests", toml: "[[exclude]]\ntests = false\nrules = [\"printf\"]\n", args: []string{"run", "./t"}, want: []expect{tTestFinding}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

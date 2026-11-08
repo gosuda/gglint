@@ -117,6 +117,10 @@ deny = [{ path = "archive/zip", allow_from = ["example.com/m/internal/zipx"] }]
 paths = ["^internal/legacy/"]                  # Go regexps against the path relative to the config file
 rules = ["complexity", "staticcheck:SA1019"]   # finding tokens, same syntax as //nolint
 text = "^function .* is too complex"           # Go regexp against the message
+
+[[exclude]]                 # turns off two rules in test code only
+tests = true                # true: only _test.go files; false: only other files; omit for both
+rules = ["goconst", "staticcheck:SA1019"]
 ```
 
 | Key | Default | Meaning |
@@ -128,7 +132,7 @@ text = "^function .* is too complex"           # Go regexp against the message
 | `run.build_tags` | `[]` | Build tags for `go vet`. |
 | `rules.complexity.<limit>` | the mode's value | One of the eight limits in [Complexity limits](#complexity-limits). A missing key keeps the mode's value. Values must be 0 or more. |
 | `rules.checkimports.deny` | `[]` | Imports that `checkimports` reports. `path` is an exact import path or a prefix ending in `/...`, which matches the prefix and everything below it. `allow_from` lists the importing packages that may use it, in the same syntax. |
-| `[[exclude]]` | none | Each entry needs at least one of `paths`, `rules`, `text`. |
+| `[[exclude]]` | none | Each entry needs at least one of `paths`, `rules`, `tests`, `text`. |
 
 gglint selects every rule whose mode is at or below the configured mode, adds `enable`, and removes `disable`. `typecheck` always runs. Settings under `[rules.X]` for a rule that is not selected are accepted and ignored.
 
@@ -140,6 +144,8 @@ gglint selects every rule whose mode is at or below the configured mode, adds `e
 
 `[[exclude]]` paths match the slash-separated path relative to the directory of the config file, or to the working directory when there is no file.
 
+`[[exclude]]` `tests` selects by file kind. With `tests = true` the entry matches only findings in files whose name ends in `_test.go`. With `tests = false` it matches only findings in other files. Without `tests` the entry matches files of both kinds. Like the other keys, `tests` only narrows the entry, so `tests = true` with `rules` turns those rules off in test code and leaves them on elsewhere.
+
 ### Config errors
 
 A config error exits 2 and prints `gglint: <config path>: <message>`. A bad `-mode` value prints the message without a path. The messages are:
@@ -150,7 +156,7 @@ enable: unknown rule "x"
 disable: unknown rule "x"
 rule "x" is in both enable and disable
 rule "typecheck" cannot be disabled
-exclude[0]: set at least one of paths, rules, text
+exclude[0]: set at least one of paths, rules, tests, text
 exclude[0].paths[0]: <regexp error>
 exclude[0].text: <regexp error>
 exclude[0].rules: unknown rule "x"

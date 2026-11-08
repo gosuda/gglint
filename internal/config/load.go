@@ -55,6 +55,7 @@ type denySchema struct {
 type excludeSchema struct {
 	Paths []string `toml:"paths"`
 	Rules []string `toml:"rules"`
+	Tests *bool    `toml:"tests"`
 	Text  string   `toml:"text"`
 }
 
