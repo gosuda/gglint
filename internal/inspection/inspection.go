@@ -17,10 +17,6 @@ func Of(pass *analysis.Pass) *inspector.Inspector {
 	return insp
 }
 
-func Node[N ast.Node](c inspector.Cursor) N {
-	return As[N](c.Node())
-}
-
 func As[N ast.Node](n ast.Node) N {
 	node, ok := n.(N)
 	if !ok {

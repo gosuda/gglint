@@ -65,7 +65,7 @@ func run(pass *analysis.Pass) (any, error) {
 		flows:  map[*types.Var]flow{},
 	}
 	for cur := range insp.Root().Preorder((*ast.SliceExpr)(nil)) {
-		s := inspection.Node[*ast.SliceExpr](cur)
+		s := inspection.As[*ast.SliceExpr](cur.Node())
 		size := c.backingBytes(s)
 		if size > limitBytes && !c.coversBacking(s, size) && c.flowOf(cur) != stays {
 			pass.Reportf(s.Pos(), c.format(s), size)
@@ -279,9 +279,9 @@ func (c checker) flowOf(cur inspector.Cursor) flow {
 	case edge.SendStmt_Value:
 		return outlives
 	case edge.AssignStmt_Rhs:
-		return c.assignFlow(inspection.Node[*ast.AssignStmt](cur.Parent()), index)
+		return c.assignFlow(inspection.As[*ast.AssignStmt](cur.Parent().Node()), index)
 	case edge.ValueSpec_Values:
-		return c.specFlow(inspection.Node[*ast.ValueSpec](cur.Parent()), index)
+		return c.specFlow(inspection.As[*ast.ValueSpec](cur.Parent().Node()), index)
 	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value:
 		return c.flowOf(cur.Parent())
 	case edge.UnaryExpr_X:
@@ -293,7 +293,7 @@ func (c checker) flowOf(cur inspector.Cursor) flow {
 }
 
 func (c checker) addressFlow(cur inspector.Cursor) flow {
-	if inspection.Node[*ast.UnaryExpr](cur).Op != token.AND {
+	if inspection.As[*ast.UnaryExpr](cur.Node()).Op != token.AND {
 		return stays
 	}
 	return c.flowOf(cur)
@@ -314,7 +314,7 @@ func (c checker) specFlow(spec *ast.ValueSpec, index int) flow {
 }
 
 func (c checker) argFlow(cur inspector.Cursor, index int) flow {
-	call := inspection.Node[*ast.CallExpr](cur)
+	call := inspection.As[*ast.CallExpr](cur.Node())
 	fn := typeutil.StaticCallee(c.info, call)
 	if fn == nil || c.isMethodExpr(call.Fun) {
 		return stays
@@ -423,7 +423,7 @@ func (c checker) varFlow(obj types.Object) flow {
 func varUses(info *types.Info, insp *inspector.Inspector) map[*types.Var][]inspector.Cursor {
 	uses := map[*types.Var][]inspector.Cursor{}
 	for cur := range insp.Root().Preorder((*ast.Ident)(nil)) {
-		if v, ok := info.Uses[inspection.Node[*ast.Ident](cur)].(*types.Var); ok {
+		if v, ok := info.Uses[inspection.As[*ast.Ident](cur.Node())].(*types.Var); ok {
 			uses[v] = append(uses[v], cur)
 		}
 	}

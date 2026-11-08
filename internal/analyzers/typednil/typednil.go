@@ -25,7 +25,7 @@ check passes on it. Other nil conversions, such as []T(nil), are not reported.`,
 func run(pass *analysis.Pass) (any, error) {
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.ReturnStmt)(nil)) {
 		sig := enclosingSignature(pass.TypesInfo, cur)
-		ret := inspection.Node[*ast.ReturnStmt](cur)
+		ret := inspection.As[*ast.ReturnStmt](cur.Node())
 		if sig == nil || len(ret.Results) != sig.Results().Len() {
 			continue
 		}

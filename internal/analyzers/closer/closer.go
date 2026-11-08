@@ -188,7 +188,7 @@ func (s *scan) isPlain(cur inspector.Cursor) bool {
 		return s.isPlainSelection(cur.Parent())
 	}
 	if kind == edge.BinaryExpr_X || kind == edge.BinaryExpr_Y {
-		op := inspection.Node[*ast.BinaryExpr](cur.Parent()).Op
+		op := inspection.As[*ast.BinaryExpr](cur.Parent().Node()).Op
 		return op == token.EQL || op == token.NEQ
 	}
 	if kind == edge.AssignStmt_Rhs {
@@ -198,7 +198,7 @@ func (s *scan) isPlain(cur inspector.Cursor) bool {
 }
 
 func (s *scan) isPlainSelection(cur inspector.Cursor) bool {
-	switch s.pass.TypesInfo.Selections[inspection.Node[*ast.SelectorExpr](cur)].Kind() {
+	switch s.pass.TypesInfo.Selections[inspection.As[*ast.SelectorExpr](cur.Node())].Kind() {
 	case types.FieldVal:
 		return true
 	case types.MethodVal:
@@ -209,7 +209,7 @@ func (s *scan) isPlainSelection(cur inspector.Cursor) bool {
 }
 
 func isDiscarded(cur inspector.Cursor) bool {
-	assign := inspection.Node[*ast.AssignStmt](cur.Parent())
+	assign := inspection.As[*ast.AssignStmt](cur.Parent().Node())
 	if len(assign.Lhs) != len(assign.Rhs) {
 		return false
 	}

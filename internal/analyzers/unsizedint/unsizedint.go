@@ -28,7 +28,7 @@ var Analyzer = &analysis.Analyzer{
 func run(pass *analysis.Pass) (any, error) {
 	insp := inspection.Of(pass)
 	for c := range insp.Root().Preorder((*ast.StructType)(nil)) {
-		fields := inspection.Node[*ast.StructType](c).Fields.List
+		fields := inspection.As[*ast.StructType](c.Node()).Fields.List
 		if slices.ContainsFunc(fields, hasJSONTag) {
 			reportUnsized(pass, fields)
 		}

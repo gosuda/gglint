@@ -29,7 +29,7 @@ statement, range operand) runs outside the body and is not reported.`,
 
 func run(pass *analysis.Pass) (any, error) {
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.CallExpr)(nil)) {
-		call := inspection.Node[*ast.CallExpr](cur)
+		call := inspection.As[*ast.CallExpr](cur.Node())
 		if isTimeAfter(pass.TypesInfo, call) && inLoopBody(cur) {
 			pass.Report(analysis.Diagnostic{Pos: call.Pos(), End: call.End(), Message: message})
 		}

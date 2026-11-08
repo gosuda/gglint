@@ -288,7 +288,7 @@ func (c checker) limitedBefore(site inspector.Cursor, call *ast.CallExpr) bool {
 		return false
 	}
 	for cur := range ownNodes(fn, (*ast.CallExpr)(nil)) {
-		other := inspection.Node[*ast.CallExpr](cur)
+		other := inspection.As[*ast.CallExpr](cur.Node())
 		if other.Pos() < call.Pos() && c.methodOf(other, errgroupPath, "Group") == "SetLimit" &&
 			slices.Equal(c.receiverKey(other), key) {
 			return true
