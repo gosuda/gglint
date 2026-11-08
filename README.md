@@ -139,7 +139,7 @@ gglint selects every rule whose mode is at or below the configured mode, adds `e
 ### How gglint finds the file
 
 1. If you pass `-config PATH`, gglint uses that file.
-2. Otherwise it looks for `gglint.toml` in the working directory, then in each parent directory. It stops after the first directory that contains `.git`, and checks that directory too. Without a `.git` directory it walks up to the filesystem root. Your home directory gets no special treatment.
+2. Otherwise it looks for `gglint.toml` in the working directory, then in each parent directory. It stops after the first directory that contains `.git`, and checks that directory too. Without a `.git` directory it walks up to the filesystem root. Your home directory gets no special treatment. It stops before checking any directory that is world-writable and owned by another user, such as `/tmp`, and uses no file from there or above.
 3. If no file is found, gglint uses the defaults: mode `standard`, tests reported.
 
 `[[exclude]]` paths match the slash-separated path relative to the directory of the config file, or to the working directory when there is no file.
@@ -178,6 +178,8 @@ The modes are nested: every rule in `basic` is in `standard`, and every rule in 
 ### Complexity limits
 
 The `complexity` rule reports a value only when it is greater than the limit. A value equal to the limit is clean, and a limit of 0 turns that check off. Each limit is at least as tight in `strict` as in `standard`, and in `standard` as in `basic`.
+
+In `_test.go` files, `complexity` skips the function line limit (`max_lines`) and the file line limit (`max_file_lines`).
 
 | Key | Measures | basic | standard | strict |
 |---|---|---|---|---|
