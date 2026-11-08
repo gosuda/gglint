@@ -40,7 +40,7 @@ func rulesCommand(args []string, stdout, stderr io.Writer) int {
 		out = fmt.Appendf(out, "%s\t%s\t%s\t%s\n", r.Name, r.Mode, r.Origin, strings.Join(strings.Fields(r.Doc), " "))
 	}
 	if _, err := stdout.Write(out); err != nil {
-		return exitFailure
+		return fail(stderr, exitFailure, fmt.Errorf("internal: %w", err))
 	}
 	return exitClean
 }

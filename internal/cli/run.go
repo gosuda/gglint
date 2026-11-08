@@ -97,8 +97,8 @@ func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) in
 }
 
 func (s *session) finish(stdout, stderr io.Writer, findings []finding.Finding) int {
-	if report.Write(stdout, s.opts.format, s.cfg.Mode, s.printed, findings) != nil {
-		return exitFailure
+	if err := report.Write(stdout, s.opts.format, s.cfg.Mode, s.printed, findings); err != nil {
+		return fail(stderr, exitFailure, fmt.Errorf("internal: %w", err))
 	}
 	if len(findings) == 0 {
 		return exitClean

@@ -33,7 +33,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "rules":
 		return rulesCommand(args[1:], stdout, stderr)
 	case "version":
-		return versionCommand(stdout)
+		return versionCommand(stdout, stderr)
 	default:
 		return fail(stderr, exitUsage, fmt.Errorf("unknown command %q (want run, rules, or version)", args[0]))
 	}
@@ -58,13 +58,13 @@ func fail(stderr io.Writer, code int, err error) int {
 	return code
 }
 
-func versionCommand(stdout io.Writer) int {
+func versionCommand(stdout, stderr io.Writer) int {
 	version := "(devel)"
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
 		version = info.Main.Version
 	}
 	if _, err := fmt.Fprintf(stdout, "gglint %s %s\n", version, runtime.Version()); err != nil {
-		return exitFailure
+		return fail(stderr, exitFailure, fmt.Errorf("internal: %w", err))
 	}
 	return exitClean
 }
