@@ -27,10 +27,10 @@ type runOptions struct {
 	patterns   []string
 }
 
-func parseRunFlags(args []string) (runOptions, error) {
+func parseRunFlags(args []string, stderr io.Writer) (runOptions, error) {
 	var opts runOptions
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(stderr)
 	fs.StringVar(&opts.configPath, "config", "", "path of gglint.toml")
 	fs.StringVar(&opts.mode, "mode", "", "basic, standard, or strict")
 	fs.StringVar(&opts.format, "format", report.FormatText, "text or json")
@@ -57,8 +57,8 @@ type session struct {
 	printed  string
 }
 
-func newSession(args []string, wd string) (session, error) {
-	opts, err := parseRunFlags(args)
+func newSession(args []string, wd string, stderr io.Writer) (session, error) {
+	opts, err := parseRunFlags(args, stderr)
 	if err != nil {
 		return session{}, err
 	}
@@ -78,7 +78,7 @@ func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if err != nil {
 		return failure(stderr, fmt.Errorf("internal: %w", err))
 	}
-	s, err := newSession(args, wd)
+	s, err := newSession(args, wd, stderr)
 	if err != nil {
 		return usage(stderr, err)
 	}

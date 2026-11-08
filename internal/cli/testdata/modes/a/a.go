@@ -2,6 +2,10 @@ package a
 
 import "fmt"
 
+func logf(format string, args ...any) {
+	fmt.Printf(format, args...)
+}
+
 func Bad() {
-	fmt.Printf("%d\n", "x")
+	logf("%d\n", "x")
 }

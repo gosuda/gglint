@@ -16,7 +16,7 @@ func rulesCommand(args []string, stdout, stderr io.Writer) int {
 	var mode, configPath string
 	var selected bool
 	fs := flag.NewFlagSet("rules", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(stderr)
 	fs.StringVar(&mode, "mode", "", "list rules at or below this mode")
 	fs.StringVar(&configPath, "config", "", "path of gglint.toml (with -selected)")
 	fs.BoolVar(&selected, "selected", false, "list the rules a run would select")
