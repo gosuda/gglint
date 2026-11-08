@@ -1,0 +1,357 @@
+package reentrantlock
+
+import (
+	"fmt"
+	"go/ast"
+	"go/types"
+
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/types/typeutil"
+)
+
+const (
+	relockFormat = "%s is locked again while already held: sync mutexes are not reentrant, so this deadlocks"
+	callFormat   = "call to %s locks %s while it is already held: sync mutexes are not reentrant, so this deadlocks"
+)
+
+var Analyzer = &analysis.Analyzer{
+	Name: "reentrant_withlock_deadlock",
+	Doc: `report locking a sync mutex that the same goroutine already holds
+
+A Lock statement on a sync.Mutex or sync.RWMutex holds the mutex over the
+statements after it in the same statement list, up to the next Unlock
+statement on the same receiver, or to the end of the list when no such
+Unlock follows, as with a deferred Unlock. Inside that region, a Lock on the
+same receiver blocks forever, and so does a call to a same-package function
+whose synchronous execution locks it at any depth; mutually recursive
+helpers reach a fixed point. A same-package function that calls one of its
+function parameters while it holds a mutex runs the function literal, named
+function, or method value passed there under that mutex, with a method
+value's receiver bound to the call-site operand. A go statement evaluates
+its function operand and arguments synchronously and runs the call in a new
+goroutine; a function literal that is neither invoked directly nor passed to
+a parameter its callee invokes is skipped. Two receivers match when they name
+the same variable through the same chain of field selections, ignoring
+address-of and dereference; any other receiver never matches. A parameter
+that is not a pointer receives a copy, so a mutex reached through it never
+matches.`,
+	Run: run,
+}
+
+type declared struct {
+	fn   *types.Func
+	decl *ast.FuncDecl
+}
+
+type helper struct {
+	key   lockKey
+	param int
+}
+
+type checker struct {
+	pass      *analysis.Pass
+	order     []declared
+	decls     map[*types.Func]*ast.FuncDecl
+	invokes   map[*types.Func]map[int]bool
+	helpers   map[*types.Func][]helper
+	summaries map[*types.Func]map[lockKey]bool
+	limit     int
+	reported  map[*ast.CallExpr]bool
+}
+
+func run(pass *analysis.Pass) (any, error) {
+	c := &checker{
+		pass:      pass,
+		decls:     make(map[*types.Func]*ast.FuncDecl),
+		summaries: make(map[*types.Func]map[lockKey]bool),
+		reported:  make(map[*ast.CallExpr]bool),
+	}
+	c.index()
+	c.invokes = c.findInvokes()
+	c.helpers = c.findHelpers()
+	c.summarize()
+	for _, d := range c.order {
+		c.check(d.decl)
+	}
+	return nil, nil
+}
+
+func (c *checker) index() {
+	for _, f := range c.pass.Files {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			if fn, ok := c.pass.TypesInfo.Defs[fd.Name].(*types.Func); ok {
+				c.decls[fn] = fd
+				c.order = append(c.order, declared{fn: fn, decl: fd})
+			}
+		}
+	}
+}
+
+func (c *checker) callee(call *ast.CallExpr) *types.Func {
+	fn := typeutil.StaticCallee(c.pass.TypesInfo, call)
+	if fn == nil {
+		return nil
+	}
+	fn = fn.Origin()
+	if _, ok := c.decls[fn]; !ok {
+		return nil
+	}
+	return fn
+}
+
+func (c *checker) paramIndex(sig *types.Signature, fun ast.Expr) int {
+	id, ok := ast.Unparen(fun).(*ast.Ident)
+	if !ok {
+		return -1
+	}
+	obj := c.pass.TypesInfo.Uses[id]
+	for i := range sig.Params().Len() {
+		if sig.Params().At(i) == obj {
+			return i
+		}
+	}
+	return -1
+}
+
+func (c *checker) findInvokes() map[*types.Func]map[int]bool {
+	found := make(map[*types.Func]map[int]bool)
+	for _, d := range c.order {
+		set := make(map[int]bool)
+		sig := d.fn.Signature()
+		f := &flow{c: c, onCall: func(call *ast.CallExpr) {
+			if i := c.paramIndex(sig, call.Fun); i >= 0 {
+				set[i] = true
+			}
+		}}
+		f.walk(d.decl.Body)
+		found[d.fn] = set
+	}
+	return found
+}
+
+func (c *checker) regions(list []ast.Stmt, visit func(lockKey, []ast.Stmt)) {
+	for i, s := range list {
+		key := c.stmtKey(s, "Lock")
+		if key.root == nil {
+			continue
+		}
+		end := i + 1
+		for end < len(list) && c.stmtKey(list[end], "Unlock") != key {
+			end++
+		}
+		visit(key, list[i+1:end])
+	}
+}
+
+func (c *checker) findHelpers() map[*types.Func][]helper {
+	found := make(map[*types.Func][]helper)
+	for _, d := range c.order {
+		f := &flow{c: c}
+		f.onStmts = func(list []ast.Stmt) {
+			c.regions(list, func(key lockKey, region []ast.Stmt) {
+				found[d.fn] = append(found[d.fn], c.regionHelpers(d.fn, key, region)...)
+			})
+		}
+		f.walk(d.decl.Body)
+	}
+	return found
+}
+
+func (c *checker) regionHelpers(fn *types.Func, key lockKey, region []ast.Stmt) []helper {
+	var found []helper
+	sig := fn.Signature()
+	f := &flow{c: c, onCall: func(call *ast.CallExpr) {
+		if i := c.paramIndex(sig, call.Fun); i >= 0 {
+			found = append(found, helper{key: key, param: i})
+		}
+	}}
+	f.walkStmts(region)
+	return found
+}
+
+func (c *checker) summarize() {
+	calls := make(map[*types.Func][]*ast.CallExpr)
+	for _, d := range c.order {
+		f := &flow{c: c, onCall: func(call *ast.CallExpr) {
+			calls[d.fn] = append(calls[d.fn], call)
+		}}
+		f.walk(d.decl.Body)
+		c.summaries[d.fn] = make(map[lockKey]bool)
+	}
+	c.limit = c.pathLimit(calls)
+	for grew := true; grew; {
+		grew = c.grow(calls)
+	}
+}
+
+func (c *checker) pathLimit(calls map[*types.Func][]*ast.CallExpr) int {
+	limit := -1
+	for _, list := range calls {
+		for _, call := range list {
+			if k := c.lockCallKey(call); k.root != nil {
+				limit = max(limit, len(k.path))
+			}
+		}
+	}
+	return limit
+}
+
+func (c *checker) grow(calls map[*types.Func][]*ast.CallExpr) bool {
+	grew := false
+	for fn, list := range calls {
+		for _, call := range list {
+			grew = c.add(c.summaries[fn], c.reach(call)) || grew
+		}
+	}
+	return grew
+}
+
+func (c *checker) add(summary map[lockKey]bool, keys []lockKey) bool {
+	grew := false
+	for _, k := range keys {
+		if k.root != nil && len(k.path) <= c.limit && !summary[k] {
+			summary[k] = true
+			grew = true
+		}
+	}
+	return grew
+}
+
+func (c *checker) reach(call *ast.CallExpr) []lockKey {
+	if k := c.lockCallKey(call); k.root != nil {
+		return []lockKey{k}
+	}
+	fn := c.callee(call)
+	if fn == nil {
+		return nil
+	}
+	return append(c.callKeys(fn, call), c.callbackKeys(fn, call)...)
+}
+
+func (c *checker) callKeys(fn *types.Func, call *ast.CallExpr) []lockKey {
+	var keys []lockKey
+	for k := range c.summaries[fn] {
+		if s := c.substitute(k, call, fn); s.root != nil {
+			keys = append(keys, s)
+		}
+	}
+	return keys
+}
+
+func (c *checker) callbackKeys(fn *types.Func, call *ast.CallExpr) []lockKey {
+	var keys []lockKey
+	for i := range c.invokes[fn] {
+		if i >= len(call.Args) {
+			continue
+		}
+		target, b := c.namedCallback(call.Args[i])
+		for k := range c.summaries[target] {
+			if bk := b.bindKey(k); bk.root != nil {
+				keys = append(keys, bk)
+			}
+		}
+	}
+	return keys
+}
+
+func (c *checker) namedCallback(arg ast.Expr) (*types.Func, binding) {
+	var id *ast.Ident
+	var sel *ast.SelectorExpr
+	switch x := ast.Unparen(arg).(type) {
+	case *ast.Ident:
+		id = x
+	case *ast.SelectorExpr:
+		id, sel = x.Sel, x
+	default:
+		return nil, binding{}
+	}
+	fn, ok := c.pass.TypesInfo.Uses[id].(*types.Func)
+	if !ok {
+		return nil, binding{}
+	}
+	fn = fn.Origin()
+	decl, ok := c.decls[fn]
+	if !ok {
+		return nil, binding{}
+	}
+	return fn, binding{recv: c.receiverBinding(fn, sel), decl: decl}
+}
+
+func (c *checker) receiverBinding(fn *types.Func, sel *ast.SelectorExpr) map[types.Object]lockKey {
+	r := fn.Signature().Recv()
+	if sel == nil || r == nil {
+		return nil
+	}
+	k := c.recvKey(sel)
+	if k.root == nil {
+		return nil
+	}
+	return map[types.Object]lockKey{r: k}
+}
+
+func (c *checker) check(decl *ast.FuncDecl) {
+	f := &flow{c: c, onCall: c.checkHelperCall}
+	f.onStmts = func(list []ast.Stmt) {
+		c.regions(list, func(key lockKey, region []ast.Stmt) {
+			c.heldFlow(key, binding{}).walkStmts(region)
+		})
+	}
+	f.walk(decl.Body)
+}
+
+func (c *checker) heldFlow(key lockKey, b binding) *flow {
+	return &flow{c: c, onCall: func(call *ast.CallExpr) {
+		c.checkInner(call, key, b)
+	}}
+}
+
+func (c *checker) checkHelperCall(call *ast.CallExpr) {
+	fn := c.callee(call)
+	for _, h := range c.helpers[fn] {
+		key := c.substitute(h.key, call, fn)
+		if key.root != nil && h.param < len(call.Args) {
+			c.checkCallback(key, call.Args[h.param])
+		}
+	}
+}
+
+func (c *checker) checkCallback(key lockKey, arg ast.Expr) {
+	if lit, ok := ast.Unparen(arg).(*ast.FuncLit); ok {
+		c.heldFlow(key, binding{}).walk(lit.Body)
+		return
+	}
+	if target, b := c.namedCallback(arg); target != nil {
+		c.heldFlow(key, b).walk(b.decl.Body)
+	}
+}
+
+func (c *checker) checkInner(call *ast.CallExpr, key lockKey, b binding) {
+	if k := c.lockCallKey(call); k.root != nil {
+		if b.bindKey(k) == key {
+			c.report(call, fmt.Sprintf(relockFormat, key))
+		}
+		return
+	}
+	fn := c.callee(call)
+	if fn == nil {
+		return
+	}
+	for _, k := range append(c.callKeys(fn, call), c.callbackKeys(fn, call)...) {
+		if b.bindKey(k) == key {
+			c.report(call, fmt.Sprintf(callFormat, fn.Name(), key))
+			return
+		}
+	}
+}
+
+func (c *checker) report(call *ast.CallExpr, msg string) {
+	if c.reported[call] {
+		return
+	}
+	c.reported[call] = true
+	c.pass.Report(analysis.Diagnostic{Pos: call.Pos(), End: call.End(), Message: msg})
+}
