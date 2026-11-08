@@ -27,19 +27,32 @@ var Analyzer = &analysis.Analyzer{
 	Name: "backingpin",
 	Doc: "Report subslices and substrings that keep a backing store larger than 64 KiB alive.\n\n" +
 		"A slice expression is reported when its backing store is statically larger than 65536 bytes, " +
-		"it does not cover the whole store, and its result is returned, stored in a field, global, map, " +
-		"or composite literal, sent on a channel, or passed to a function of the package that stores or " +
-		"sends that parameter. Known backing stores are arrays and pointers to arrays, make with a constant " +
-		"capacity, once-assigned local slices of either, and strings converted from a byte slice of constant length.",
+		"it does not cover the whole store, and its value outlives the function: it is returned, sent on " +
+		"a channel, stored in a package variable, in a field or element reached through a pointer, or in a " +
+		"map or slice not made in the function, or passed to a function of the package that does one of " +
+		"these with that parameter. A local variable, a field of a local value, an element of a local map " +
+		"or slice, and a composite literal escape only when they do. Known backing stores are arrays and " +
+		"pointers to arrays, make with a constant capacity, once-assigned local slices of either, and " +
+		"strings converted from a byte slice of constant length; a store whose type depends on a type " +
+		"parameter has no static size.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
+
+type flow int
+
+const (
+	stays flow = iota
+	returned
+	outlives
+)
 
 type checker struct {
 	info   *types.Info
 	sizes  types.Sizes
 	values map[*types.Var]ast.Expr
-	leaks  map[*types.Var]bool
+	uses   map[*types.Var][]inspector.Cursor
+	flows  map[*types.Var]flow
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -48,12 +61,13 @@ func run(pass *analysis.Pass) (any, error) {
 		info:   pass.TypesInfo,
 		sizes:  pass.TypesSizes,
 		values: staticValues(pass.TypesInfo, insp),
-		leaks:  leakingParams(pass.TypesInfo, insp),
+		uses:   varUses(pass.TypesInfo, insp),
+		flows:  map[*types.Var]flow{},
 	}
 	for cur := range insp.Root().Preorder((*ast.SliceExpr)(nil)) {
 		s := inspection.Node[*ast.SliceExpr](cur)
 		size := c.backingBytes(s)
-		if size > limitBytes && !c.coversBacking(s, size) && c.escapes(unparenParent(cur)) {
+		if size > limitBytes && !c.coversBacking(s, size) && c.flowOf(cur) != stays {
 			pass.Reportf(s.Pos(), c.format(s), size)
 		}
 	}
@@ -73,9 +87,34 @@ func (c checker) backingBytes(s *ast.SliceExpr) int64 {
 		return c.stringLength(s.X)
 	}
 	if a := arrayOf(t); a != nil {
-		return c.sizes.Sizeof(a)
+		return c.sizeOf(a)
 	}
 	return c.sliceBacking(s.X)
+}
+
+func (c checker) sizeOf(t types.Type) int64 {
+	if hasTypeParam(t) {
+		return 0
+	}
+	return c.sizes.Sizeof(t)
+}
+
+func hasTypeParam(t types.Type) bool {
+	switch t := types.Unalias(t).(type) {
+	case *types.TypeParam:
+		return true
+	case *types.Named:
+		return hasTypeParam(t.Underlying())
+	case *types.Array:
+		return hasTypeParam(t.Elem())
+	case *types.Struct:
+		for field := range t.Fields() {
+			if hasTypeParam(field.Type()) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c checker) sliceBacking(x ast.Expr) int64 {
@@ -149,7 +188,7 @@ func (c checker) elemSize(s *ast.SliceExpr) int64 {
 	if !ok {
 		return 1
 	}
-	return c.sizes.Sizeof(slice.Elem())
+	return c.sizeOf(slice.Elem())
 }
 
 func (c checker) isLenOf(e, x ast.Expr) bool {
@@ -221,7 +260,7 @@ func (c checker) makeBytes(call *ast.CallExpr) int64 {
 	if !ok {
 		return 0
 	}
-	return saturatingMul(capacity, c.sizes.Sizeof(slice.Elem()))
+	return saturatingMul(capacity, c.sizeOf(slice.Elem()))
 }
 
 func (c checker) makeLength(call *ast.CallExpr) int64 {
@@ -232,37 +271,164 @@ func (c checker) makeLength(call *ast.CallExpr) int64 {
 	return length
 }
 
-func (c checker) escapes(cur inspector.Cursor) bool {
-	if kind, index := cur.ParentEdge(); kind == edge.CallExpr_Args {
-		return c.leaksArg(inspection.Node[*ast.CallExpr](cur.Parent()), index)
+func (c checker) flowOf(cur inspector.Cursor) flow {
+	cur = unparenParent(cur)
+	kind, index := cur.ParentEdge()
+	switch kind { //nolint:exhaustive // every other edge keeps the value inside the function
+	case edge.ReturnStmt_Results:
+		return returned
+	case edge.SendStmt_Value:
+		return outlives
+	case edge.AssignStmt_Rhs:
+		return c.assignFlow(inspection.Node[*ast.AssignStmt](cur.Parent()), index)
+	case edge.ValueSpec_Values:
+		return c.specFlow(inspection.Node[*ast.ValueSpec](cur.Parent()), index)
+	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value:
+		return c.flowOf(cur.Parent())
+	case edge.UnaryExpr_X:
+		return c.addressFlow(cur.Parent())
+	case edge.CallExpr_Args:
+		return c.argFlow(cur.Parent(), index)
 	}
-	return escapesDirectly(c.info, cur)
+	return stays
 }
 
-func (c checker) leaksArg(call *ast.CallExpr, index int) bool {
+func (c checker) addressFlow(cur inspector.Cursor) flow {
+	if inspection.Node[*ast.UnaryExpr](cur).Op != token.AND {
+		return stays
+	}
+	return c.flowOf(cur)
+}
+
+func (c checker) assignFlow(as *ast.AssignStmt, index int) flow {
+	if len(as.Lhs) != len(as.Rhs) || as.Tok != token.ASSIGN && as.Tok != token.DEFINE {
+		return stays
+	}
+	return c.storeFlow(as.Lhs[index])
+}
+
+func (c checker) specFlow(spec *ast.ValueSpec, index int) flow {
+	if len(spec.Names) != len(spec.Values) {
+		return stays
+	}
+	return c.varFlow(c.info.Defs[spec.Names[index]])
+}
+
+func (c checker) argFlow(cur inspector.Cursor, index int) flow {
+	call := inspection.Node[*ast.CallExpr](cur)
 	fn := typeutil.StaticCallee(c.info, call)
-	if fn == nil {
-		return false
+	if fn == nil || c.isMethodExpr(call.Fun) {
+		return stays
 	}
 	sig := fn.Origin().Signature()
 	params := sig.Params()
 	if index >= params.Len() || sig.Variadic() && index >= params.Len()-1 {
-		return false
+		return stays
 	}
-	return c.leaks[params.At(index)]
+	f := c.varFlow(params.At(index))
+	if f == returned {
+		return c.flowOf(cur)
+	}
+	return f
 }
 
-func leakingParams(info *types.Info, insp *inspector.Inspector) map[*types.Var]bool {
-	leaks := map[*types.Var]bool{}
+func (c checker) isMethodExpr(fun ast.Expr) bool {
+	sel, ok := ast.Unparen(fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	selection := c.info.Selections[sel]
+	return selection != nil && selection.Kind() == types.MethodExpr
+}
+
+func (c checker) storeFlow(lhs ast.Expr) flow {
+	switch x := ast.Unparen(lhs).(type) {
+	case *ast.Ident:
+		return c.varFlow(c.info.ObjectOf(x))
+	case *ast.SelectorExpr:
+		return c.fieldFlow(x)
+	case *ast.IndexExpr:
+		return c.elemFlow(x)
+	case *ast.StarExpr:
+		return outlives
+	}
+	return stays
+}
+
+func (c checker) fieldFlow(x *ast.SelectorExpr) flow {
+	sel := c.info.Selections[x]
+	if sel == nil {
+		return c.varFlow(c.info.Uses[x.Sel])
+	}
+	if sel.Kind() != types.FieldVal {
+		return stays
+	}
+	if sel.Indirect() {
+		return outlives
+	}
+	return c.storeFlow(x.X)
+}
+
+func (c checker) elemFlow(x *ast.IndexExpr) flow {
+	switch c.info.TypeOf(x.X).Underlying().(type) {
+	case *types.Array:
+		return c.storeFlow(x.X)
+	case *types.Map, *types.Slice:
+		return c.containerFlow(x.X)
+	}
+	return outlives
+}
+
+func (c checker) containerFlow(e ast.Expr) flow {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return outlives
+	}
+	v, ok := c.info.Uses[id].(*types.Var)
+	if !ok || !c.isFresh(c.values[v]) {
+		return outlives
+	}
+	return c.varFlow(v)
+}
+
+func (c checker) isFresh(e ast.Expr) bool {
+	switch e := ast.Unparen(e).(type) {
+	case *ast.CompositeLit:
+		return true
+	case *ast.CallExpr:
+		return isBuiltin(c.info, e.Fun, "make")
+	}
+	return false
+}
+
+func (c checker) varFlow(obj types.Object) flow {
+	v, ok := obj.(*types.Var)
+	if !ok {
+		return stays
+	}
+	if isPackageVar(v) {
+		return outlives
+	}
+	if f, done := c.flows[v]; done {
+		return f
+	}
+	c.flows[v] = stays
+	f := stays
+	for _, use := range c.uses[v] {
+		f = max(f, c.flowOf(use))
+	}
+	c.flows[v] = f
+	return f
+}
+
+func varUses(info *types.Info, insp *inspector.Inspector) map[*types.Var][]inspector.Cursor {
+	uses := map[*types.Var][]inspector.Cursor{}
 	for cur := range insp.Root().Preorder((*ast.Ident)(nil)) {
-		v, ok := info.Uses[inspection.Node[*ast.Ident](cur)].(*types.Var)
-		parent := unparenParent(cur)
-		if ok && v.Kind() == types.ParamVar && parent.ParentEdgeKind() != edge.ReturnStmt_Results &&
-			escapesDirectly(info, parent) {
-			leaks[v] = true
+		if v, ok := info.Uses[inspection.Node[*ast.Ident](cur)].(*types.Var); ok {
+			uses[v] = append(uses[v], cur)
 		}
 	}
-	return leaks
+	return uses
 }
 
 func arrayOf(t types.Type) *types.Array {
@@ -305,52 +471,9 @@ func unparenParent(c inspector.Cursor) inspector.Cursor {
 	return c
 }
 
-func escapesDirectly(info *types.Info, c inspector.Cursor) bool {
-	kind, index := c.ParentEdge()
-	if kind == edge.AssignStmt_Rhs {
-		return assignsOutside(info, inspection.Node[*ast.AssignStmt](c.Parent()), index)
-	}
-	if kind == edge.ValueSpec_Values {
-		return declaresGlobal(info, inspection.Node[*ast.ValueSpec](c.Parent()), index)
-	}
-	return kind == edge.ReturnStmt_Results || kind == edge.SendStmt_Value ||
-		kind == edge.CompositeLit_Elts || kind == edge.KeyValueExpr_Value
-}
-
-func assignsOutside(info *types.Info, as *ast.AssignStmt, index int) bool {
-	return as.Tok == token.ASSIGN && len(as.Lhs) == len(as.Rhs) && storesOutside(info, as.Lhs[index])
-}
-
-func declaresGlobal(info *types.Info, spec *ast.ValueSpec, index int) bool {
-	return index < len(spec.Names) && isPackageVar(info.Defs[spec.Names[index]])
-}
-
-func storesOutside(info *types.Info, lhs ast.Expr) bool {
-	switch x := ast.Unparen(lhs).(type) {
-	case *ast.Ident:
-		return isPackageVar(info.Uses[x])
-	case *ast.SelectorExpr:
-		if sel := info.Selections[x]; sel != nil {
-			return sel.Kind() == types.FieldVal
-		}
-		return isPackageVar(info.Uses[x.Sel])
-	case *ast.IndexExpr:
-		return isMap(info.TypeOf(x.X))
-	}
-	return false
-}
-
 func isPackageVar(obj types.Object) bool {
 	v, ok := obj.(*types.Var)
 	return ok && !v.IsField() && v.Pkg() != nil && v.Parent() == v.Pkg().Scope()
-}
-
-func isMap(t types.Type) bool {
-	if t == nil {
-		return false
-	}
-	_, ok := t.Underlying().(*types.Map)
-	return ok
 }
 
 type valueTracker struct {

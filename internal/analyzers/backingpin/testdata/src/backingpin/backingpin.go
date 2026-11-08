@@ -178,6 +178,84 @@ func passedToReturningParam() int {
 	return len(identity(buf[:10]))
 }
 
+func returnedThroughIdentity() []byte {
+	var buf [65537]byte
+	return identity(buf[:10]) // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func localSliceReturned() []byte {
+	var buf [65537]byte
+	s := buf[:10] // want `subslice keeps a 65537-byte backing array alive`
+	return s
+}
+
+func localStores() {
+	var a [70000]byte
+	var x struct{ b []byte }
+	x.b = a[:1]
+	m := map[string][]byte{"k": a[2:3]}
+	_ = m
+}
+
+func localCompositeUsed() int {
+	var buf [65537]byte
+	h := holder{b: buf[:10]}
+	parts := [][]byte{buf[:10]}
+	return len(h.b) + len(parts[0])
+}
+
+func localCompositeReturned() holder {
+	var buf [65537]byte
+	h := holder{b: buf[:10]} // want `subslice keeps a 65537-byte backing array alive`
+	return h
+}
+
+func localFieldReturned() holder {
+	var buf [65537]byte
+	var h holder
+	h.b = buf[:10] // want `subslice keeps a 65537-byte backing array alive`
+	return h
+}
+
+func localMapSent(ch chan map[string][]byte) {
+	var buf [65537]byte
+	m := make(map[string][]byte)
+	m["k"] = buf[:10] // want `subslice keeps a 65537-byte backing array alive`
+	ch <- m
+}
+
+func storedParamMap(m map[string][]byte) {
+	var buf [65537]byte
+	m["k"] = buf[:10] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func storedParamSlice(parts [][]byte) {
+	var buf [65537]byte
+	parts[0] = buf[:10] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+func storedThroughPointer(p *[]byte) {
+	var buf [65537]byte
+	*p = buf[:10] // want `subslice keeps a 65537-byte backing array alive`
+}
+
+type pair[T any] struct{ a, b T }
+
+func clip[T any]() []T {
+	var a [70000]T
+	return a[:1]
+}
+
+func clipPairs[T any]() []pair[T] {
+	var a [70000]pair[T]
+	return a[:1]
+}
+
+func clipMade[T any](n int) []T {
+	b := make([]T, n, 70000)
+	return b[:1]
+}
+
 func sentOnChannel(ch chan []byte) {
 	var buf [65537]byte
 	ch <- buf[:10] // want `subslice keeps a 65537-byte backing array alive`
