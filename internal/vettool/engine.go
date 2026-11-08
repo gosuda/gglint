@@ -106,8 +106,8 @@ func reportPanics(analyzers []*analysis.Analyzer) []*analysis.Analyzer {
 }
 
 func (e *engine) keep(pass *analysis.Pass, rule, check string, d analysis.Diagnostic) bool {
-	position := pass.Fset.Position(d.Pos)
-	if !e.cfg.Tests && strings.HasSuffix(position.Filename, "_test.go") || e.excluded(position.Filename, rule, check, d.Message) {
+	filename := realName(pass.Fset, d.Pos)
+	if !e.cfg.Tests && strings.HasSuffix(filename, "_test.go") || e.excluded(filename, rule, check, d.Message) {
 		return false
 	}
 	file := fileAt(pass.Files, d.Pos)
@@ -115,7 +115,14 @@ func (e *engine) keep(pass *analysis.Pass, rule, check string, d analysis.Diagno
 		return true
 	}
 	state := e.stateOf(pass, file)
-	return !state.generated && (rule == rules.NolintName || !e.suppressed(state, position.Line, rule, check))
+	return !state.generated && (rule == rules.NolintName || !e.suppressed(state, pass.Fset.Position(d.Pos).Line, rule, check))
+}
+
+func realName(fset *token.FileSet, pos token.Pos) string {
+	if f := fset.File(pos); f != nil {
+		return f.Name()
+	}
+	return fset.Position(pos).Filename
 }
 
 func fileAt(files []*ast.File, pos token.Pos) *ast.File {

@@ -2,6 +2,7 @@ package vettool
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -53,7 +54,7 @@ func (e *engine) problems(d *directive) []string {
 func (e *engine) tokenProblems(d *directive) []string {
 	var out []string
 	for _, t := range d.tokens {
-		rule, _, _ := strings.Cut(t, ":")
+		rule := ruleOf(t)
 		switch {
 		case rule == rules.TypecheckName:
 			out = append(out, "typecheck findings cannot be suppressed")
@@ -65,13 +66,14 @@ func (e *engine) tokenProblems(d *directive) []string {
 }
 
 func (e *engine) unused(d *directive) []string {
-	if !e.allSelected(d) {
+	tokens := slices.DeleteFunc(slices.Clone(d.tokens), func(t string) bool { return ruleOf(t) == rules.TypecheckName })
+	if !e.allSelected(tokens) {
 		return nil
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var out []string
-	for _, t := range d.tokens {
+	for _, t := range tokens {
 		if !d.matched[t] {
 			out = append(out, "unused nolint directive for "+t)
 		}
@@ -79,12 +81,16 @@ func (e *engine) unused(d *directive) []string {
 	return out
 }
 
-func (e *engine) allSelected(d *directive) bool {
-	for _, t := range d.tokens {
-		rule, _, _ := strings.Cut(t, ":")
-		if !e.selected[rule] || rule == rules.TypecheckName {
+func (e *engine) allSelected(tokens []string) bool {
+	for _, t := range tokens {
+		if !e.selected[ruleOf(t)] {
 			return false
 		}
 	}
 	return true
+}
+
+func ruleOf(token string) string {
+	rule, _, _ := strings.Cut(token, ":")
+	return rule
 }
