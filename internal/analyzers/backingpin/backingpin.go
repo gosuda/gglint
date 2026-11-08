@@ -244,11 +244,10 @@ func (c checker) makeCall(call *ast.CallExpr) *types.Slice {
 	if len(call.Args) < 2 || !isBuiltin(c.info, call.Fun, "make") {
 		return nil
 	}
-	slice, ok := c.info.TypeOf(call.Args[0]).Underlying().(*types.Slice)
-	if !ok {
-		return nil
+	if slice, ok := c.info.TypeOf(call.Args[0]).Underlying().(*types.Slice); ok {
+		return slice
 	}
-	return slice
+	return nil
 }
 
 func (c checker) makeBytes(call *ast.CallExpr) int64 {
@@ -432,9 +431,6 @@ func varUses(info *types.Info, insp *inspector.Inspector) map[*types.Var][]inspe
 }
 
 func arrayOf(t types.Type) *types.Array {
-	if t == nil {
-		return nil
-	}
 	if p, ok := t.Underlying().(*types.Pointer); ok {
 		t = p.Elem()
 	}
@@ -445,17 +441,11 @@ func arrayOf(t types.Type) *types.Array {
 }
 
 func isString(t types.Type) bool {
-	if t == nil {
-		return false
-	}
 	b, ok := t.Underlying().(*types.Basic)
 	return ok && b.Info()&types.IsString != 0
 }
 
 func isByteSlice(t types.Type) bool {
-	if t == nil {
-		return false
-	}
 	slice, ok := t.Underlying().(*types.Slice)
 	if !ok {
 		return false
@@ -535,14 +525,10 @@ func (t valueTracker) assign(lhs, rhs []ast.Expr) {
 			continue
 		}
 		t.assigns[v]++
-		if len(rhs) == len(lhs) && t.info.Defs[id] != nil && isLocal(v) {
+		if len(rhs) == len(lhs) && t.info.Defs[id] != nil && !isPackageVar(v) {
 			t.values[v] = rhs[i]
 		}
 	}
-}
-
-func isLocal(v *types.Var) bool {
-	return v.Pkg() != nil && v.Parent() != v.Pkg().Scope()
 }
 
 func isBuiltin(info *types.Info, fun ast.Expr, name string) bool {

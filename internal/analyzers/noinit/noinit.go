@@ -19,14 +19,10 @@ var Analyzer = &analysis.Analyzer{
 func run(pass *analysis.Pass) (any, error) {
 	for _, f := range pass.Files {
 		for _, decl := range f.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && isInit(fn) {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "init" {
 				pass.Report(analysis.Diagnostic{Pos: fn.Pos(), Message: message})
 			}
 		}
 	}
 	return nil, nil
-}
-
-func isInit(fn *ast.FuncDecl) bool {
-	return fn.Recv == nil && fn.Name.Name == "init"
 }

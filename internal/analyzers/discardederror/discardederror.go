@@ -1,7 +1,6 @@
 package discardederror
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -10,6 +9,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/inspection"
 )
@@ -47,11 +47,7 @@ func run(pass *analysis.Pass) (any, error) {
 		if call == nil {
 			return
 		}
-		pass.Report(analysis.Diagnostic{
-			Pos:     call.Pos(),
-			End:     call.End(),
-			Message: fmt.Sprintf(messageFormat, types.ExprString(call)),
-		})
+		pass.ReportRangef(call, messageFormat, types.ExprString(call))
 	})
 	return nil, nil
 }
@@ -156,8 +152,8 @@ func (c checker) tupleBlankCall(lhs []ast.Expr, e ast.Expr) *ast.CallExpr {
 }
 
 func (c checker) benignCall(call *ast.CallExpr) bool {
-	fn := c.calleeFunc(call)
-	if fn == nil {
+	fn, ok := typeutil.Callee(c.info, call).(*types.Func)
+	if !ok {
 		return false
 	}
 	switch name := fn.FullName(); name {
@@ -178,31 +174,11 @@ func (c checker) isHashWrite(call *ast.CallExpr) bool {
 		return false
 	}
 	recv := c.info.TypeOf(sel.X)
-	if recv == nil {
-		return false
-	}
 	if types.Implements(recv, c.hash) {
 		return true
 	}
 	_, isPtr := recv.Underlying().(*types.Pointer)
 	return !isPtr && types.Implements(types.NewPointer(recv), c.hash)
-}
-
-func (c checker) calleeFunc(call *ast.CallExpr) *types.Func {
-	var id *ast.Ident
-	switch fun := ast.Unparen(call.Fun).(type) {
-	case *ast.Ident:
-		id = fun
-	case *ast.SelectorExpr:
-		id = fun.Sel
-	default:
-		return nil
-	}
-	fn, ok := c.info.Uses[id].(*types.Func)
-	if !ok {
-		return nil
-	}
-	return fn
 }
 
 func (c checker) isStdoutOrStderr(w ast.Expr) bool {
@@ -211,7 +187,7 @@ func (c checker) isStdoutOrStderr(w ast.Expr) bool {
 		return false
 	}
 	v, ok := c.info.Uses[sel.Sel].(*types.Var)
-	if !ok || v.Pkg() == nil || v.Pkg().Path() != "os" {
+	if !ok || v.Pkg().Path() != "os" {
 		return false
 	}
 	return v.Name() == "Stdout" || v.Name() == "Stderr"
@@ -219,9 +195,6 @@ func (c checker) isStdoutOrStderr(w ast.Expr) bool {
 
 func (c checker) resultTypes(call *ast.CallExpr) []types.Type {
 	t := c.info.TypeOf(call)
-	if t == nil {
-		return nil
-	}
 	tuple, ok := t.(*types.Tuple)
 	if !ok {
 		return []types.Type{t}

@@ -1,10 +1,8 @@
 package placeholder
 
 import (
-	"fmt"
 	"go/ast"
 	"go/constant"
-	"go/token"
 	"go/types"
 	"strings"
 	"unicode"
@@ -37,7 +35,7 @@ func New(m config.Mode) *analysis.Analyzer {
 
 func run(pass *analysis.Pass, m config.Mode) {
 	for _, f := range pass.Files {
-		if isTestFile(pass.Fset, f) {
+		if strings.HasSuffix(pass.Fset.Position(f.Package).Filename, "_test.go") {
 			continue
 		}
 		reportPanics(pass, f)
@@ -47,34 +45,25 @@ func run(pass *analysis.Pass, m config.Mode) {
 	}
 }
 
-func isTestFile(fset *token.FileSet, f *ast.File) bool {
-	return strings.HasSuffix(fset.Position(f.Package).Filename, "_test.go")
-}
-
 func reportPanics(pass *analysis.Pass, f *ast.File) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok && isPlaceholderPanic(pass.TypesInfo, call) {
-			pass.Report(analysis.Diagnostic{Pos: call.Pos(), End: call.End(), Message: panicMessage})
+			pass.ReportRangef(call, panicMessage)
 		}
 		return true
 	})
 }
 
 func isPlaceholderPanic(info *types.Info, call *ast.CallExpr) bool {
-	if len(call.Args) != 1 || !isBuiltinPanic(info, call.Fun) {
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	if b, ok := info.Uses[id].(*types.Builtin); !ok || b.Name() != "panic" {
 		return false
 	}
 	v := info.Types[call.Args[0]].Value
 	return v != nil && v.Kind() == constant.String && namesUnfinishedWork(constant.StringVal(v))
-}
-
-func isBuiltinPanic(info *types.Info, fun ast.Expr) bool {
-	id, ok := fun.(*ast.Ident)
-	if !ok {
-		return false
-	}
-	b, ok := info.Uses[id].(*types.Builtin)
-	return ok && b.Name() == "panic"
 }
 
 func namesUnfinishedWork(msg string) bool {
@@ -88,11 +77,7 @@ func reportComments(pass *analysis.Pass, f *ast.File) {
 	for _, group := range f.Comments {
 		for _, c := range group.List {
 			if marker := leadingMarker(c.Text); marker != "" {
-				pass.Report(analysis.Diagnostic{
-					Pos:     c.Slash,
-					End:     c.End(),
-					Message: fmt.Sprintf(commentFormat, marker),
-				})
+				pass.ReportRangef(c, commentFormat, marker)
 			}
 		}
 	}

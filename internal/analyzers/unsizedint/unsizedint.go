@@ -50,29 +50,15 @@ func hasJSONTag(f *ast.Field) bool {
 
 func reportUnsized(pass *analysis.Pass, fields []*ast.Field) {
 	for _, f := range fields {
-		if typeName := unsizedName(pass.TypesInfo.TypeOf(f.Type)); typeName != "" {
-			reportField(pass, f, typeName)
+		basic, ok := types.Unalias(pass.TypesInfo.TypeOf(f.Type)).(*types.Basic)
+		if !ok || (basic.Kind() != types.Int && basic.Kind() != types.Uint) {
+			continue
+		}
+		if len(f.Names) == 0 {
+			pass.Reportf(f.Type.Pos(), message, basic.Name(), basic.Name())
+		}
+		for _, name := range f.Names {
+			pass.Reportf(name.Pos(), message, name.Name, basic.Name())
 		}
 	}
-}
-
-func reportField(pass *analysis.Pass, f *ast.Field, typeName string) {
-	if len(f.Names) == 0 {
-		pass.Reportf(f.Type.Pos(), message, typeName, typeName)
-		return
-	}
-	for _, name := range f.Names {
-		pass.Reportf(name.Pos(), message, name.Name, typeName)
-	}
-}
-
-func unsizedName(t types.Type) string {
-	if t == nil {
-		return ""
-	}
-	basic, ok := types.Unalias(t).(*types.Basic)
-	if !ok || (basic.Kind() != types.Int && basic.Kind() != types.Uint) {
-		return ""
-	}
-	return basic.Name()
 }

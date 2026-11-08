@@ -76,16 +76,11 @@ func run(pass *analysis.Pass) (any, error) {
 	calls := []ast.Node{(*ast.CallExpr)(nil)}
 	inspection.Of(pass).Preorder(calls, func(n ast.Node) {
 		call := inspection.As[*ast.CallExpr](n)
-		if isErrorf(pass.TypesInfo, call) {
+		if fn := typeutil.StaticCallee(pass.TypesInfo, call); fn != nil && fn.FullName() == "fmt.Errorf" {
 			chainCall{pass: pass, call: call}.diagnose()
 		}
 	})
 	return nil, nil
-}
-
-func isErrorf(info *types.Info, call *ast.CallExpr) bool {
-	fn := typeutil.StaticCallee(info, call)
-	return fn != nil && fn.FullName() == "fmt.Errorf"
 }
 
 func (c chainCall) diagnose() {
@@ -158,8 +153,7 @@ func (c chainCall) isErrorMethodCall(call *ast.CallExpr) bool {
 }
 
 func (c chainCall) isError(e ast.Expr) bool {
-	t := c.pass.TypesInfo.TypeOf(e)
-	return t != nil && types.Implements(t, errorInterface)
+	return types.Implements(c.pass.TypesInfo.TypeOf(e), errorInterface)
 }
 
 func (c chainCall) message(f fault) string {

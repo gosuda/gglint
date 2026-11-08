@@ -284,37 +284,22 @@ func (s *frameScan) carry(x ast.Expr) (addrKind, *ast.CallExpr) {
 }
 
 func (s *frameScan) carryVar(id *ast.Ident) (addrKind, *ast.CallExpr) {
-	v := s.localVar(id)
-	if v == nil || s.pointers[v] != pointerFrame || s.addrs[v] == nil {
-		return addrNone, nil
+	if call := s.addrs[s.localVar(id)]; call != nil {
+		return addrPointer, call
 	}
-	return addrPointer, s.addrs[v]
+	return addrNone, nil
 }
 
 func (s *frameScan) carryConversion(c *ast.CallExpr) (addrKind, *ast.CallExpr) {
-	if isConversionTo(s.pass.TypesInfo, c, types.UnsafePointer) {
-		return s.toPointer(c)
-	}
-	if isConversionTo(s.pass.TypesInfo, c, types.Uintptr) {
-		return s.toUintptr(c)
-	}
-	return addrNone, nil
-}
-
-func (s *frameScan) toPointer(c *ast.CallExpr) (addrKind, *ast.CallExpr) {
-	arg := c.Args[0]
-	if s.frameAddr(arg) {
-		return addrPointer, c
-	}
-	if kind, _ := s.carry(arg); kind != addrNone {
-		return addrPointer, c
-	}
-	return addrNone, nil
-}
-
-func (s *frameScan) toUintptr(c *ast.CallExpr) (addrKind, *ast.CallExpr) {
-	if kind, _ := s.carry(c.Args[0]); kind != addrNone {
-		return addrInteger, c
+	switch {
+	case isConversionTo(s.pass.TypesInfo, c, types.UnsafePointer):
+		if kind, _ := s.carry(c.Args[0]); kind != addrNone || s.frameAddr(c.Args[0]) {
+			return addrPointer, c
+		}
+	case isConversionTo(s.pass.TypesInfo, c, types.Uintptr):
+		if kind, _ := s.carry(c.Args[0]); kind != addrNone {
+			return addrInteger, c
+		}
 	}
 	return addrNone, nil
 }
@@ -388,24 +373,16 @@ func (s *frameScan) frameRoot(x ast.Expr) *types.Var {
 			return s.frameRoot(x.X)
 		}
 	case *ast.IndexExpr:
-		if isArray(s.pass.TypesInfo.TypeOf(x.X)) {
+		if _, ok := s.pass.TypesInfo.TypeOf(x.X).Underlying().(*types.Array); ok {
 			return s.frameRoot(x.X)
 		}
 	}
 	return nil
 }
 
-func isArray(t types.Type) bool {
-	if t == nil {
-		return false
-	}
-	_, ok := t.Underlying().(*types.Array)
-	return ok
-}
-
 func (s *frameScan) localVar(id *ast.Ident) *types.Var {
 	v, ok := cmp.Or(s.pass.TypesInfo.Defs[id], s.pass.TypesInfo.Uses[id]).(*types.Var)
-	if !ok || !isFrameVariable(v) {
+	if !ok || v.Kind() == types.PackageVar || v.Kind() == types.FieldVar {
 		return nil
 	}
 	return v
@@ -415,20 +392,6 @@ func isConversionTo(info *types.Info, call *ast.CallExpr, kind types.BasicKind) 
 	if len(call.Args) != 1 || !info.Types[call.Fun].IsType() {
 		return false
 	}
-	typ := info.TypeOf(call)
-	if typ == nil {
-		return false
-	}
-	basic, ok := typ.Underlying().(*types.Basic)
+	basic, ok := info.TypeOf(call).Underlying().(*types.Basic)
 	return ok && basic.Kind() == kind
-}
-
-func isFrameVariable(v *types.Var) bool {
-	switch v.Kind() {
-	case types.LocalVar, types.ParamVar, types.RecvVar, types.ResultVar:
-		return true
-	case types.PackageVar, types.FieldVar:
-		return false
-	}
-	return false
 }

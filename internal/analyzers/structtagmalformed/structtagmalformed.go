@@ -69,9 +69,7 @@ func checkField(pass *analysis.Pass, field *ast.Field) {
 
 func checkUnexported(pass *analysis.Pass, lit *ast.BasicLit, name string, tag reflect.StructTag) {
 	for _, enc := range [...]string{"json", "xml"} {
-		switch tag.Get(enc) {
-		case "", "-":
-		default:
+		if v := tag.Get(enc); v != "" && v != "-" {
 			pass.ReportRangef(lit, unexportedMessage, name, enc, enc)
 		}
 	}
@@ -79,19 +77,16 @@ func checkUnexported(pass *analysis.Pass, lit *ast.BasicLit, name string, tag re
 
 func validate(tag string) error {
 	seen := make(map[string]bool)
-	for n := 0; tag != ""; n++ {
-		if n > 0 && tag[0] != ' ' {
-			return errors.New(missingSpace)
-		}
-		tag = strings.TrimLeft(tag, " ")
-		if tag == "" {
-			return nil
-		}
+	tag = strings.TrimLeft(tag, " ")
+	for tag != "" {
 		rest, err := nextPair(tag, seen)
 		if err != nil {
 			return err
 		}
-		tag = rest
+		if rest != "" && rest[0] != ' ' {
+			return errors.New(missingSpace)
+		}
+		tag = strings.TrimLeft(rest, " ")
 	}
 	return nil
 }
@@ -116,14 +111,10 @@ func nextPair(tag string, seen map[string]bool) (string, error) {
 
 func keyEnd(tag string) int {
 	i := 0
-	for i < len(tag) && isKeyByte(tag[i]) {
+	for i < len(tag) && tag[i] > ' ' && tag[i] != ':' && tag[i] != '"' && tag[i] != 0x7f {
 		i++
 	}
 	return i
-}
-
-func isKeyByte(c byte) bool {
-	return c > ' ' && c != ':' && c != '"' && c != 0x7f
 }
 
 func nextValue(tag string) (string, error) {

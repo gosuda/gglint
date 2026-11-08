@@ -8,6 +8,9 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/types/typeutil"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 const message = "function %s calls itself with its own arguments on every path"
@@ -44,7 +47,7 @@ func run(pass *analysis.Pass) (any, error) {
 			if !ok || fd.Body == nil {
 				continue
 			}
-			if r := newRecursion(pass.TypesInfo, fd); r != nil && r.always(fd.Body.List) {
+			if r := newRecursion(pass.TypesInfo, fd); r != nil && r.sequence(fd.Body.List) == recurses {
 				pass.Reportf(fd.Name.Pos(), message, fd.Name.Name)
 			}
 		}
@@ -159,16 +162,24 @@ func operand(e ast.Expr) ast.Expr {
 	return nil
 }
 
-func (r *recursion) always(list []ast.Stmt) bool {
+type outcome int
+
+const (
+	falls outcome = iota
+	recurses
+	leaves
+)
+
+func (r *recursion) sequence(list []ast.Stmt) outcome {
 	for _, s := range list {
 		if r.stmtCalls(s) {
-			return true
+			return recurses
 		}
 		if r.mayLeave(s) && !r.exitsCovered(s) {
-			return false
+			return leaves
 		}
 	}
-	return false
+	return falls
 }
 
 func (r *recursion) stmtCalls(s ast.Stmt) bool {
@@ -180,7 +191,7 @@ func (r *recursion) stmtCalls(s ast.Stmt) bool {
 	case *ast.AssignStmt:
 		return r.anyCalls(s.Rhs)
 	case *ast.BlockStmt:
-		return r.always(s.List)
+		return r.sequence(s.List) == recurses
 	}
 	return r.branchingCalls(s)
 }
@@ -204,45 +215,26 @@ func (r *recursion) ifCalls(s *ast.IfStmt) bool {
 	if r.exprCalls(s.Cond) {
 		return true
 	}
-	if s.Else == nil || !r.always(s.Body.List) {
-		return false
-	}
-	return r.stmtCalls(s.Else)
+	return s.Else != nil && r.sequence(s.Body.List) == recurses && r.stmtCalls(s.Else)
 }
 
 func (r *recursion) armsCall(body *ast.BlockStmt) bool {
 	def := false
-	for _, c := range clauses(body) {
-		if c.List == nil {
-			def = true
-		}
-		if !r.always(c.Body) {
+	for _, s := range body.List {
+		c := inspection.As[*ast.CaseClause](s)
+		def = def || c.List == nil
+		if r.sequence(c.Body) != recurses {
 			return false
 		}
 	}
 	return def
 }
 
-func clauses(body *ast.BlockStmt) []*ast.CaseClause {
-	out := make([]*ast.CaseClause, 0, len(body.List))
-	for _, s := range body.List {
-		if c, ok := s.(*ast.CaseClause); ok {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
 func (r *recursion) exitsCovered(s ast.Stmt) bool {
 	switch s := s.(type) {
 	case *ast.IfStmt:
-		if s.Init != nil {
-			return false
-		}
-		if s.Else == nil {
-			return r.branchCovered(s.Body.List)
-		}
-		return r.branchCovered(s.Body.List) && r.branchCovered([]ast.Stmt{s.Else})
+		return s.Init == nil && r.sequence(s.Body.List) != leaves &&
+			(s.Else == nil || r.sequence([]ast.Stmt{s.Else}) != leaves)
 	case *ast.SwitchStmt:
 		return s.Init == nil && r.armsCovered(s.Body)
 	case *ast.TypeSwitchStmt:
@@ -252,20 +244,8 @@ func (r *recursion) exitsCovered(s ast.Stmt) bool {
 }
 
 func (r *recursion) armsCovered(body *ast.BlockStmt) bool {
-	for _, c := range clauses(body) {
-		if !r.branchCovered(c.Body) {
-			return false
-		}
-	}
-	return true
-}
-
-func (r *recursion) branchCovered(list []ast.Stmt) bool {
-	for _, s := range list {
-		if r.stmtCalls(s) {
-			return true
-		}
-		if r.mayLeave(s) && !r.exitsCovered(s) {
+	for _, s := range body.List {
+		if r.sequence(inspection.As[*ast.CaseClause](s).Body) == leaves {
 			return false
 		}
 	}
@@ -369,7 +349,7 @@ func (r *recursion) instantiated(base ast.Expr) *ast.Ident {
 }
 
 func (r *recursion) methodIsFn(sel *ast.SelectorExpr) bool {
-	if s, ok := r.info.Selections[sel]; ok && s != nil {
+	if s, ok := r.info.Selections[sel]; ok {
 		fn, ok := s.Obj().(*types.Func)
 		return ok && fn.Origin() == r.fn.Origin()
 	}
@@ -403,27 +383,10 @@ func (r *recursion) endsProcess(call *ast.CallExpr) bool {
 	if name, ok := call.Fun.(*ast.Ident); ok && name.Name == "panic" {
 		return true
 	}
-	fn, ok := calleeFunc(r.info, call)
+	fn, ok := typeutil.Callee(r.info, call).(*types.Func)
 	if !ok {
 		return false
 	}
 	full := fn.FullName()
 	return slices.ContainsFunc(terminators, func(t string) bool { return strings.HasPrefix(full, t) })
-}
-
-func calleeFunc(info *types.Info, call *ast.CallExpr) (*types.Func, bool) {
-	var id *ast.Ident
-	switch f := ast.Unparen(call.Fun).(type) {
-	case *ast.Ident:
-		id = f
-	case *ast.SelectorExpr:
-		id = f.Sel
-	default:
-		return nil, false
-	}
-	fn, ok := info.Uses[id].(*types.Func)
-	if !ok {
-		return nil, false
-	}
-	return fn, true
 }
