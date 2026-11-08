@@ -1,5 +1,3 @@
-// Package capturerace reports multi-word locals that a goroutine captures
-// while one side writes them.
 package capturerace
 
 import (
@@ -13,24 +11,26 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/go/types/typeutil"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 const (
 	parentWritesFormat = "%s is written after a goroutine that captures it starts: pass it as an argument or synchronize first"
 	childWritesFormat  = "%s is written by a goroutine and read here without synchronization: wait for the goroutine first"
+	childOnlyFormat    = "%s is written by a goroutine that captures it: pass it as an argument or synchronize first"
 	errgroupGroup      = "golang.org/x/sync/errgroup.Group"
 	syncWaitGroup      = "sync.WaitGroup"
 )
 
-// Analyzer reports torn reads and writes of multi-word captured locals.
 var Analyzer = &analysis.Analyzer{
 	Name: "capturerace",
-	Doc: "Report multi-word locals that a goroutine captures while one side writes them.\n\n" +
-		"A string, slice, interface, complex number, or a struct or array whose value bytes exceed one word " +
+	Doc: "Report multi-word locals that a goroutine captures while either side writes them.\n\n" +
+		"A string, slice, interface, or a complex number, struct, or array whose value bytes exceed one word " +
 		"is not written atomically, so a goroutine that captures it can observe a torn value. " +
 		"The rule reports a spawn site (a go statement, errgroup.Group.Go or TryGo, sync.WaitGroup.Go) " +
-		"when the enclosing function writes such a captured local after the spawn, or when the goroutine " +
-		"writes it and the enclosing function reads it after the spawn. Order is source order; " +
+		"when such a captured local is written anywhere from the spawn site to the end of the enclosing " +
+		"top-level declaration, the goroutine's own body included. Order is source order; " +
 		"joins such as Wait are not modelled. Types from sync and sync/atomic are exempt.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
@@ -39,7 +39,6 @@ var Analyzer = &analysis.Analyzer{
 type spawn struct {
 	site ast.Node
 	body *ast.FuncLit
-	end  token.Pos
 }
 
 type access struct {
@@ -48,13 +47,14 @@ type access struct {
 }
 
 type declScan struct {
+	end    token.Pos
 	spawns []spawn
 	writes []access
 	refs   []access
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	insp := inspection.Of(pass)
 	for file := range insp.Root().Children() {
 		for decl := range file.Children() {
 			if _, ok := decl.Node().(ast.Decl); ok {
@@ -65,25 +65,25 @@ func run(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func scanDecl(info *types.Info, decl inspector.Cursor) declScan {
-	var d declScan
+func scanDecl(info *types.Info, decl inspector.Cursor) *declScan {
+	d := &declScan{end: decl.Node().End()}
 	kinds := []ast.Node{
 		(*ast.GoStmt)(nil), (*ast.CallExpr)(nil), (*ast.AssignStmt)(nil),
 		(*ast.IncDecStmt)(nil), (*ast.RangeStmt)(nil), (*ast.Ident)(nil),
 	}
 	for c := range decl.Preorder(kinds...) {
-		d.note(info, c)
+		d.note(info, c.Node())
 	}
 	return d
 }
 
-func (d *declScan) note(info *types.Info, c inspector.Cursor) {
-	switch n := c.Node().(type) {
+func (d *declScan) note(info *types.Info, node ast.Node) {
+	switch n := node.(type) {
 	case *ast.GoStmt:
-		d.addSpawn(c, n.Call.Fun)
+		d.addSpawn(n, n.Call.Fun)
 	case *ast.CallExpr:
 		if isSpawnCall(info, n) {
-			d.addSpawn(c, n.Args[0])
+			d.addSpawn(n, n.Args[0])
 		}
 	case *ast.AssignStmt:
 		d.addWrites(info, n.Lhs...)
@@ -94,26 +94,20 @@ func (d *declScan) note(info *types.Info, c inspector.Cursor) {
 			d.addWrites(info, n.Key, n.Value)
 		}
 	case *ast.Ident:
-		if v, ok := info.Uses[n].(*types.Var); ok {
-			d.refs = append(d.refs, access{v: v, expr: n})
-		}
+		d.addRef(info, n)
 	}
 }
 
-func (d *declScan) addSpawn(c inspector.Cursor, fun ast.Expr) {
+func (d *declScan) addRef(info *types.Info, id *ast.Ident) {
+	if v, ok := info.Uses[id].(*types.Var); ok {
+		d.refs = append(d.refs, access{v: v, expr: id})
+	}
+}
+
+func (d *declScan) addSpawn(site ast.Node, fun ast.Expr) {
 	if lit, ok := ast.Unparen(fun).(*ast.FuncLit); ok {
-		d.spawns = append(d.spawns, spawn{site: c.Node(), body: lit, end: enclosingFuncEnd(c)})
+		d.spawns = append(d.spawns, spawn{site: site, body: lit})
 	}
-}
-
-func enclosingFuncEnd(c inspector.Cursor) token.Pos {
-	for ; c.Node() != nil; c = c.Parent() {
-		switch fn := c.Node().(type) {
-		case *ast.FuncLit, *ast.FuncDecl:
-			return fn.End()
-		}
-	}
-	return token.NoPos
 }
 
 func (d *declScan) addWrites(info *types.Info, targets ...ast.Expr) {
@@ -127,7 +121,10 @@ func (d *declScan) addWrites(info *types.Info, targets ...ast.Expr) {
 func writtenVar(info *types.Info, e ast.Expr) *types.Var {
 	for e != nil {
 		if id, ok := e.(*ast.Ident); ok {
-			v, _ := info.Uses[id].(*types.Var)
+			v, isVar := info.Uses[id].(*types.Var)
+			if !isVar {
+				return nil
+			}
 			return v
 		}
 		e = inPlaceOperand(info, e)
@@ -188,7 +185,7 @@ func typeName(t types.Type) string {
 	return named.Obj().Pkg().Path() + "." + named.Obj().Name()
 }
 
-func (d declScan) report(pass *analysis.Pass) {
+func (d *declScan) report(pass *analysis.Pass) {
 	for _, s := range d.spawns {
 		for _, v := range d.captured(pass.Pkg, s.body) {
 			if multiWord(v.Type(), pass.TypesSizes) {
@@ -198,7 +195,7 @@ func (d declScan) report(pass *analysis.Pass) {
 	}
 }
 
-func (d declScan) captured(pkg *types.Package, body *ast.FuncLit) []*types.Var {
+func (d *declScan) captured(pkg *types.Package, body *ast.FuncLit) []*types.Var {
 	var out []*types.Var
 	for _, r := range d.refs {
 		if within(r.expr.Pos(), body) && isOuterLocal(pkg, r.v, body) && !slices.Contains(out, r.v) {
@@ -216,32 +213,46 @@ func within(p token.Pos, n ast.Node) bool {
 	return n.Pos() <= p && p < n.End()
 }
 
-func (d declScan) check(pass *analysis.Pass, s spawn, v *types.Var) {
-	if w, ok := firstAfter(d.writes, s, v); ok {
+func (d *declScan) check(pass *analysis.Pass, s spawn, v *types.Var) {
+	w, ok := d.windowWrite(s, v)
+	if !ok {
+		return
+	}
+	if !within(w.expr.Pos(), s.body) {
 		reportAt(pass, s, parentWritesFormat, v, w, "written here")
 		return
 	}
-	if !d.writtenIn(s.body, v) {
+	if r, ok := d.laterRef(s, v); ok {
+		reportAt(pass, s, childWritesFormat, v, r, "read here")
 		return
 	}
-	if r, ok := firstAfter(d.refs, s, v); ok {
-		reportAt(pass, s, childWritesFormat, v, r, "read here")
-	}
+	reportAt(pass, s, childOnlyFormat, v, w, "written here")
 }
 
-func firstAfter(as []access, s spawn, v *types.Var) (access, bool) {
-	for _, a := range as {
-		if a.v == v && a.expr.Pos() >= s.site.End() && a.expr.Pos() < s.end {
-			return a, true
+func (d *declScan) windowWrite(s spawn, v *types.Var) (access, bool) {
+	var first access
+	found := false
+	for _, w := range d.writes {
+		if w.v != v || w.expr.Pos() < s.site.Pos() || w.expr.Pos() >= d.end {
+			continue
+		}
+		if !within(w.expr.Pos(), s.body) {
+			return w, true
+		}
+		if !found {
+			first, found = w, true
+		}
+	}
+	return first, found
+}
+
+func (d *declScan) laterRef(s spawn, v *types.Var) (access, bool) {
+	for _, r := range d.refs {
+		if r.v == v && r.expr.Pos() >= s.site.End() && r.expr.Pos() < d.end {
+			return r, true
 		}
 	}
 	return access{}, false
-}
-
-func (d declScan) writtenIn(body *ast.FuncLit, v *types.Var) bool {
-	return slices.ContainsFunc(d.writes, func(w access) bool {
-		return w.v == v && within(w.expr.Pos(), body)
-	})
 }
 
 func reportAt(pass *analysis.Pass, s spawn, format string, v *types.Var, at access, note string) {
@@ -253,18 +264,7 @@ func reportAt(pass *analysis.Pass, s spawn, format string, v *types.Var, at acce
 }
 
 func multiWord(t types.Type, sizes types.Sizes) bool {
-	if isSyncType(t) || isTypeParam(t) {
-		return false
-	}
-	switch u := t.Underlying().(type) {
-	case *types.Basic:
-		return u.Info()&(types.IsString|types.IsComplex) != 0
-	case *types.Slice, *types.Interface:
-		return true
-	case *types.Struct, *types.Array:
-		return valueBytes(u, sizes) > wordSize(sizes)
-	}
-	return false
+	return !isSyncType(t) && valueBytes(t, sizes) > wordSize(sizes)
 }
 
 func isSyncType(t types.Type) bool {

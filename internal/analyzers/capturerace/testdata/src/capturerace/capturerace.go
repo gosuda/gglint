@@ -11,6 +11,14 @@ type pair struct {
 	a, b int
 }
 
+type triple struct {
+	a, b, c int
+}
+
+type twoBytes struct {
+	a, b byte
+}
+
 type oneWord struct {
 	n int
 }
@@ -69,7 +77,7 @@ func stringChildWrites() {
 func childWritesWithoutLaterRead() {
 	s := "a"
 	println(s)
-	go func() {
+	go func() { // want `s is written by a goroutine that captures it: pass it as an argument or synchronize first`
 		s = "b"
 	}()
 }
@@ -98,9 +106,9 @@ func complex128Value() {
 	println(real(c))
 }
 
-func complex64Value() {
+func complex64SingleWord() {
 	var c complex64
-	go func() { // want `c is written after a goroutine that captures it starts`
+	go func() {
 		println(real(c))
 	}()
 	c = 1
@@ -296,7 +304,7 @@ func spawnInsideGoroutine() {
 	s := "a"
 	go func() { // want `s is written by a goroutine and read here`
 		println("outer")
-		go func() {
+		go func() { // want `s is written by a goroutine and read here`
 			s = "b"
 		}()
 	}()
@@ -355,4 +363,170 @@ func plainCallIsNoSpawn() {
 		s = "b"
 	})
 	println(s)
+}
+
+func sliceHeaderByChild() {
+	xs := []int{1}
+	go func() { // want `xs is written by a goroutine that captures it`
+		xs = append(xs, 2)
+	}()
+}
+
+func arrayElementByChildOnly() {
+	var a [2]int
+	go func() { // want `a is written by a goroutine that captures it`
+		a[0] = 1
+	}()
+}
+
+func writtenAfterOtherStatements() {
+	s := "a"
+	go func() { // want `s is written after a goroutine that captures it starts`
+		println(s)
+	}()
+	println("work")
+	if len(s) > 0 {
+		s = "b"
+	}
+}
+
+func siblingWrites() {
+	s := "a"
+	go func() { // want `s is written after a goroutine that captures it starts`
+		println(s)
+	}()
+	go func() { // want `s is written by a goroutine that captures it`
+		s = "b"
+	}()
+}
+
+func twoWordStructByChild() {
+	var p pair
+	go func() { // want `p is written by a goroutine that captures it`
+		p.a = 1
+	}()
+}
+
+func threeWordStructByChild() {
+	var t triple
+	go func() { // want `t is written by a goroutine that captures it`
+		t.c = 1
+	}()
+}
+
+func oneWordStructByChild() {
+	var o oneWord
+	go func() {
+		o.n = 1
+	}()
+}
+
+func zeroTailStructByChild() {
+	var z zeroTail
+	go func() {
+		z.n = 1
+	}()
+}
+
+func threeWordArrayByChild() {
+	var a [3]int
+	go func() { // want `a is written by a goroutine and read here`
+		a = [3]int{1, 2, 3}
+	}()
+	println(a[0])
+}
+
+func oneStringArrayByChild() {
+	var a [1]string
+	go func() { // want `a is written by a goroutine that captures it`
+		a[0] = "x"
+	}()
+}
+
+func emptyArrayByChild() {
+	var a [0]string
+	go func() {
+		a = [0]string{}
+	}()
+	println(len(a))
+}
+
+func twoByteStructBothSides() {
+	var s twoBytes
+	go func() {
+		s.a = 1
+	}()
+	s.b = 2
+	println(s.a)
+}
+
+func twoByteArrayBothSides() {
+	var a [2]byte
+	go func() {
+		a[0] = 1
+	}()
+	a[1] = 2
+	println(a[0])
+}
+
+func intBothSides() {
+	n := 0
+	go func() {
+		n = 1
+	}()
+	n = 2
+	println(n)
+}
+
+func pointerBothSides() {
+	x := 0
+	p := &x
+	go func() {
+		p = nil
+	}()
+	p = &x
+	println(p != nil)
+}
+
+func mapBothSides() {
+	m := map[string]int{}
+	go func() {
+		m = nil
+	}()
+	m = map[string]int{}
+	println(len(m))
+}
+
+func readOnlyBothSides() {
+	s := "a"
+	go func() {
+		println(s)
+	}()
+	println(s)
+}
+
+func declaredInChild() {
+	go func() {
+		s := "a"
+		s = "b"
+		println(s)
+	}()
+}
+
+func shadowedInChild() {
+	s := "a"
+	go func() {
+		s := "x"
+		s = "y"
+		println(s)
+	}()
+	s = "b"
+	println(s)
+}
+
+func fieldOfPointerParam(p *named) {
+	go func() {
+		p.name = "a"
+	}()
+	p.name = "b"
 }
