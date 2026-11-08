@@ -9,11 +9,22 @@ func leadingFixme() {}
 // TODO(alice): owner in parentheses // want `placeholder TODO comment`
 func ownedTodo() {}
 
-// Parse reads input; TODO handle tabs. // want `placeholder TODO comment`
-func midSentence() {}
+// FIXME, the cache leaks // want `placeholder FIX.E comment`
+func commaFixme() {}
+
+// TODO // want `placeholder TODO comment`
+func bareTodo() {}
 
 /* FIXME: block comment */ // want `placeholder FIX.E comment`
-func blockFixme() {}
+func blockFixme()          {}
+
+/*TODO*/            // want `placeholder TODO comment`
+func blockNoSpace() {}
+
+func bodyComments() {
+	//TODO: no space after the slashes // want `placeholder TODO comment`
+	//	TODO: a tab after the slashes // want `placeholder TODO comment`
+}
 
 func trailing() {
 	x := 1 // TODO: trailing marker // want `placeholder TODO comment`
@@ -21,32 +32,38 @@ func trailing() {
 }
 
 func panicStub() {
-	panic("todo") // want `placeholder panic: implement this path`
+	panic("TODO: later") // want `placeholder panic: implement this path`
+}
+
+func panicLower() {
+	panic("todo")
+}
+
+// Parse reads input; TODO handle tabs.
+func midSentence() {}
+
+func proseTrailing() {
+	x := 1 // see the TODO list
+	_ = x
 }
 
 // TODOS are tracked in the issue tracker.
 func plural() {}
 
-// autoTODO and TODO_LIST are identifiers, not markers.
+// TODO_LIST and FIXME2 are identifiers, not markers.
 func glued() {}
-
-// The autodoc generator writes FIXMEs elsewhere.
-func prose() {}
 
 // todo in lower case is prose.
 func lowerCase() {}
+
+// Fixme in mixed case is prose.
+func mixedCase() {}
 
 //go:generate echo TODO
 func generateDirective() {}
 
 //nolint:errcheck // TODO: revisit the error policy
 func nolintDirective() {}
-
-//lint:ignore U1000 TODO keep for the next release
-func lintDirective() {}
-
-// +build ignore TODO
-func buildDirective() {}
 
 func notAComment() string {
 	return "// TODO: this is data, not a comment"

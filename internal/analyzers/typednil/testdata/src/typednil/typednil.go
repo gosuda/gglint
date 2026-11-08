@@ -12,6 +12,8 @@ func (e *Err) Error() string { return e.msg }
 
 type Stringers []fmt.Stringer
 
+type ErrPtr *Err
+
 type Handler func()
 
 func (h Handler) String() string { return "handler" }
@@ -42,24 +44,28 @@ func secondResult() (int, error) {
 	return 1, (*Err)(nil) // want `returns typed nil \*Err as interface error: the result is never nil; return nil`
 }
 
+func namedPointerAsAny() any {
+	return ErrPtr(nil) // want `returns typed nil ErrPtr as interface any: the result is never nil; return nil`
+}
+
 func sliceAsAny() any {
-	return []int(nil) // want `returns typed nil \[\]int as interface any: the result is never nil; return nil`
+	return []int(nil)
 }
 
 func mapAsAny() any {
-	return map[string]int(nil) // want `returns typed nil map\[string\]int as interface any: the result is never nil; return nil`
+	return map[string]int(nil)
 }
 
 func chanAsAny() any {
-	return (chan int)(nil) // want `returns typed nil chan int as interface any: the result is never nil; return nil`
+	return (chan int)(nil)
 }
 
 func funcAsStringer() fmt.Stringer {
-	return Handler(nil) // want `returns typed nil Handler as interface fmt.Stringer: the result is never nil; return nil`
+	return Handler(nil)
 }
 
 func namedSliceAsAny() any {
-	return Stringers(nil) // want `returns typed nil Stringers as interface any: the result is never nil; return nil`
+	return Stringers(nil)
 }
 
 func aliasedInterface() MyError {

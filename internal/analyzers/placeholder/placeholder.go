@@ -3,9 +3,9 @@ package placeholder
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -24,9 +24,10 @@ func New(m config.Mode) *analysis.Analyzer {
 	return &analysis.Analyzer{
 		Name: "placeholder",
 		Doc: "Report unfinished work left in non-test files.\n\n" +
-			"A call of the builtin panic whose argument is a string literal containing, in any letter case, " +
-			"unimplemented, not implemented, or todo is reported. In strict mode, a comment holding the whole " +
-			"word TODO or FIXME is also reported; directive comments are skipped.",
+			"A call of the builtin panic whose argument is a constant string containing unimplemented or " +
+			"not implemented in any letter case, or TODO as written, is reported. In strict mode, a comment " +
+			"whose text, after the comment marker and any white space, starts with the word TODO or FIXME " +
+			"is also reported; a marker followed by a letter, digit, or underscore is prose.",
 		Run: func(pass *analysis.Pass) (any, error) {
 			run(pass, m)
 			return nil, nil
@@ -53,7 +54,7 @@ func isTestFile(fset *token.FileSet, f *ast.File) bool {
 func reportPanics(pass *analysis.Pass, f *ast.File) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok && isPlaceholderPanic(pass.TypesInfo, call) {
-			pass.Report(analysis.Diagnostic{Pos: call.Pos(), Message: panicMessage})
+			pass.Report(analysis.Diagnostic{Pos: call.Pos(), End: call.End(), Message: panicMessage})
 		}
 		return true
 	})
@@ -63,12 +64,12 @@ func isPlaceholderPanic(info *types.Info, call *ast.CallExpr) bool {
 	if len(call.Args) != 1 || !isBuiltinPanic(info, call.Fun) {
 		return false
 	}
-	lit, ok := ast.Unparen(call.Args[0]).(*ast.BasicLit)
-	return ok && lit.Kind == token.STRING && namesUnfinishedWork(lit.Value)
+	v := info.Types[call.Args[0]].Value
+	return v != nil && v.Kind() == constant.String && namesUnfinishedWork(constant.StringVal(v))
 }
 
 func isBuiltinPanic(info *types.Info, fun ast.Expr) bool {
-	id, ok := ast.Unparen(fun).(*ast.Ident)
+	id, ok := fun.(*ast.Ident)
 	if !ok {
 		return false
 	}
@@ -76,92 +77,38 @@ func isBuiltinPanic(info *types.Info, fun ast.Expr) bool {
 	return ok && b.Name() == "panic"
 }
 
-func namesUnfinishedWork(quoted string) bool {
-	text, err := strconv.Unquote(quoted)
-	if err != nil {
-		return false
-	}
-	lower := strings.ToLower(text)
+func namesUnfinishedWork(msg string) bool {
+	lower := strings.ToLower(msg)
 	return strings.Contains(lower, "unimplemented") ||
 		strings.Contains(lower, "not implemented") ||
-		strings.Contains(lower, "todo")
+		strings.Contains(msg, "TODO")
 }
 
 func reportComments(pass *analysis.Pass, f *ast.File) {
 	for _, group := range f.Comments {
 		for _, c := range group.List {
-			reportComment(pass, c)
+			if marker := leadingMarker(c.Text); marker != "" {
+				pass.Report(analysis.Diagnostic{
+					Pos:     c.Slash,
+					End:     c.End(),
+					Message: fmt.Sprintf(commentFormat, marker),
+				})
+			}
 		}
 	}
 }
 
-func reportComment(pass *analysis.Pass, c *ast.Comment) {
-	if isDirective(c.Text) {
-		return
-	}
-	word, at := findMarker(c.Text)
-	if at < 0 {
-		return
-	}
-	pass.Report(analysis.Diagnostic{
-		Pos:     c.Slash + token.Pos(at),
-		End:     c.Slash + token.Pos(at+len(word)),
-		Message: fmt.Sprintf(commentFormat, word),
-	})
-}
-
-func isDirective(text string) bool {
-	return strings.HasPrefix(text, "//nolint") ||
-		strings.HasPrefix(text, "// +build") ||
-		isToolDirective(text)
-}
-
-func isToolDirective(text string) bool {
-	rest, ok := strings.CutPrefix(text, "//")
-	if !ok {
-		return false
-	}
-	name, value, ok := strings.Cut(rest, ":")
-	return ok && name != "" && value != "" &&
-		strings.IndexFunc(name, isNotDirectiveRune) < 0 &&
-		!isNotDirectiveRune(rune(value[0]))
-}
-
-func isNotDirectiveRune(r rune) bool {
-	return (r < 'a' || r > 'z') && (r < '0' || r > '9')
-}
-
-func findMarker(text string) (word string, at int) {
-	at = -1
+func leadingMarker(text string) string {
+	body := strings.TrimLeftFunc(text[2:], unicode.IsSpace)
 	for _, marker := range [...]string{"TODO", "FIXME"} {
-		if i := wordIndex(text, marker); i >= 0 && (at < 0 || i < at) {
-			word, at = marker, i
+		if rest, ok := strings.CutPrefix(body, marker); ok && !startsWord(rest) {
+			return marker
 		}
 	}
-	return word, at
+	return ""
 }
 
-func wordIndex(text, word string) int {
-	for start := 0; start <= len(text)-len(word); {
-		i := strings.Index(text[start:], word)
-		if i < 0 {
-			return -1
-		}
-		i += start
-		if isWholeWord(text, i, i+len(word)) {
-			return i
-		}
-		start = i + 1
-	}
-	return -1
-}
-
-func isWholeWord(text string, start, end int) bool {
-	before, _ := utf8.DecodeLastRuneInString(text[:start])
-	after, _ := utf8.DecodeRuneInString(text[end:])
-	return !isWordRune(before) && !isWordRune(after)
-}
-
-func isWordRune(r rune) bool {
+func startsWord(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
 	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }

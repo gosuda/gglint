@@ -14,11 +14,11 @@ import (
 
 var Analyzer = &analysis.Analyzer{
 	Name: "typednil",
-	Doc: `report typed nil conversions returned as interface results
+	Doc: `report typed nil pointer conversions returned as interface results
 
-A return of (*T)(nil), []T(nil), map[K]V(nil), (chan T)(nil), or (func())(nil)
-into an interface result stores a typed nil: the interface is never nil, so a
-caller's err != nil or x != nil check passes on it.`,
+A return of the conversion (*T)(nil) into an interface result stores a typed
+nil pointer: the interface is never nil, so a caller's err != nil or x != nil
+check passes on it. Other nil conversions, such as []T(nil), are not reported.`,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
@@ -92,7 +92,7 @@ func nilConversion(info *types.Info, e ast.Expr) types.Type {
 		return nil
 	}
 	typ := info.TypeOf(call)
-	if typ == nil || !isNilable(typ) {
+	if typ == nil || !isPointer(typ) {
 		return nil
 	}
 	return typ
@@ -107,12 +107,9 @@ func isNil(info *types.Info, e ast.Expr) bool {
 	return ok
 }
 
-func isNilable(t types.Type) bool {
-	switch t.Underlying().(type) {
-	case *types.Pointer, *types.Slice, *types.Map, *types.Chan, *types.Signature:
-		return true
-	}
-	return false
+func isPointer(t types.Type) bool {
+	_, ok := t.Underlying().(*types.Pointer)
+	return ok
 }
 
 func qualifier(pkg *types.Package) types.Qualifier {
