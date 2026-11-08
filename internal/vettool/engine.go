@@ -1,6 +1,7 @@
 package vettool
 
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 	"os"
@@ -68,10 +69,14 @@ func (e *engine) analyzers(selected []rules.Rule) []*analysis.Analyzer {
 		}
 		out = append(out, built...)
 	}
-	if e.selected[rules.NolintName] {
-		out = append(out, e.nolintAnalyzer(out))
-	}
 	return out
+}
+
+func (e *engine) withNolint(built []*analysis.Analyzer) []*analysis.Analyzer {
+	if !e.selected[rules.NolintName] {
+		return built
+	}
+	return append(built, e.nolintAnalyzer(built))
 }
 
 func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) {
@@ -81,7 +86,12 @@ func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) {
 	}
 	a.Name = rules.AnalyzerName(r, a, siblings)
 	run := a.Run
-	a.Run = func(pass *analysis.Pass) (any, error) {
+	a.Run = func(pass *analysis.Pass) (result any, err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				err = fmt.Errorf("panic: %v", p)
+			}
+		}()
 		filtered := *pass
 		filtered.Report = func(d analysis.Diagnostic) {
 			if e.keep(pass, r.Name, check, d) {

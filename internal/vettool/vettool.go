@@ -1,6 +1,7 @@
 package vettool
 
 import (
+	json "encoding/json/v2"
 	"flag"
 	"fmt"
 	"os"
@@ -14,6 +15,10 @@ import (
 
 const configFlag = "config"
 
+type unit struct {
+	VetxOnly bool
+}
+
 func Main(args []string) int {
 	flag.String(configFlag, "", "path of the resolved gglint configuration")
 	path, found := configPath(args)
@@ -21,7 +26,7 @@ func Main(args []string) int {
 		unitchecker.Main()
 		return 0
 	}
-	analyzers, err := build(path)
+	analyzers, err := build(path, args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gglint: internal: %v\n", err)
 		return 3
@@ -43,7 +48,23 @@ func configPath(args []string) (string, bool) {
 	return "", false
 }
 
-func build(path string) ([]*analysis.Analyzer, error) {
+func unitOf(args []string) (unit, error) {
+	var u unit
+	data, err := os.ReadFile(args[len(args)-1])
+	if err != nil {
+		return u, err
+	}
+	if err := json.Unmarshal(data, &u); err != nil {
+		return u, fmt.Errorf("decode unit config: %w", err)
+	}
+	return u, nil
+}
+
+func build(path string, args []string) ([]*analysis.Analyzer, error) {
+	u, err := unitOf(args)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -56,5 +77,31 @@ func build(path string) ([]*analysis.Analyzer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.analyzers(selected), nil
+	built := e.analyzers(selected)
+	if u.VetxOnly {
+		return factAnalyzers(built), nil
+	}
+	return e.withNolint(built), nil
+}
+
+func factAnalyzers(all []*analysis.Analyzer) []*analysis.Analyzer {
+	var out []*analysis.Analyzer
+	for _, a := range all {
+		if usesFacts(a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func usesFacts(a *analysis.Analyzer) bool {
+	if len(a.FactTypes) > 0 {
+		return true
+	}
+	for _, req := range a.Requires {
+		if usesFacts(req) {
+			return true
+		}
+	}
+	return false
 }
