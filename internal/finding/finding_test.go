@@ -290,3 +290,22 @@ func TestProcessNewFromRevGitFailureIsDiffError(t *testing.T) {
 		})
 	}
 }
+
+func TestProcessNewFromRevOptionLikeRevisionNeverReachesGit(t *testing.T) {
+	repo := committedRepo(t, map[string]string{"a.go": fiveLines, "victim.txt": "keep me\n"})
+	a := filepath.Join(repo, "a.go")
+	writeFile(t, a, strings.Replace(fiveLines, "var two = 2", "var two = 22", 1))
+	t.Chdir(repo)
+	victim := filepath.Join(repo, "victim.txt")
+	for _, rev := range []string{"--output=" + victim, "-p", "-"} {
+		in := []finding.Finding{{Rule: "r", Message: "changed", Pos: at(a, 4, 1)}}
+		out, err := finding.Process(t.Context(), in, finding.Options{WorkDir: repo, Tests: true, NewFromRev: rev})
+		if err == nil || err.Error() != "diff: revision must not start with '-'" || out != nil {
+			t.Errorf("rev %q: Process = %v, %v; want no findings and diff: revision must not start with '-'", rev, out, err)
+		}
+		data, readErr := os.ReadFile(victim)
+		if readErr != nil || string(data) != "keep me\n" {
+			t.Fatalf("rev %q: victim.txt = %q, %v; want it untouched", rev, data, readErr)
+		}
+	}
+}

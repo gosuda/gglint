@@ -3,6 +3,7 @@ package finding
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -85,6 +86,9 @@ func printedPosition(p Position, workDir string) Position {
 }
 
 func changedSince(ctx context.Context, fs []Finding, rev string) ([]Finding, error) {
+	if strings.HasPrefix(rev, "-") {
+		return nil, errors.New("diff: revision must not start with '-'")
+	}
 	checker := &revgrep.Checker{RevisionFrom: rev}
 	if err := checker.Prepare(ctx); err != nil {
 		return nil, fmt.Errorf("diff: %w", err)
