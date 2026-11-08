@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -86,12 +87,7 @@ func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) {
 	}
 	a.Name = rules.AnalyzerName(r, a, siblings)
 	run := a.Run
-	a.Run = func(pass *analysis.Pass) (result any, err error) {
-		defer func() {
-			if p := recover(); p != nil {
-				err = fmt.Errorf("panic: %v", p)
-			}
-		}()
+	a.Run = func(pass *analysis.Pass) (any, error) {
 		filtered := *pass
 		filtered.Report = func(d analysis.Diagnostic) {
 			if e.keep(pass, r.Name, check, d) {
@@ -100,6 +96,21 @@ func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) {
 		}
 		return run(&filtered)
 	}
+}
+
+func reportPanics(analyzers []*analysis.Analyzer) []*analysis.Analyzer {
+	for _, a := range analyzers {
+		run := a.Run
+		a.Run = func(pass *analysis.Pass) (result any, err error) {
+			defer func() {
+				if p := recover(); p != nil {
+					err = fmt.Errorf("panic: %v\n%s", p, debug.Stack())
+				}
+			}()
+			return run(pass)
+		}
+	}
+	return analyzers
 }
 
 func (e *engine) keep(pass *analysis.Pass, rule, check string, d analysis.Diagnostic) bool {

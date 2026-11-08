@@ -81,7 +81,7 @@ func build(path string, args []string) ([]*analysis.Analyzer, error) {
 	if u.VetxOnly {
 		return factAnalyzers(built), nil
 	}
-	return e.withNolint(built), nil
+	return e.withNolint(reportPanics(built)), nil
 }
 
 func factAnalyzers(all []*analysis.Analyzer) []*analysis.Analyzer {
