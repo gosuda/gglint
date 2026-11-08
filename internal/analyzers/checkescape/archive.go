@@ -2,6 +2,7 @@ package checkescape
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ func ListExport(tags []string) Archive {
 
 func listExport(dir, tagsFlag string) (string, error) {
 	var stderr bytes.Buffer
-	cmd := exec.Command("go", "list", "-f", "{{.Export}}", "-export", tagsFlag, ".")
+	cmd := exec.CommandContext(context.Background(), "go", "list", "-f", "{{.Export}}", "-export", tagsFlag, ".")
 	cmd.Dir = dir
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

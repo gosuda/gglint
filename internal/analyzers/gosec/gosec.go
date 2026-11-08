@@ -60,7 +60,11 @@ func (c catalog) scan(pass *analysis.Pass) []*issue.Issue {
 	scanner.LoadAnalyzers(c.analyzerList.AnalyzersInfo())
 	pkg := toPackage(pass)
 	scanner.CheckRules(pkg)
-	scanner.CheckAnalyzersWithSSA(pkg, pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA))
+	result, ok := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
+	if !ok {
+		panic("gosec: missing buildssa result")
+	}
+	scanner.CheckAnalyzersWithSSA(pkg, result)
 	issues, _, _ := scanner.Report()
 	return issues
 }

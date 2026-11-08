@@ -131,8 +131,8 @@ func isNotDirectiveRune(r rune) bool {
 	return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 }
 
-func findMarker(text string) (string, int) {
-	word, at := "", -1
+func findMarker(text string) (word string, at int) {
+	at = -1
 	for _, marker := range [...]string{"TODO", "FIXME"} {
 		if i := wordIndex(text, marker); i >= 0 && (at < 0 || i < at) {
 			word, at = marker, i

@@ -8,6 +8,8 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 var Analyzer = &analysis.Analyzer{
@@ -22,10 +24,10 @@ caller's err != nil or x != nil check passes on it.`,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	in := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	in := inspection.Of(pass)
 	for cur := range in.Root().Preorder((*ast.ReturnStmt)(nil)) {
 		sig := enclosingSignature(pass.TypesInfo, cur)
-		ret := cur.Node().(*ast.ReturnStmt)
+		ret := inspection.Node[*ast.ReturnStmt](cur)
 		if sig == nil || len(ret.Results) != sig.Results().Len() {
 			continue
 		}

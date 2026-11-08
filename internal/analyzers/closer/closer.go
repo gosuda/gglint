@@ -9,6 +9,8 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 var Analyzer = &analysis.Analyzer{
@@ -28,7 +30,7 @@ assignment from a call.`,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	in := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	in := inspection.Of(pass)
 	for fn := range in.Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
 		body := funcBody(fn.Node())
 		if body == nil {
@@ -196,22 +198,22 @@ func (s *scan) isPlain(cur inspector.Cursor) bool {
 	for cur.ParentEdgeKind() == edge.ParenExpr_X {
 		cur = cur.Parent()
 	}
-	switch cur.ParentEdgeKind() {
-	case edge.SelectorExpr_X:
+	kind := cur.ParentEdgeKind()
+	if kind == edge.SelectorExpr_X {
 		return s.isPlainSelection(cur.Parent())
-	case edge.BinaryExpr_X, edge.BinaryExpr_Y:
-		op := cur.Parent().Node().(*ast.BinaryExpr).Op
+	}
+	if kind == edge.BinaryExpr_X || kind == edge.BinaryExpr_Y {
+		op := inspection.Node[*ast.BinaryExpr](cur.Parent()).Op
 		return op == token.EQL || op == token.NEQ
-	case edge.AssignStmt_Lhs:
-		return true
-	case edge.AssignStmt_Rhs:
+	}
+	if kind == edge.AssignStmt_Rhs {
 		return isDiscarded(cur)
 	}
-	return false
+	return kind == edge.AssignStmt_Lhs
 }
 
 func (s *scan) isPlainSelection(cur inspector.Cursor) bool {
-	sel := s.pass.TypesInfo.Selections[cur.Node().(*ast.SelectorExpr)]
+	sel := s.pass.TypesInfo.Selections[inspection.Node[*ast.SelectorExpr](cur)]
 	if sel == nil {
 		return false
 	}
@@ -220,12 +222,14 @@ func (s *scan) isPlainSelection(cur inspector.Cursor) bool {
 		return true
 	case types.MethodVal:
 		return cur.ParentEdgeKind() == edge.CallExpr_Fun
+	case types.MethodExpr:
+		return false
 	}
 	return false
 }
 
 func isDiscarded(cur inspector.Cursor) bool {
-	assign := cur.Parent().Node().(*ast.AssignStmt)
+	assign := inspection.Node[*ast.AssignStmt](cur.Parent())
 	if len(assign.Lhs) != len(assign.Rhs) {
 		return false
 	}

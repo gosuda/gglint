@@ -14,6 +14,7 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/config"
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 const doc = `goroutine reports goroutines that are not joined or cannot exit.
@@ -66,7 +67,7 @@ type checker struct {
 }
 
 func (c checker) run() {
-	root := c.pass.ResultOf[inspect.Analyzer].(*inspector.Inspector).Root()
+	root := inspection.Of(c.pass).Root()
 	for cur := range root.Preorder((*ast.GoStmt)(nil), (*ast.CallExpr)(nil)) {
 		switch n := cur.Node().(type) {
 		case *ast.GoStmt:
@@ -311,7 +312,7 @@ func (c checker) limitedBefore(site inspector.Cursor, call *ast.CallExpr) bool {
 		return false
 	}
 	for cur := range ownNodes(fn, (*ast.CallExpr)(nil)) {
-		other := cur.Node().(*ast.CallExpr)
+		other := inspection.Node[*ast.CallExpr](cur)
 		if other.Pos() < call.Pos() && c.methodOf(other, errgroupPath, "Group") == "SetLimit" &&
 			slices.Equal(c.receiverKey(other), key) {
 			return true

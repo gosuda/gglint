@@ -9,6 +9,8 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 var Analyzer = &analysis.Analyzer{
@@ -24,9 +26,9 @@ where the compiler keeps the referent alive and in place.`,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	in := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	in := inspection.Of(pass)
 	for cur := range in.Root().Preorder((*ast.CallExpr)(nil)) {
-		conv := cur.Node().(*ast.CallExpr)
+		conv := inspection.Node[*ast.CallExpr](cur)
 		v := stackVariable(pass.TypesInfo, conv)
 		if v == nil || isCallArgument(pass.TypesInfo, cur) {
 			continue
@@ -79,6 +81,8 @@ func isFrameVariable(v *types.Var) bool {
 	switch v.Kind() {
 	case types.LocalVar, types.ParamVar, types.RecvVar, types.ResultVar:
 		return true
+	case types.PackageVar, types.FieldVar:
+		return false
 	}
 	return false
 }
@@ -90,6 +94,6 @@ func isCallArgument(info *types.Info, cur inspector.Cursor) bool {
 	if cur.ParentEdgeKind() != edge.CallExpr_Args {
 		return false
 	}
-	fun := info.Types[cur.Parent().Node().(*ast.CallExpr).Fun]
+	fun := info.Types[inspection.Node[*ast.CallExpr](cur.Parent()).Fun]
 	return !fun.IsType() && !fun.IsBuiltin()
 }

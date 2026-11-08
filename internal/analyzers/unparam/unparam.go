@@ -15,8 +15,12 @@ var Analyzer = &analysis.Analyzer{
 }
 
 func run(pass *analysis.Pass) (any, error) {
+	result, ok := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
+	if !ok {
+		panic("unparam: missing buildssa result")
+	}
 	var checker check.Checker
-	checker.ProgramSSA(pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA).Pkg.Prog)
+	checker.ProgramSSA(result.Pkg.Prog)
 	checker.Packages([]*packages.Package{passPackage(pass)})
 	checker.CheckExportedFuncs(false)
 	issues, err := checker.Check()

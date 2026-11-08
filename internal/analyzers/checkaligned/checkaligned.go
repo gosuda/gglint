@@ -12,11 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package checkaligned ensures that atomic (u)int operations happen
-// exclusively via the typed atomics of sync/atomic (atomic.Int64 and friends).
-//
-// We support a "// +checkalignedignore" escape hatch in the package comment
-// that disables checking throughout the package.
 package checkaligned
 
 import (
@@ -28,26 +23,18 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-// Analyzer defines the entrypoint.
 var Analyzer = &analysis.Analyzer{
 	Name: "checkaligned",
-	Doc:  "prohibits direct use of sync/atomic int functions; use the typed atomics",
-	Run:  run,
+	Doc: "prohibits direct use of sync/atomic int functions; use the typed atomics\n\n" +
+		"A package with a // +checkalignedignore comment is not checked.",
+	Run: run,
 }
 
 var typedAtomicsLongestFirst = []string{"Uint32", "Uint64", "Int32", "Int64"}
 
 func run(pass *analysis.Pass) (any, error) {
-	// Check for the "// +checkalignedignore" escape hatch.
-	for _, file := range pass.Files {
-		if file.Doc == nil {
-			continue
-		}
-		for _, comment := range file.Doc.List {
-			if len(comment.Text) > 2 && strings.HasPrefix(comment.Text[2:], " +checkalignedignore") {
-				return nil, nil
-			}
-		}
+	if hasIgnoreDirective(pass.Files) {
+		return nil, nil
 	}
 
 	for _, file := range pass.Files {
@@ -65,6 +52,20 @@ func run(pass *analysis.Pass) (any, error) {
 	}
 
 	return nil, nil
+}
+
+func hasIgnoreDirective(files []*ast.File) bool {
+	for _, file := range files {
+		if file.Doc == nil {
+			continue
+		}
+		for _, comment := range file.Doc.List {
+			if len(comment.Text) > 2 && strings.HasPrefix(comment.Text[2:], " +checkalignedignore") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func blockedFunc(info *types.Info, ident *ast.Ident) (name, typed string, ok bool) {

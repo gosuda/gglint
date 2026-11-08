@@ -65,8 +65,8 @@ func check(pass *analysis.Pass, file *ast.File, read func(string) ([]byte, error
 	if err != nil {
 		return err
 	}
-	formatted, err := format.Source(src, opts)
-	if err != nil || bytes.Equal(src, formatted) {
+	formatted, ok := formatSource(src, opts)
+	if !ok || bytes.Equal(src, formatted) {
 		return nil
 	}
 	pass.Report(analysis.Diagnostic{
@@ -78,4 +78,9 @@ func check(pass *analysis.Pass, file *ast.File, read func(string) ([]byte, error
 		}},
 	})
 	return nil
+}
+
+func formatSource(src []byte, opts format.Options) (formatted []byte, ok bool) {
+	formatted, err := format.Source(src, opts)
+	return formatted, err == nil
 }

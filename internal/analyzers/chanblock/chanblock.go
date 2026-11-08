@@ -8,7 +8,8 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
-	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 const (
@@ -32,7 +33,7 @@ its own, range over a channel, close, len, and cap are not reported.`,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	ins := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	ins := inspection.Of(pass)
 	roots := []ast.Node{(*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)}
 	ins.Nodes(roots, func(n ast.Node, push bool) bool {
 		if push {
@@ -141,7 +142,7 @@ func (u *unit) rangeStmt(r *ast.RangeStmt) {
 func (u *unit) selectStmt(s *ast.SelectStmt) {
 	done := u.hasDoneCase(s)
 	for _, stmt := range s.Body.List {
-		cc := stmt.(*ast.CommClause)
+		cc := inspection.As[*ast.CommClause](stmt)
 		u.covered = done
 		operands := u.comm(cc.Comm)
 		u.covered = false
@@ -156,7 +157,7 @@ func (u *unit) selectStmt(s *ast.SelectStmt) {
 
 func (u *unit) hasDoneCase(s *ast.SelectStmt) bool {
 	for _, stmt := range s.Body.List {
-		r := commReceive(stmt.(*ast.CommClause).Comm)
+		r := commReceive(inspection.As[*ast.CommClause](stmt).Comm)
 		if r != nil && u.isDone(r.X) {
 			return true
 		}

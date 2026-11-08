@@ -9,7 +9,8 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
-	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 const message = "field %s has platform-dependent type %s in a JSON struct: use int64 or int32"
@@ -25,9 +26,9 @@ var Analyzer = &analysis.Analyzer{
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	insp := inspection.Of(pass)
 	for c := range insp.Root().Preorder((*ast.StructType)(nil)) {
-		fields := c.Node().(*ast.StructType).Fields.List
+		fields := inspection.Node[*ast.StructType](c).Fields.List
 		if slices.ContainsFunc(fields, hasJSONTag) {
 			reportUnsized(pass, fields)
 		}
