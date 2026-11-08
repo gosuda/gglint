@@ -26,16 +26,24 @@ single error result of a call (_ = f()) or the error element of a call's
 tuple result (_, _ = g()). Parentheses around the call are looked through.
 Calls that cannot fail in practice are exempt: fmt.Print, fmt.Printf,
 fmt.Println, fmt.Fprint, fmt.Fprintf, and fmt.Fprintln whose writer is
-os.Stdout or os.Stderr, and the Write* methods of *bytes.Buffer and
-*strings.Builder. defer and go statements are not reported.`,
+os.Stdout or os.Stderr, the Write* methods of *bytes.Buffer and
+*strings.Builder, and Write on a receiver whose static type (or its pointer)
+implements hash.Hash, whose Write never returns an error. defer and go
+statements are not reported.`,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
 
+type checker struct {
+	info *types.Info
+	hash *types.Interface
+}
+
 func run(pass *analysis.Pass) (any, error) {
+	c := checker{info: pass.TypesInfo, hash: hashInterface(pass.Pkg)}
 	nodes := []ast.Node{(*ast.ExprStmt)(nil), (*ast.AssignStmt)(nil)}
 	inspection.Of(pass).Preorder(nodes, func(n ast.Node) {
-		call := droppedCall(pass.TypesInfo, n)
+		call := c.droppedCall(n)
 		if call == nil {
 			return
 		}
@@ -48,59 +56,94 @@ func run(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func droppedCall(info *types.Info, n ast.Node) *ast.CallExpr {
-	switch s := n.(type) {
-	case *ast.ExprStmt:
-		return exprStmtCall(info, s)
-	case *ast.AssignStmt:
-		return assignStmtCall(info, s)
+func hashInterface(pkg *types.Package) *types.Interface {
+	hash := findPackage(pkg, "hash")
+	if hash == nil {
+		return nil
+	}
+	obj, ok := hash.Scope().Lookup("Hash").(*types.TypeName)
+	if !ok {
+		return nil
+	}
+	iface, ok := obj.Type().Underlying().(*types.Interface)
+	if !ok {
+		return nil
+	}
+	return iface
+}
+
+func findPackage(root *types.Package, path string) *types.Package {
+	seen := map[*types.Package]bool{root: true}
+	queue := []*types.Package{root}
+	for len(queue) > 0 {
+		pkg := queue[0]
+		queue = queue[1:]
+		if pkg.Path() == path {
+			return pkg
+		}
+		for _, imp := range pkg.Imports() {
+			if !seen[imp] {
+				seen[imp] = true
+				queue = append(queue, imp)
+			}
+		}
 	}
 	return nil
 }
 
-func exprStmtCall(info *types.Info, s *ast.ExprStmt) *ast.CallExpr {
+func (c checker) droppedCall(n ast.Node) *ast.CallExpr {
+	switch s := n.(type) {
+	case *ast.ExprStmt:
+		return c.exprStmtCall(s)
+	case *ast.AssignStmt:
+		return c.assignStmtCall(s)
+	}
+	return nil
+}
+
+func (c checker) exprStmtCall(s *ast.ExprStmt) *ast.CallExpr {
 	call := callOf(s.X)
-	if call == nil || benignCall(info, call) {
+	if call == nil || c.benignCall(call) {
 		return nil
 	}
-	if !slices.ContainsFunc(resultTypes(info, call), isError) {
+	if !slices.ContainsFunc(c.resultTypes(call), isError) {
 		return nil
 	}
 	return call
 }
 
-func assignStmtCall(info *types.Info, s *ast.AssignStmt) *ast.CallExpr {
+func (c checker) assignStmtCall(s *ast.AssignStmt) *ast.CallExpr {
 	if s.Tok != token.ASSIGN && s.Tok != token.DEFINE {
 		return nil
 	}
 	switch {
 	case len(s.Lhs) == len(s.Rhs):
-		return pairedBlankCall(info, s.Lhs, s.Rhs)
+		return c.pairedBlankCall(s.Lhs, s.Rhs)
 	case len(s.Rhs) == 1:
-		return tupleBlankCall(info, s.Lhs, s.Rhs[0])
+		return c.tupleBlankCall(s.Lhs, s.Rhs[0])
 	}
 	return nil
 }
 
-func pairedBlankCall(info *types.Info, lhs, rhs []ast.Expr) *ast.CallExpr {
+func (c checker) pairedBlankCall(lhs, rhs []ast.Expr) *ast.CallExpr {
 	for i := range lhs {
 		call := callOf(rhs[i])
-		if call == nil || !isBlank(lhs[i]) || benignCall(info, call) {
+		if call == nil || !isBlank(lhs[i]) || c.benignCall(call) {
 			continue
 		}
-		if res := resultTypes(info, call); len(res) == 1 && isError(res[0]) {
+		if res := c.resultTypes(call); len(res) == 1 && isError(res[0]) {
 			return call
 		}
 	}
 	return nil
 }
 
-func tupleBlankCall(info *types.Info, lhs []ast.Expr, e ast.Expr) *ast.CallExpr {
+func (c checker) tupleBlankCall(lhs []ast.Expr, e ast.Expr) *ast.CallExpr {
 	call := callOf(e)
-	if call == nil || benignCall(info, call) {
+	if call == nil || c.benignCall(call) {
 		return nil
 	}
-	res := resultTypes(info, call)
+	res := c.resultTypes(call)
 	if len(res) != len(lhs) {
 		return nil
 	}
@@ -112,8 +155,8 @@ func tupleBlankCall(info *types.Info, lhs []ast.Expr, e ast.Expr) *ast.CallExpr 
 	return nil
 }
 
-func benignCall(info *types.Info, call *ast.CallExpr) bool {
-	fn := calleeFunc(info, call)
+func (c checker) benignCall(call *ast.CallExpr) bool {
+	fn := c.calleeFunc(call)
 	if fn == nil {
 		return false
 	}
@@ -121,14 +164,31 @@ func benignCall(info *types.Info, call *ast.CallExpr) bool {
 	case "fmt.Print", "fmt.Printf", "fmt.Println":
 		return true
 	case "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln":
-		return len(call.Args) > 0 && isStdoutOrStderr(info, call.Args[0])
+		return len(call.Args) > 0 && c.isStdoutOrStderr(call.Args[0])
 	default:
 		return strings.HasPrefix(name, "(*bytes.Buffer).Write") ||
-			strings.HasPrefix(name, "(*strings.Builder).Write")
+			strings.HasPrefix(name, "(*strings.Builder).Write") ||
+			c.isHashWrite(call)
 	}
 }
 
-func calleeFunc(info *types.Info, call *ast.CallExpr) *types.Func {
+func (c checker) isHashWrite(call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || c.hash == nil || sel.Sel.Name != "Write" {
+		return false
+	}
+	recv := c.info.TypeOf(sel.X)
+	if recv == nil {
+		return false
+	}
+	if types.Implements(recv, c.hash) {
+		return true
+	}
+	_, isPtr := recv.Underlying().(*types.Pointer)
+	return !isPtr && types.Implements(types.NewPointer(recv), c.hash)
+}
+
+func (c checker) calleeFunc(call *ast.CallExpr) *types.Func {
 	var id *ast.Ident
 	switch fun := ast.Unparen(call.Fun).(type) {
 	case *ast.Ident:
@@ -138,35 +198,27 @@ func calleeFunc(info *types.Info, call *ast.CallExpr) *types.Func {
 	default:
 		return nil
 	}
-	fn, ok := info.Uses[id].(*types.Func)
+	fn, ok := c.info.Uses[id].(*types.Func)
 	if !ok {
 		return nil
 	}
 	return fn
 }
 
-func isStdoutOrStderr(info *types.Info, w ast.Expr) bool {
+func (c checker) isStdoutOrStderr(w ast.Expr) bool {
 	sel, ok := w.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
-	v, ok := info.Uses[sel.Sel].(*types.Var)
+	v, ok := c.info.Uses[sel.Sel].(*types.Var)
 	if !ok || v.Pkg() == nil || v.Pkg().Path() != "os" {
 		return false
 	}
 	return v.Name() == "Stdout" || v.Name() == "Stderr"
 }
 
-func callOf(e ast.Expr) *ast.CallExpr {
-	call, ok := ast.Unparen(e).(*ast.CallExpr)
-	if !ok {
-		return nil
-	}
-	return call
-}
-
-func resultTypes(info *types.Info, call *ast.CallExpr) []types.Type {
-	t := info.TypeOf(call)
+func (c checker) resultTypes(call *ast.CallExpr) []types.Type {
+	t := c.info.TypeOf(call)
 	if t == nil {
 		return nil
 	}
@@ -179,6 +231,14 @@ func resultTypes(info *types.Info, call *ast.CallExpr) []types.Type {
 		out[i] = tuple.At(i).Type()
 	}
 	return out
+}
+
+func callOf(e ast.Expr) *ast.CallExpr {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	return call
 }
 
 func isError(t types.Type) bool {

@@ -2,7 +2,9 @@ package discardederror
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"strings"
@@ -56,6 +58,17 @@ func exempt() {
 	var sb strings.Builder
 	sb.WriteByte('x')
 	_ = sb.WriteByte('x')
+}
+
+func hashWrites(p []byte, file *os.File, w io.Writer) {
+	sha256.New().Write(p)
+	var h hash.Hash = sha256.New()
+	h.Write(p)
+	_, _ = h.Write(p)
+	var h32 hash.Hash32
+	h32.Write(p)
+	file.Write(p) // want `error result of file\.Write\(p\) is dropped`
+	w.Write(p)    // want `error result of w\.Write\(p\) is dropped`
 }
 
 func handled() error {
