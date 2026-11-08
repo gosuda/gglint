@@ -1,4 +1,3 @@
-// Package unsizedint reports int and uint fields in structs serialized as JSON.
 package unsizedint
 
 import (
@@ -15,7 +14,6 @@ import (
 
 const message = "field %s has platform-dependent type %s in a JSON struct: use int64 or int32"
 
-// Analyzer reports predeclared int and uint fields of JSON-tagged structs.
 var Analyzer = &analysis.Analyzer{
 	Name: "unsizedint",
 	Doc: "Report int and uint fields in structs serialized as JSON.\n\n" +

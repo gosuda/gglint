@@ -1,5 +1,3 @@
-// Package placeholder reports placeholder panics and, in strict mode,
-// TODO and FIXME comments in non-test files.
 package placeholder
 
 import (
@@ -22,8 +20,6 @@ const (
 	commentFormat = "placeholder %s comment: finish the work or delete the marker"
 )
 
-// New returns the placeholder analyzer for mode m: placeholder panics in
-// every mode, and TODO and FIXME comments from strict mode on.
 func New(m config.Mode) *analysis.Analyzer {
 	return &analysis.Analyzer{
 		Name: "placeholder",

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package checkimports enforces restrictions on package imports.
 package checkimports
 
 import (
@@ -27,8 +26,6 @@ import (
 	"github.com/gosuda/gglint/internal/config"
 )
 
-// New returns the analyzer that allows package unsafe only in *_unsafe.go and
-// *_test.go files and reports every import denied by deny.
 func New(deny []config.Deny) *analysis.Analyzer {
 	return &analysis.Analyzer{
 		Name: "checkimports",

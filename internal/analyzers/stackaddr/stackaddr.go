@@ -1,4 +1,3 @@
-// Package stackaddr reports stack variable addresses kept as uintptr.
 package stackaddr
 
 import (

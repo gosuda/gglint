@@ -1,4 +1,3 @@
-// Package unparam reports unused parameters and constant results of unexported functions.
 package unparam
 
 import (
@@ -8,7 +7,6 @@ import (
 	"mvdan.cc/unparam/check"
 )
 
-// Analyzer reports the issues found by mvdan.cc/unparam in unexported functions.
 var Analyzer = &analysis.Analyzer{
 	Name:     "unparam",
 	Doc:      "Report unused parameters and always-constant parameters and results of unexported functions.",

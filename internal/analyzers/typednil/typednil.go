@@ -1,4 +1,3 @@
-// Package typednil reports typed nil conversions returned as interface results.
 package typednil
 
 import (

@@ -1,4 +1,3 @@
-// Package goconst reports repeated string literals that should be a constant.
 package goconst
 
 import (
@@ -13,7 +12,6 @@ const (
 	minOccurrences  = 3
 )
 
-// Analyzer reports string literals of at least 3 characters that occur at least 3 times.
 var Analyzer = &analysis.Analyzer{
 	Name: "goconst",
 	Doc:  "Report string literals of 3 or more characters repeated 3 or more times.",

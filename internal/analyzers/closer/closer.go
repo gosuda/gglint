@@ -1,4 +1,3 @@
-// Package closer reports local closers that are neither closed nor handed on.
 package closer
 
 import (

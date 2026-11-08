@@ -1,4 +1,3 @@
-// Package unconvert reports conversions of an expression to the type it already has.
 package unconvert
 
 import (
@@ -8,7 +7,6 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-// Analyzer reports unnecessary type conversions found by github.com/golangci/unconvert.
 var Analyzer = &analysis.Analyzer{
 	Name: "unconvert",
 	Doc:  "Report conversions of an expression to the type it already has.",

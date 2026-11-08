@@ -10,9 +10,6 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-// ListExport returns an Archive that asks the go command, with the given
-// build tags, for the compiled archive of the package under analysis. The
-// returned path is a build-cache file owned by the go command.
 func ListExport(tags []string) Archive {
 	tagsFlag := "-tags=" + strings.Join(tags, ",")
 	return func(pass *analysis.Pass) (string, error) {

@@ -1,4 +1,3 @@
-// Package misspell reports commonly misspelled English words in comments.
 package misspell
 
 import (
@@ -9,7 +8,6 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-// Analyzer reports misspellings found by github.com/golangci/misspell and offers the correction as a fix.
 var Analyzer = &analysis.Analyzer{
 	Name: "misspell",
 	Doc:  "Report commonly misspelled English words in comments.",

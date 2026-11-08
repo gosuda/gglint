@@ -1,4 +1,3 @@
-// Package noinit reports package init functions.
 package noinit
 
 import (
@@ -9,7 +8,6 @@ import (
 
 const message = "init function: move setup into an explicit function called from main"
 
-// Analyzer reports every top-level func init.
 var Analyzer = &analysis.Analyzer{
 	Name: "noinit",
 	Doc: "Report package init functions.\n\n" +
