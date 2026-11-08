@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gosuda/gglint/internal/cli"
 	"github.com/gosuda/gglint/internal/config"
 )
 
@@ -270,6 +271,8 @@ func TestConfigErrorExitsTwoWithEmptyStdoutDespiteFindings(t *testing.T) {
 		{name: "bad exclude path", toml: "[[exclude]]\npaths = [\"^a/\", \"(\"]\n", stderr: `^gglint: CONFIG: exclude\[0\]\.paths\[1\]: error parsing regexp: [^\n]+\n$`},
 		{name: "bad exclude text", toml: "[[exclude]]\ntext = \"[\"\n", stderr: `^gglint: CONFIG: exclude\[0\]\.text: error parsing regexp: [^\n]+\n$`},
 		{name: "unknown exclude rule", toml: "[[exclude]]\npaths = [\"^a/\"]\n\n[[exclude]]\nrules = [\"nosuch\"]\n", stderr: `^gglint: CONFIG: exclude\[1\]\.rules: unknown rule "nosuch"\n$`},
+		{name: "exclude typecheck rule", toml: "[[exclude]]\nrules = [\"printf\", \"typecheck\"]\n", stderr: `^gglint: CONFIG: exclude\[0\]\.rules: typecheck findings cannot be excluded\n$`},
+		{name: "exclude typecheck check", toml: "[[exclude]]\npaths = [\"^a/\"]\n\n[[exclude]]\nrules = [\"typecheck:x\"]\n", stderr: `^gglint: CONFIG: exclude\[1\]\.rules: typecheck findings cannot be excluded\n$`},
 		{name: "negative complexity limit", toml: "[rules.complexity]\nmax_lines = -1\n", stderr: `^gglint: CONFIG: rules\.complexity\.max_lines: must be >= 0\n$`},
 		{name: "empty deny path", toml: "[rules.checkimports]\ndeny = [{ path = \"\" }]\n", stderr: `^gglint: CONFIG: rules\.checkimports\.deny\[0\]: path is empty\n$`},
 	}
@@ -595,6 +598,10 @@ var directiveCases = []directiveCase{
 	{"rule:check token suppresses its own check", "staticcheck:SA4000 //", [3][]string{}, map[string][3]bool{"staticcheck:SA4000": never}},
 	{"rule:check token leaves other checks of the rule reported", "staticcheck:SA4001 //", inAll("unused nolint directive for staticcheck:SA4001"), map[string][3]bool{"staticcheck:SA4000": always}},
 	{"rule token suppresses every check of the rule", "//nolint:staticcheck //", [3][]string{}, map[string][3]bool{"staticcheck:SA4000": never}},
+	{"directive naming an unmatched selected rule reports it unused and still suppresses the matched rule", `"errcheckpair")`, inAll("unused nolint directive for errcheck"), map[string][3]bool{"printf": never}},
+	{"trailing comma is malformed in every mode and suppresses nothing", `"trailingcomma")`, inAll("malformed nolint directive"), map[string][3]bool{"printf": always}},
+	{"reason without slashes is malformed in every mode and suppresses nothing", `"noslash")`, inAll("malformed nolint directive"), map[string][3]bool{"printf": always}},
+	{"typecheck token beside a selected rule is rejected and the rule is unused", `"typecheckpair")`, inAll("typecheck findings cannot be suppressed", "unused nolint directive for printf"), nil},
 }
 
 func assertNolint(t *testing.T, dir string, reports map[config.Mode]jsonReport) {
@@ -700,8 +707,8 @@ func TestFixAppliesSuggestedEditsThenReportsClean(t *testing.T) {
 	assertResult(t, gglint(t, dir, "run", "./i"), result{})
 }
 
-func TestNewFromRevKeepsChangedLinesAndEveryTypecheckFinding(t *testing.T) {
-	t.Parallel()
+func gitWorkspace(t *testing.T, files map[string]string) string {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not on PATH")
 	}
@@ -709,13 +716,22 @@ func TestNewFromRevKeepsChangedLinesAndEveryTypecheckFinding(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, ".git")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(dir, "x"), 0o750); err != nil {
-		t.Fatal(err)
+	for name, content := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, path, content)
 	}
-	writeFile(t, filepath.Join(dir, "x", "x.go"), brokenSource)
 	git(t, dir, "init", "-q")
 	git(t, dir, "add", "-A")
 	git(t, dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "base")
+	return dir
+}
+
+func TestNewFromRevKeepsChangedLinesAndEveryTypecheckFinding(t *testing.T) {
+	t.Parallel()
+	dir := gitWorkspace(t, map[string]string{"x/x.go": brokenSource})
 	path := filepath.Join(dir, "a", "a.go")
 	writeFile(t, path, readFile(t, path)+"\nfunc Worse() {\n\tlogf(\"%d\\n\", \"z\")\n}\n")
 	doc, _ := lintJSON(t, dir, "-new-from-rev", "HEAD", "./a", "./x")
@@ -727,4 +743,83 @@ func TestNewFromRevKeepsChangedLinesAndEveryTypecheckFinding(t *testing.T) {
 	if got.code != 3 || got.stdout != "" || !strings.HasPrefix(got.stderr, "gglint: diff: ") {
 		t.Errorf("exit %d, stdout %q, stderr %q; want exit 3, empty stdout, gglint: diff: error", got.code, got.stdout, got.stderr)
 	}
+}
+
+func TestNewFromRevOptionLikeRevisionExitsThreeWithoutRunningGit(t *testing.T) {
+	t.Parallel()
+	const kept = "keep me\n"
+	dir := gitWorkspace(t, map[string]string{"victim.txt": kept})
+	path := filepath.Join(dir, "a", "a.go")
+	writeFile(t, path, readFile(t, path)+"\nfunc Worse() {\n\tlogf(\"%d\\n\", \"z\")\n}\n")
+	victim := filepath.Join(dir, "victim.txt")
+	for _, rev := range []string{"--output=" + victim, "-p"} {
+		got := gglint(t, dir, "run", "-new-from-rev="+rev, "./a")
+		assertResult(t, got, result{code: 3, stderr: "gglint: diff: revision must not start with '-'\n"})
+		if content := readFile(t, victim); content != kept {
+			t.Fatalf("-new-from-rev=%s: victim.txt = %q, want %q", rev, content, kept)
+		}
+	}
+}
+
+func TestGeneratedFilesDropAnalyzerFindingsButKeepTypecheck(t *testing.T) {
+	t.Parallel()
+	dir := workspace(t, "")
+	doc, _ := lintJSON(t, dir, "./gen", "./genbroken")
+	want := []string{at(t, dir, "printf", "gen/plain.go", printfVerb("plain")), at(t, dir, "typecheck", "genbroken/gen.go", "return")}
+	if got := located(doc, func(jsonFinding) bool { return true }); !slices.Equal(got, want) {
+		t.Errorf("findings %v, want %v", got, want)
+	}
+}
+
+func TestFixWithTestsOffLeavesTestFilesByteIdentical(t *testing.T) {
+	t.Parallel()
+	const testsOff = "[run]\ntests = false\n"
+	dir := workspace(t, "")
+	unformatted := func(file string) string {
+		return file + ":1:1: file is not gofumpt-formatted [gofumpt]\n\tfix: format with gofumpt\n"
+	}
+	both := unformatted("fixtests/f.go") + unformatted("fixtests/f_test.go")
+	assertResult(t, gglint(t, dir, "run", "./fixtests"), result{code: 1, stdout: both, stderr: summary("", 2)})
+	testFile := filepath.Join(dir, "fixtests", "f_test.go")
+	before := readFile(t, testFile)
+	writeFile(t, filepath.Join(dir, config.FileName), testsOff)
+	assertResult(t, gglint(t, dir, "run", "-fix", "./fixtests"), result{stderr: summary(testsOff, 0)})
+	if got, want := readFile(t, filepath.Join(dir, "fixtests", "f.go")), "package fixtests\n\nfunc Two() int {\n\treturn 2\n}\n"; got != want {
+		t.Errorf("fixed fixtests/f.go = %q, want %q", got, want)
+	}
+	if got := readFile(t, testFile); got != before {
+		t.Errorf("fixtests/f_test.go changed with tests = false: %q, want %q", got, before)
+	}
+}
+
+func TestConfigReadFailureExitsThreeAndMissingExplicitConfigExitsTwo(t *testing.T) {
+	t.Parallel()
+	dir := workspace(t, "mode = \"basic\"\n")
+	missing := filepath.Join(dir, "nosuch.toml")
+	notFound := "gglint: " + missing + ": open " + missing + ": no such file or directory\n"
+	for _, args := range [][]string{{"run", "-config", "nosuch.toml", "./b"}, {"rules", "-selected", "-config", "nosuch.toml"}} {
+		assertResult(t, gglint(t, dir, args...), result{code: 2, stderr: notFound})
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root reads files regardless of permission bits")
+	}
+	path := filepath.Join(dir, config.FileName)
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	denied := "gglint: internal: " + path + ": open " + path + ": permission denied\n"
+	for _, args := range [][]string{{"run", "./b"}, {"rules", "-selected"}} {
+		assertResult(t, gglint(t, dir, args...), result{code: 3, stderr: denied})
+	}
+}
+
+func TestMainWithCanceledContextExitsThreeInterrupted(t *testing.T) {
+	dir := workspace(t, "")
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Chdir(dir)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var stdout, stderr strings.Builder
+	code := cli.Main(ctx, []string{"run", "./b"}, &stdout, &stderr)
+	assertResult(t, result{code: code, stdout: stdout.String(), stderr: stderr.String()}, result{code: 3, stderr: "gglint: interrupted\n"})
 }

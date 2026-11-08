@@ -87,7 +87,10 @@ func validateExcludeRules(excludes []config.Exclude, known map[string]bool) erro
 	for i, e := range excludes {
 		for _, token := range e.Rules {
 			rule, _, _ := strings.Cut(token, ":")
-			if !known[rule] {
+			switch {
+			case rule == TypecheckName:
+				return fmt.Errorf("exclude[%d].rules: typecheck findings cannot be excluded", i)
+			case !known[rule]:
 				return fmt.Errorf("exclude[%d].rules: unknown rule %q", i, rule)
 			}
 		}

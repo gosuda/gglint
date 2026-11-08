@@ -33,7 +33,7 @@ func rulesCommand(args []string, stdout, stderr io.Writer) int {
 	}
 	listed, err := list(mode, configPath)
 	if err != nil {
-		return fail(stderr, exitUsage, err)
+		return configFailure(stderr, err)
 	}
 	var out []byte
 	for _, r := range listed {

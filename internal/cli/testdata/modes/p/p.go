@@ -45,3 +45,19 @@ func OtherCheck(n int) bool {
 func WholeRule(n int) bool {
 	return n == n //nolint:staticcheck // reason
 }
+
+func ErrcheckPair() {
+	logf("%d\n", "errcheckpair") //nolint:printf,errcheck // reason
+}
+
+func TrailingComma() {
+	logf("%d\n", "trailingcomma") //nolint:printf,
+}
+
+func NoSlash() {
+	logf("%d\n", "noslash") //nolint:printf reason
+}
+
+func TypecheckPair() {
+	fmt.Println("typecheckpair") //nolint:typecheck,printf // reason
+}

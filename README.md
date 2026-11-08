@@ -132,7 +132,7 @@ rules = ["goconst", "staticcheck:SA1019"]
 | `run.build_tags` | `[]` | Build tags for `go vet`. |
 | `rules.complexity.<limit>` | the mode's value | One of the eight limits in [Complexity limits](#complexity-limits). A missing key keeps the mode's value. Values must be 0 or more. |
 | `rules.checkimports.deny` | `[]` | Imports that `checkimports` reports. `path` is an exact import path or a prefix ending in `/...`, which matches the prefix and everything below it. `allow_from` lists the importing packages that may use it, in the same syntax. |
-| `[[exclude]]` | none | Each entry needs at least one of `paths`, `rules`, `tests`, `text`. |
+| `[[exclude]]` | none | Each entry needs at least one of `paths`, `rules`, `tests`, `text`. `rules` cannot name `typecheck`: typecheck findings cannot be excluded or suppressed. |
 
 gglint selects every rule whose mode is at or below the configured mode, adds `enable`, and removes `disable`. `typecheck` always runs. Settings under `[rules.X]` for a rule that is not selected are accepted and ignored.
 
@@ -160,6 +160,7 @@ exclude[0]: set at least one of paths, rules, tests, text
 exclude[0].paths[0]: <regexp error>
 exclude[0].text: <regexp error>
 exclude[0].rules: unknown rule "x"
+exclude[0].rules: typecheck findings cannot be excluded
 rules.complexity.max_lines: must be >= 0
 rules.checkimports.deny[0]: path is empty
 <row>:<column>: unknown key <key>

@@ -411,7 +411,7 @@ func TestSelectRejectsInvalidConfigWithDocumentedMessageAndNoRules(t *testing.T)
 }
 
 func TestSelectAcceptsExcludeTokensWithoutChangingSelection(t *testing.T) {
-	excludes := []config.Exclude{{Rules: []string{"printf", "staticcheck:SA1019", "err_chain_reset", rules.TypecheckName, rules.NolintName, "chanblock:anything"}}}
+	excludes := []config.Exclude{{Rules: []string{"printf", "staticcheck:SA1019", "err_chain_reset", rules.NolintName, "chanblock:anything"}}}
 	for _, m := range []config.Mode{config.Basic, config.Standard} {
 		assertSelectionLaw(t, config.Config{Path: "/p/gglint.toml", Mode: m, Excludes: excludes})
 	}

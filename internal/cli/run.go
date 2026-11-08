@@ -80,7 +80,7 @@ func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	}
 	s, err := newSession(args, wd, stderr)
 	if err != nil {
-		return fail(stderr, exitUsage, err)
+		return configFailure(stderr, err)
 	}
 	if s.printed != "" && say(stderr, "config %s", s.printed) != nil {
 		return exitFailure
@@ -145,6 +145,13 @@ func (s *session) invocation() (driver.Invocation, error) {
 		BuildTags:  s.cfg.BuildTags,
 		Patterns:   s.opts.patterns,
 	}, nil
+}
+
+func configFailure(stderr io.Writer, err error) int {
+	if pathErr, ok := errors.AsType[*os.PathError](err); ok && !errors.Is(pathErr, os.ErrNotExist) {
+		return fail(stderr, exitFailure, fmt.Errorf("internal: %w", err))
+	}
+	return fail(stderr, exitUsage, err)
 }
 
 func loadConfig(path, mode, wd string) (config.Config, error) {
