@@ -17,9 +17,7 @@ func (e *engine) nolintAnalyzer(requires []*analysis.Analyzer) *analysis.Analyze
 		Requires: requires,
 		Run: func(pass *analysis.Pass) (any, error) {
 			for _, file := range pass.Files {
-				position := pass.Fset.Position(file.FileStart)
-				state := e.stateOf(pass, file, position.Filename)
-				for _, d := range state.directives {
+				for _, d := range e.stateOf(pass, file).directives {
 					for _, message := range e.problems(d) {
 						e.report(pass, d, message)
 					}

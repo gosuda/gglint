@@ -12,13 +12,10 @@ import (
 	"golang.org/x/tools/go/analysis/unitchecker"
 
 	"github.com/gosuda/gglint/internal/config"
+	"github.com/gosuda/gglint/internal/rules"
 )
 
 const configFlag = "config"
-
-type unit struct {
-	VetxOnly bool
-}
 
 func Main(args []string) int {
 	flag.String(configFlag, "", "path of the resolved gglint configuration")
@@ -27,7 +24,7 @@ func Main(args []string) int {
 		unitchecker.Main()
 		return 0
 	}
-	analyzers, err := build(path, args)
+	analyzers, err := build(path, args[len(args)-1])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gglint: internal: %v\n", err)
 		return 3
@@ -38,31 +35,34 @@ func Main(args []string) int {
 
 func configPath(args []string) (string, bool) {
 	for i, arg := range args {
-		name := strings.TrimLeft(arg, "-")
-		if name == configFlag && strings.HasPrefix(arg, "-") && i+1 < len(args) {
-			return args[i+1], true
+		if !strings.HasPrefix(arg, "-") {
+			continue
 		}
-		if value, ok := strings.CutPrefix(name, configFlag+"="); ok && strings.HasPrefix(arg, "-") {
+		name := strings.TrimLeft(arg, "-")
+		if value, ok := strings.CutPrefix(name, configFlag+"="); ok {
 			return value, true
+		}
+		if name == configFlag && i+1 < len(args) {
+			return args[i+1], true
 		}
 	}
 	return "", false
 }
 
-func unitOf(args []string) (unit, error) {
-	var u unit
-	data, err := os.ReadFile(args[len(args)-1])
+func vetxOnly(unitConfig string) (bool, error) {
+	data, err := os.ReadFile(unitConfig)
 	if err != nil {
-		return u, err
+		return false, err
 	}
-	if err := json.Unmarshal(data, &u); err != nil {
-		return u, fmt.Errorf("decode unit config: %w", err)
+	var unit struct{ VetxOnly bool }
+	if err := json.Unmarshal(data, &unit); err != nil {
+		return false, fmt.Errorf("decode unit config: %w", err)
 	}
-	return u, nil
+	return unit.VetxOnly, nil
 }
 
-func build(path string, args []string) ([]*analysis.Analyzer, error) {
-	u, err := unitOf(args)
+func build(path, unitConfig string) ([]*analysis.Analyzer, error) {
+	factsOnly, err := vetxOnly(unitConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -79,20 +79,14 @@ func build(path string, args []string) ([]*analysis.Analyzer, error) {
 		return nil, err
 	}
 	built := e.analyzers(selected)
-	if u.VetxOnly {
-		return factAnalyzers(built), nil
+	if factsOnly {
+		return slices.DeleteFunc(built, func(a *analysis.Analyzer) bool { return !usesFacts(a) }), nil
 	}
-	return e.withNolint(reportPanics(built)), nil
-}
-
-func factAnalyzers(all []*analysis.Analyzer) []*analysis.Analyzer {
-	var out []*analysis.Analyzer
-	for _, a := range all {
-		if usesFacts(a) {
-			out = append(out, a)
-		}
+	built = reportPanics(built)
+	if e.selected[rules.NolintName] {
+		built = append(built, e.nolintAnalyzer(built))
 	}
-	return out
+	return built, nil
 }
 
 func usesFacts(a *analysis.Analyzer) bool {

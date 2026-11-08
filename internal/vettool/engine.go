@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -23,7 +22,7 @@ type engine struct {
 	selected map[string]bool
 
 	mu    sync.Mutex
-	files map[string]*fileState
+	files map[*ast.File]*fileState
 }
 
 type fileState struct {
@@ -45,7 +44,7 @@ func newEngine(cfg config.Config) (*engine, []rules.Rule, error) {
 		excludes: excludes,
 		known:    names(rules.All()),
 		selected: names(selected),
-		files:    map[string]*fileState{},
+		files:    map[*ast.File]*fileState{},
 	}
 	return e, selected, nil
 }
@@ -71,13 +70,6 @@ func (e *engine) analyzers(selected []rules.Rule) []*analysis.Analyzer {
 		out = append(out, built...)
 	}
 	return out
-}
-
-func (e *engine) withNolint(built []*analysis.Analyzer) []*analysis.Analyzer {
-	if !e.selected[rules.NolintName] {
-		return built
-	}
-	return append(built, e.nolintAnalyzer(built))
 }
 
 func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) {
@@ -114,21 +106,16 @@ func reportPanics(analyzers []*analysis.Analyzer) []*analysis.Analyzer {
 }
 
 func (e *engine) keep(pass *analysis.Pass, rule, check string, d analysis.Diagnostic) bool {
+	position := pass.Fset.Position(d.Pos)
+	if !e.cfg.Tests && strings.HasSuffix(position.Filename, "_test.go") || e.excluded(position.Filename, rule, check, d.Message) {
+		return false
+	}
 	file := fileAt(pass.Files, d.Pos)
 	if file == nil {
 		return true
 	}
-	position := pass.Fset.Position(d.Pos)
-	state := e.stateOf(pass, file, position.Filename)
-	switch {
-	case state.generated:
-		return false
-	case !e.cfg.Tests && strings.HasSuffix(position.Filename, "_test.go"):
-		return false
-	case e.excluded(position.Filename, rule, check, d.Message):
-		return false
-	}
-	return rule == rules.NolintName || !e.suppressed(state, position.Line, rule, check)
+	state := e.stateOf(pass, file)
+	return !state.generated && (rule == rules.NolintName || !e.suppressed(state, position.Line, rule, check))
 }
 
 func fileAt(files []*ast.File, pos token.Pos) *ast.File {
@@ -140,32 +127,18 @@ func fileAt(files []*ast.File, pos token.Pos) *ast.File {
 	return nil
 }
 
-func (e *engine) stateOf(pass *analysis.Pass, file *ast.File, filename string) *fileState {
+func (e *engine) stateOf(pass *analysis.Pass, file *ast.File) *fileState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if state, ok := e.files[filename]; ok {
+	if state, ok := e.files[file]; ok {
 		return state
 	}
-	src := readSource(pass, filename)
-	state := &fileState{
-		generated:  ast.IsGenerated(file),
-		directives: collectDirectives(pass.Fset, file, src),
+	state := &fileState{generated: ast.IsGenerated(file)}
+	if src, err := pass.ReadFile(pass.Fset.File(file.FileStart).Name()); err == nil {
+		state.directives = collectDirectives(pass.Fset, file, src)
 	}
-	e.files[filename] = state
+	e.files[file] = state
 	return state
-}
-
-func readSource(pass *analysis.Pass, filename string) []byte {
-	if pass.ReadFile != nil {
-		if src, err := pass.ReadFile(filename); err == nil {
-			return src
-		}
-	}
-	src, err := os.ReadFile(filename)
-	if err != nil {
-		return nil
-	}
-	return src
 }
 
 func (e *engine) excluded(filename, rule, check, message string) bool {
@@ -186,10 +159,9 @@ func (e *engine) suppressed(state *fileState, line int, rule, check string) bool
 	defer e.mu.Unlock()
 	hit := false
 	for _, d := range state.directives {
-		if d.malformed || !d.covers(line) {
-			continue
+		if d.covers(line) {
+			hit = d.match(rule, check) || hit
 		}
-		hit = d.match(rule, check) || hit
 	}
 	return hit
 }

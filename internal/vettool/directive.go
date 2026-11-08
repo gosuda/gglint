@@ -33,47 +33,29 @@ func parseDirective(text string) (directive, bool) {
 	if !ok {
 		return directive{}, false
 	}
-	if spaced := strings.TrimLeft(body, " \t"); spaced != body {
-		return directive{malformed: true}, startsNolint(spaced)
-	}
-	rest, ok := strings.CutPrefix(body, "nolint")
-	if !ok {
+	spaced := strings.TrimLeft(body, " \t")
+	rest, ok := strings.CutPrefix(spaced, "nolint")
+	if !ok || rest != "" && strings.IndexByte(":\t ", rest[0]) < 0 {
 		return directive{}, false
 	}
-	return parseDirectiveTail(rest)
-}
-
-func startsNolint(s string) bool {
-	rest, ok := strings.CutPrefix(s, "nolint")
-	if !ok {
-		return false
+	if spaced != body {
+		return directive{malformed: true}, true
 	}
-	return rest == "" || strings.ContainsRune(":\t ", rune(rest[0]))
-}
-
-func parseDirectiveTail(rest string) (directive, bool) {
-	switch {
-	case rest == "":
-		return directive{}, true
-	case rest[0] == ':':
-		return parseNamed(rest[1:]), true
-	case rest[0] == ' ' || rest[0] == '\t':
-		reason, ok := reasonOf(strings.TrimSpace(rest))
-		return directive{reason: reason, malformed: !ok}, true
-	default:
-		return directive{}, false
+	if spec, named := strings.CutPrefix(rest, ":"); named {
+		return parseNamed(spec), true
 	}
+	reason, ok := reasonOf(strings.TrimSpace(rest))
+	return directive{reason: reason, malformed: !ok}, true
 }
 
 func parseNamed(spec string) directive {
-	names, tail, _ := strings.Cut(spec, " ")
-	names, tabTail, hasTab := strings.Cut(names, "\t")
-	if hasTab {
-		tail = tabTail + " " + tail
+	names, tail := spec, ""
+	if i := strings.IndexAny(spec, " \t"); i >= 0 {
+		names, tail = spec[:i], spec[i+1:]
 	}
 	tokens := strings.Split(names, ",")
 	reason, ok := reasonOf(strings.TrimSpace(tail))
-	if names == "" || !ok || containsEmpty(tokens) {
+	if !ok || slices.Contains(tokens, "") {
 		return directive{malformed: true}
 	}
 	return directive{tokens: tokens, reason: reason}
@@ -85,10 +67,6 @@ func reasonOf(tail string) (reason string, ok bool) {
 	}
 	rest, ok := strings.CutPrefix(tail, "//")
 	return strings.TrimSpace(rest), ok
-}
-
-func containsEmpty(tokens []string) bool {
-	return slices.Contains(tokens, "")
 }
 
 func collectDirectives(fset *token.FileSet, file *ast.File, src []byte) []*directive {

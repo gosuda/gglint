@@ -1,8 +1,8 @@
 package driver
 
 import (
-	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/gglint/internal/finding"
@@ -42,19 +42,15 @@ func TestDecodeJSONEmptyOutput(t *testing.T) {
 
 func TestDecodeJSONAnalyzerError(t *testing.T) {
 	_, err := decodeJSON([]byte(`{"m/a":{"errcheck":{"error":"boom"}}}`))
-	internal, ok := errors.AsType[*InternalError](err)
-	if !ok {
-		t.Fatalf("error = %v, want *InternalError", err)
-	}
-	if want := "internal: m/a: errcheck: boom"; internal.Error() != want {
-		t.Fatalf("error text = %q, want %q", internal.Error(), want)
+	if want := "internal: m/a: errcheck: boom"; err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
 	}
 }
 
 func TestDecodeJSONMalformed(t *testing.T) {
 	_, err := decodeJSON([]byte(`{"m/a":`))
-	if _, ok := errors.AsType[*LoadError](err); !ok {
-		t.Fatalf("error = %v, want *LoadError", err)
+	if err == nil || !strings.HasPrefix(err.Error(), "load: decode go vet output: ") {
+		t.Fatalf("error = %v, want a load: decode go vet output: prefix", err)
 	}
 }
 

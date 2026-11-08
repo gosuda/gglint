@@ -75,19 +75,13 @@ func printed(f Finding, workDir string) Finding {
 }
 
 func printedPosition(p Position, workDir string) Position {
-	p.Path = printedPath(p.Path, workDir)
+	if filepath.IsAbs(p.Path) {
+		if rel, err := filepath.Rel(workDir, p.Path); err == nil {
+			p.Path = rel
+		}
+	}
+	p.Path = filepath.ToSlash(p.Path)
 	return p
-}
-
-func printedPath(path, workDir string) string {
-	if !filepath.IsAbs(path) {
-		return filepath.ToSlash(path)
-	}
-	rel, err := filepath.Rel(workDir, path)
-	if err != nil {
-		return filepath.ToSlash(path)
-	}
-	return filepath.ToSlash(rel)
 }
 
 func changedSince(ctx context.Context, fs []Finding, rev string) ([]Finding, error) {
