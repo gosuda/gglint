@@ -7,8 +7,8 @@ import (
 )
 
 type Deny struct {
-	Path      string   `json:"path"`
-	AllowFrom []string `json:"allow_from"`
+	Path      string   `json:"path" toml:"path"`
+	AllowFrom []string `json:"allow_from" toml:"allow_from"`
 }
 
 type Config struct {
@@ -25,9 +25,9 @@ type Config struct {
 }
 
 func (c Config) Encode() []byte {
-	c.Enable = sortedCopy(c.Enable)
-	c.Disable = sortedCopy(c.Disable)
-	c.BuildTags = sortedCopy(c.BuildTags)
+	c.Enable = slices.Sorted(slices.Values(c.Enable))
+	c.Disable = slices.Sorted(slices.Values(c.Disable))
+	c.BuildTags = slices.Sorted(slices.Values(c.BuildTags))
 	data, err := json.Marshal(c, json.Deterministic(true))
 	if err != nil {
 		panic("config: encode: " + err.Error())
@@ -44,10 +44,4 @@ func Decode(data []byte) (Config, error) {
 		return Config{}, err
 	}
 	return c, nil
-}
-
-func sortedCopy(s []string) []string {
-	out := slices.Clone(s)
-	slices.Sort(out)
-	return out
 }
