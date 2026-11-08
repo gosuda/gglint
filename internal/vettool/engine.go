@@ -21,8 +21,9 @@ type engine struct {
 	known    map[string]bool
 	selected map[string]bool
 
-	mu    sync.Mutex
-	files map[*ast.File]*fileState
+	mu      sync.Mutex
+	files   map[*ast.File]func() *fileState
+	sources map[string]func() ([]byte, error)
 }
 
 type fileState struct {
@@ -44,7 +45,8 @@ func newEngine(cfg config.Config) (*engine, []rules.Rule, error) {
 		excludes: excludes,
 		known:    names(rules.All()),
 		selected: names(selected),
-		files:    map[*ast.File]*fileState{},
+		files:    map[*ast.File]func() *fileState{},
+		sources:  map[string]func() ([]byte, error){},
 	}
 	return e, selected, nil
 }
@@ -81,6 +83,7 @@ func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) {
 	run := a.Run
 	a.Run = func(pass *analysis.Pass) (any, error) {
 		filtered := *pass
+		filtered.ReadFile = func(name string) ([]byte, error) { return e.source(pass, name) }
 		filtered.Report = func(d analysis.Diagnostic) {
 			if e.keep(pass, r.Name, check, d) {
 				pass.Report(d)
@@ -134,17 +137,41 @@ func fileAt(files []*ast.File, pos token.Pos) *ast.File {
 	return nil
 }
 
-func (e *engine) stateOf(pass *analysis.Pass, file *ast.File) *fileState {
+func (e *engine) source(pass *analysis.Pass, name string) ([]byte, error) {
+	return e.sourceOnce(pass, name)()
+}
+
+func (e *engine) sourceOnce(pass *analysis.Pass, name string) func() ([]byte, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if state, ok := e.files[file]; ok {
-		return state
+	read, ok := e.sources[name]
+	if !ok {
+		read = sync.OnceValues(func() ([]byte, error) { return pass.ReadFile(name) })
+		e.sources[name] = read
 	}
+	return read
+}
+
+func (e *engine) stateOf(pass *analysis.Pass, file *ast.File) *fileState {
+	return e.stateOnce(pass, file)()
+}
+
+func (e *engine) stateOnce(pass *analysis.Pass, file *ast.File) func() *fileState {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	state, ok := e.files[file]
+	if !ok {
+		state = sync.OnceValue(func() *fileState { return e.scan(pass, file) })
+		e.files[file] = state
+	}
+	return state
+}
+
+func (e *engine) scan(pass *analysis.Pass, file *ast.File) *fileState {
 	state := &fileState{generated: ast.IsGenerated(file)}
-	if src, err := pass.ReadFile(pass.Fset.File(file.FileStart).Name()); err == nil {
+	if src, err := e.source(pass, pass.Fset.File(file.FileStart).Name()); err == nil {
 		state.directives = collectDirectives(pass.Fset, file, src)
 	}
-	e.files[file] = state
 	return state
 }
 
