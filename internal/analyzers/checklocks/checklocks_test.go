@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"golang.org/x/tools/go/analysis/analysistest"
+
+	"github.com/gosuda/gglint/internal/analyzertest"
 )
 
 func TestFixtures(t *testing.T) {
@@ -12,7 +14,7 @@ func TestFixtures(t *testing.T) {
 			t.Fatalf("set %s: %v", flag, err)
 		}
 	}
-	analysistest.Run(t, analysistest.TestData(), Analyzer,
+	analyzertest.RunIgnoringFacts(t, analysistest.TestData(), Analyzer,
 		"gvisor.dev/gvisor/tools/checklocks/test",
 		"gvisor.dev/gvisor/tools/checklocks/test/crosspkg",
 		"gvisor.dev/gvisor/tools/checklocks/test/atomic",

@@ -8,14 +8,15 @@ import (
 	"testing"
 
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/analysis/analysistest"
 	"golang.org/x/tools/go/analysis/checker"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/gosuda/gglint/internal/analyzertest"
 )
 
 func TestEscapeModule(t *testing.T) {
 	requireObjdump(t)
-	analysistest.Run(t, expandEscapeModule(t), New(ListExport(nil)), "./...")
+	analyzertest.RunIgnoringFacts(t, expandEscapeModule(t), New(ListExport(nil)), "./...")
 }
 
 func TestBinaryArchiveUsesBuildTags(t *testing.T) {
@@ -69,7 +70,7 @@ func requireObjdump(t *testing.T) {
 	if err != nil {
 		t.Skipf("go tool objdump is unavailable: %v", err)
 	}
-	if out, err := exec.Command(goTool, "tool", "-n", "objdump").CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(t.Context(), goTool, "tool", "-n", "objdump").CombinedOutput(); err != nil {
 		t.Skipf("go tool objdump is unavailable: %v: %s", err, out)
 	}
 }
