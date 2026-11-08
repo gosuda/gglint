@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"math"
+	"slices"
 	"strings"
 )
 
@@ -87,12 +88,7 @@ func reasonOf(tail string) (reason string, ok bool) {
 }
 
 func containsEmpty(tokens []string) bool {
-	for _, t := range tokens {
-		if t == "" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(tokens, "")
 }
 
 func collectDirectives(fset *token.FileSet, file *ast.File, src []byte) []*directive {

@@ -24,7 +24,7 @@ func TestDecodeJSONStream(t *testing.T) {
 			End:     finding.Position{Path: "/w/a.go", Line: 5, Column: 20},
 			Fixes:   []string{"fix it", "hint"},
 			Fixable: true,
-			Related: []finding.Related{{Position: finding.Position{Path: "/w/a.go", Line: 1, Column: 1}, Message: "declared"}},
+			Related: []finding.Related{{Path: "/w/a.go", Line: 1, Column: 1, Message: "declared"}},
 		},
 		{Rule: "modernize_forvar", Message: "copy", Pos: finding.Position{Path: "/w/b.go", Line: 3, Column: 4}},
 	}

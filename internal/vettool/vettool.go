@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -95,13 +96,5 @@ func factAnalyzers(all []*analysis.Analyzer) []*analysis.Analyzer {
 }
 
 func usesFacts(a *analysis.Analyzer) bool {
-	if len(a.FactTypes) > 0 {
-		return true
-	}
-	for _, req := range a.Requires {
-		if usesFacts(req) {
-			return true
-		}
-	}
-	return false
+	return len(a.FactTypes) > 0 || slices.ContainsFunc(a.Requires, usesFacts)
 }
