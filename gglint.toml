@@ -1,0 +1,13 @@
+mode = "standard"
+
+[[exclude]]
+paths = ["^internal/analyzers/(checklocks/(analysis|annotations|checklocks|facts|importfacts|state)|checkescape/checkescape(_test)?|checkconst/checkconst|checklinkname/check_linkname)\\.go$"]
+
+[[exclude]]
+tests = true
+rules = ["gosec"]
+
+[[exclude]]
+paths = ["^internal/(driver/driver|analyzers/checkescape/archive)\\.go$"]
+rules = ["gosec"]
+text = "^G204: "

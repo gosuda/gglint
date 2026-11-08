@@ -425,13 +425,14 @@ gglint does not rebuild Go or module plugins, `custom`, `migrate`, `config path|
 
 ## Development
 
-For now, golangci-lint with `.golangci.yml` is the lint gate for this repository. Linting gglint with itself comes later.
+gglint lints itself at `standard` with the repository's `gglint.toml`. That file excludes the verbatim gVisor port files, so they stay diffable against upstream, and turns off `gosec` in test files. golangci-lint with `.golangci.yml` stays as a second lint gate.
 
 Run these gates before you commit:
 
 ```sh
 go vet ./...
 go test -race ./...
+go run ./cmd/gglint run ./...
 golangci-lint run ./...
 ```
 
