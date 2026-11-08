@@ -49,24 +49,47 @@ func Discover(wd string) (string, error) {
 		return "", err
 	}
 	for {
-		candidate := filepath.Join(dir, FileName)
-		found, err := exists(candidate)
-		if err != nil {
-			return "", err
-		}
-		if found {
-			return candidate, nil
-		}
-		boundary, err := exists(filepath.Join(dir, ".git"))
-		if err != nil {
-			return "", err
+		candidate, last, err := discoverIn(dir)
+		if err != nil || candidate != "" {
+			return candidate, err
 		}
 		parent := filepath.Dir(dir)
-		if boundary || parent == dir {
+		if last || parent == dir {
 			return "", nil
 		}
 		dir = parent
 	}
+}
+
+func discoverIn(dir string) (candidate string, last bool, err error) {
+	untrusted, err := foreignWritable(dir)
+	if err != nil || untrusted {
+		return "", true, err
+	}
+	path := filepath.Join(dir, FileName)
+	found, err := exists(path)
+	if err != nil {
+		return "", true, err
+	}
+	if found {
+		return path, true, nil
+	}
+	last, err = exists(filepath.Join(dir, ".git"))
+	return "", last, err
+}
+
+func foreignWritable(dir string) (bool, error) {
+	info, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode().Perm()&0o002 == 0 {
+		return false, nil
+	}
+	return ownedByOther(info), nil
 }
 
 func exists(path string) (bool, error) {

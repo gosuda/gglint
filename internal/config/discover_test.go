@@ -85,3 +85,65 @@ func TestDiscoverIgnoresConfigsBelowAndBesideWorkingDirectory(t *testing.T) {
 		t.Fatalf("Discover = %q, %v; want none", got, err)
 	}
 }
+
+const nobodyUID = 65534
+
+func sharedWorkDirs(shared string) map[string]string {
+	return map[string]string{"start": shared, "below": filepath.Join(shared, "work")}
+}
+
+func makeWorldWritable(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "work"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiscoverWalksThroughWorldWritableDirOwnedByCurrentUser(t *testing.T) {
+	root := t.TempDir()
+	want := writeFile(t, root, config.FileName, "")
+	shared := filepath.Join(root, "shared")
+	makeWorldWritable(t, shared)
+	for name, wd := range sharedWorkDirs(shared) {
+		t.Run(name, func(t *testing.T) {
+			got, err := config.Discover(wd)
+			if err != nil || got != want {
+				t.Fatalf("Discover = %q, %v; want %q", got, err, want)
+			}
+		})
+	}
+}
+
+func TestDiscoverStopsAtWorldWritableDirOwnedByAnotherUser(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("creating a directory owned by another user needs root")
+	}
+	root := t.TempDir()
+	writeFile(t, root, config.FileName, "")
+	shared := filepath.Join(root, "shared")
+	writeFile(t, shared, config.FileName, "")
+	makeWorldWritable(t, shared)
+	if err := os.Chown(shared, nobodyUID, nobodyUID); err != nil {
+		t.Fatal(err)
+	}
+	for name, wd := range sharedWorkDirs(shared) {
+		t.Run(name, func(t *testing.T) {
+			got, err := config.Discover(wd)
+			if err != nil || got != "" {
+				t.Fatalf("Discover = %q, %v; want none", got, err)
+			}
+		})
+	}
+}
+
+func TestDiscoverWalksUpFromMissingWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	want := writeFile(t, root, config.FileName, "")
+	got, err := config.Discover(filepath.Join(root, "missing", "deeper"))
+	if err != nil || got != want {
+		t.Fatalf("Discover = %q, %v; want %q", got, err, want)
+	}
+}
