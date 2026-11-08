@@ -62,7 +62,7 @@ func Discover(wd string) (string, error) {
 }
 
 func discoverIn(dir string) (candidate string, last bool, err error) {
-	untrusted, err := foreignWritable(dir)
+	untrusted, err := worldWritable(dir)
 	if err != nil || untrusted {
 		return "", true, err
 	}
@@ -78,7 +78,7 @@ func discoverIn(dir string) (candidate string, last bool, err error) {
 	return "", last, err
 }
 
-func foreignWritable(dir string) (bool, error) {
+func worldWritable(dir string) (bool, error) {
 	info, err := os.Stat(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -86,10 +86,7 @@ func foreignWritable(dir string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if info.Mode().Perm()&0o002 == 0 {
-		return false, nil
-	}
-	return ownedByOther(info), nil
+	return info.Mode().Perm()&0o002 != 0, nil
 }
 
 func exists(path string) (bool, error) {
