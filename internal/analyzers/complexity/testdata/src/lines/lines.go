@@ -74,3 +74,15 @@ var long = func() int { // want `^function literal is too complex: line count 11
 	a++
 	return a
 }
+
+func wrappedSignature( // want `^function wrappedSignature is too complex: line count 11 exceeds 10$`
+	a int,
+	b int,
+) int {
+	a++
+	a++
+	a++
+	a++
+	a++
+	return a + b
+}

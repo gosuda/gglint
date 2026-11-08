@@ -1,4 +1,4 @@
-package testskip
+package testskip // want `^file is too long: line count 26 exceeds 25$`
 
 func thirteen(a int) int { // want `^function thirteen is too complex: line count 13 exceeds 12$`
 	a++

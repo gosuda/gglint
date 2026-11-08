@@ -17,7 +17,9 @@ func New(c config.Complexity) *analysis.Analyzer {
 		Doc:  "complexity reports functions, interfaces, and files that exceed the configured complexity limits.",
 		Run: func(pass *analysis.Pass) (any, error) {
 			for _, f := range pass.Files {
-				checkFile(pass, f, c)
+				if !ast.IsGenerated(f) {
+					checkFile(pass, f, c)
+				}
 			}
 			return nil, nil
 		},
