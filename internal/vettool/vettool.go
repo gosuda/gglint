@@ -84,29 +84,25 @@ func build(path, unitConfig string) ([]*analysis.Analyzer, error) {
 }
 
 func (e *engine) factsOnly(selected []rules.Rule) []*analysis.Analyzer {
-	p := producers{seen: map[*analysis.Analyzer]bool{}}
+	seen := map[*analysis.Analyzer]bool{}
+	var out []*analysis.Analyzer
+	var visit func(*analysis.Analyzer)
+	visit = func(a *analysis.Analyzer) {
+		if seen[a] {
+			return
+		}
+		seen[a] = true
+		if len(a.FactTypes) > 0 {
+			out = append(out, a)
+		}
+		for _, req := range a.Requires {
+			visit(req)
+		}
+	}
 	for _, a := range e.analyzers(selected) {
-		p.visit(a)
+		visit(a)
 	}
-	return p.out
-}
-
-type producers struct {
-	seen map[*analysis.Analyzer]bool
-	out  []*analysis.Analyzer
-}
-
-func (p *producers) visit(a *analysis.Analyzer) {
-	if p.seen[a] {
-		return
-	}
-	p.seen[a] = true
-	if len(a.FactTypes) > 0 {
-		p.out = append(p.out, a)
-	}
-	for _, req := range a.Requires {
-		p.visit(req)
-	}
+	return out
 }
 
 func (e *engine) reporting(selected []rules.Rule) []*analysis.Analyzer {
