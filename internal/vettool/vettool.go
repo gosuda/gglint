@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -78,17 +77,42 @@ func build(path, unitConfig string) ([]*analysis.Analyzer, error) {
 	if err != nil {
 		return nil, err
 	}
-	built := e.analyzers(selected)
 	if factsOnly {
-		return slices.DeleteFunc(built, func(a *analysis.Analyzer) bool { return !usesFacts(a) }), nil
+		return e.factsOnly(selected), nil
 	}
-	built = reportPanics(built)
+	return e.reporting(selected), nil
+}
+
+func (e *engine) factsOnly(selected []rules.Rule) []*analysis.Analyzer {
+	p := producers{seen: map[*analysis.Analyzer]bool{}}
+	for _, a := range e.analyzers(selected) {
+		p.visit(a)
+	}
+	return p.out
+}
+
+type producers struct {
+	seen map[*analysis.Analyzer]bool
+	out  []*analysis.Analyzer
+}
+
+func (p *producers) visit(a *analysis.Analyzer) {
+	if p.seen[a] {
+		return
+	}
+	p.seen[a] = true
+	if len(a.FactTypes) > 0 {
+		p.out = append(p.out, a)
+	}
+	for _, req := range a.Requires {
+		p.visit(req)
+	}
+}
+
+func (e *engine) reporting(selected []rules.Rule) []*analysis.Analyzer {
+	built := reportPanics(e.analyzers(selected))
 	if e.selected[rules.NolintName] {
 		built = append(built, e.nolintAnalyzer(built))
 	}
-	return built, nil
-}
-
-func usesFacts(a *analysis.Analyzer) bool {
-	return len(a.FactTypes) > 0 || slices.ContainsFunc(a.Requires, usesFacts)
+	return built
 }
