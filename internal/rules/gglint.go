@@ -1,8 +1,6 @@
 package rules
 
 import (
-	"slices"
-
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/gosuda/gglint/internal/analyzers/backingpin"
@@ -26,145 +24,31 @@ import (
 )
 
 func gglintRules() []Rule {
-	return slices.Concat(basicGglintRules(), standardGglintRules(), strictGglintRules())
-}
-
-func basicGglintRules() []Rule {
 	return []Rule{
-		{
-			Name:   "complexity",
-			Mode:   config.Basic,
-			Origin: originLogos,
-			Doc:    "Caps cognitive score, nesting, lines, parameters, and file size; large units exceed what agents edit reliably.",
-			Build: func(cfg config.Config) []*analysis.Analyzer {
-				return []*analysis.Analyzer{complexity.New(cfg.Complexity)}
-			},
-		},
-		{
-			Name:   "typednil",
-			Mode:   config.Basic,
-			Origin: originLogos,
-			Doc:    "Reports a typed nil pointer returned as an interface, which is never nil.",
-			Build:  single(typednil.Analyzer),
-		},
-		{
-			Name:   "stackaddr",
-			Mode:   config.Basic,
-			Origin: originLogos,
-			Doc:    "Reports a stack address kept as uintptr, or an unsafe.Pointer to stack storage that leaves its function.",
-			Build:  single(stackaddr.Analyzer),
-		},
-		{
-			Name:   "infinite_recursion",
-			Mode:   config.Basic,
-			Origin: originLogos,
-			Doc:    "Reports functions that call themselves with their own arguments on every path before any return.",
-			Build:  single(infiniterecursion.Analyzer),
-		},
-		{
-			Name:   "structtag_malformed",
-			Mode:   config.Basic,
-			Origin: originLogos,
-			Doc:    "Reports struct tags reflect.StructTag.Get cannot parse and json or xml tags on unexported fields.",
-			Build:  single(structtagmalformed.Analyzer),
-		},
-		{
-			Name:   "reentrant_withlock_deadlock",
-			Mode:   config.Basic,
-			Origin: originLogos,
-			Doc:    "Reports locking a sync mutex the goroutine already holds, directly or through same-package calls.",
-			Build:  single(reentrantlock.Analyzer),
-		},
-	}
-}
-
-func standardGglintRules() []Rule {
-	return []Rule{
-		{
-			Name:   "discarded_error",
-			Mode:   config.Standard,
-			Origin: originLogos,
-			Doc:    "Reports call statements and blank assignments that drop an error result.",
-			Build:  single(discardederror.Analyzer),
-		},
-		{
-			Name:   "err_chain_reset",
-			Mode:   config.Standard,
-			Origin: originLogos,
-			Doc:    "Reports fmt.Errorf calls that format an error with a verb other than %w or pass err.Error().",
-			Build:  single(errchainreset.Analyzer),
-		},
-		{
-			Name:   "capturerace",
-			Mode:   config.Standard,
-			Origin: originLogos,
-			Doc:    "Reports multi-word variables written across a goroutine boundary without synchronization.",
-			Build:  single(capturerace.Analyzer),
-		},
-		{
-			Name:   "goroutine",
-			Mode:   config.Standard,
-			Origin: originLogos,
-			Doc:    "Requires joined goroutines with exit paths; strict requires errgroup or WaitGroup.Go and bounded fan-out.",
-			Build: func(cfg config.Config) []*analysis.Analyzer {
-				return []*analysis.Analyzer{goroutine.New(cfg.Mode)}
-			},
-		},
-		{
-			Name:   "timeafter",
-			Mode:   config.Standard,
-			Origin: originLogos,
-			Doc:    "Reports time.After inside a loop, which allocates a timer per iteration.",
-			Build:  single(timeafter.Analyzer),
-		},
-		{
-			Name:   "placeholder",
-			Mode:   config.Standard,
-			Origin: originLogos,
-			Doc:    "Reports placeholder panics; strict also reports comments that start with TODO or FIXME.",
-			Build: func(cfg config.Config) []*analysis.Analyzer {
-				return []*analysis.Analyzer{placeholder.New(cfg.Mode)}
-			},
-		},
-		{
-			Name:   "noinit",
-			Mode:   config.Standard,
-			Origin: originGglint,
-			Doc:    "Reports init functions; move setup into an explicit function called from main.",
-			Build:  single(noinit.Analyzer),
-		},
-	}
-}
-
-func strictGglintRules() []Rule {
-	return []Rule{
-		{
-			Name:   "chanblock",
-			Mode:   config.Strict,
-			Origin: originLogos,
-			Doc:    "Reports channel sends and receives that can block forever without a ctx.Done() case or buffer proof.",
-			Build:  single(chanblock.Analyzer),
-		},
-		{
-			Name:   "closer",
-			Mode:   config.Strict,
-			Origin: originLogos,
-			Doc:    "Reports local io closers that are neither closed with defer nor handed on.",
-			Build:  single(closer.Analyzer),
-		},
-		{
-			Name:   "backingpin",
-			Mode:   config.Strict,
-			Origin: originLogos,
-			Doc:    "Reports subslices and substrings that keep a backing store over 64 KiB alive past the function.",
-			Build:  single(backingpin.Analyzer),
-		},
-		{
-			Name:   "unsizedint",
-			Mode:   config.Strict,
-			Origin: originLogos,
-			Doc:    "Reports int and uint fields in JSON structs; their size depends on the platform.",
-			Build:  single(unsizedint.Analyzer),
-		},
+		{TypecheckName, config.Basic, originGglint, "Reports package load and type errors; it cannot be disabled or suppressed.", nil},
+		{NolintName, config.Basic, originGglint, "Checks //nolint directives for unknown rules, missing names or reasons, and unused suppressions.", nil},
+		{"complexity", config.Basic, originLogos, "Caps cognitive score, nesting, lines, parameters, and file size; large units exceed what agents edit reliably.", func(cfg config.Config) []*analysis.Analyzer {
+			return []*analysis.Analyzer{complexity.New(cfg.Complexity)}
+		}},
+		{"typednil", config.Basic, originLogos, "Reports a typed nil pointer returned as an interface, which is never nil.", single(typednil.Analyzer)},
+		{"stackaddr", config.Basic, originLogos, "Reports a stack address kept as uintptr, or an unsafe.Pointer to stack storage that leaves its function.", single(stackaddr.Analyzer)},
+		{"infinite_recursion", config.Basic, originLogos, "Reports functions that call themselves with their own arguments on every path before any return.", single(infiniterecursion.Analyzer)},
+		{"structtag_malformed", config.Basic, originLogos, "Reports struct tags reflect.StructTag.Get cannot parse and json or xml tags on unexported fields.", single(structtagmalformed.Analyzer)},
+		{"reentrant_withlock_deadlock", config.Basic, originLogos, "Reports locking a sync mutex the goroutine already holds, directly or through same-package calls.", single(reentrantlock.Analyzer)},
+		{"discarded_error", config.Standard, originLogos, "Reports call statements and blank assignments that drop an error result.", single(discardederror.Analyzer)},
+		{"err_chain_reset", config.Standard, originLogos, "Reports fmt.Errorf calls that format an error with a verb other than %w or pass err.Error().", single(errchainreset.Analyzer)},
+		{"capturerace", config.Standard, originLogos, "Reports multi-word variables written across a goroutine boundary without synchronization.", single(capturerace.Analyzer)},
+		{"goroutine", config.Standard, originLogos, "Requires joined goroutines with exit paths; strict requires errgroup or WaitGroup.Go and bounded fan-out.", func(cfg config.Config) []*analysis.Analyzer {
+			return []*analysis.Analyzer{goroutine.New(cfg.Mode)}
+		}},
+		{"timeafter", config.Standard, originLogos, "Reports time.After inside a loop, which allocates a timer per iteration.", single(timeafter.Analyzer)},
+		{"placeholder", config.Standard, originLogos, "Reports placeholder panics; strict also reports comments that start with TODO or FIXME.", func(cfg config.Config) []*analysis.Analyzer {
+			return []*analysis.Analyzer{placeholder.New(cfg.Mode)}
+		}},
+		{"noinit", config.Standard, originGglint, "Reports init functions; move setup into an explicit function called from main.", single(noinit.Analyzer)},
+		{"chanblock", config.Strict, originLogos, "Reports channel sends and receives that can block forever without a ctx.Done() case or buffer proof.", single(chanblock.Analyzer)},
+		{"closer", config.Strict, originLogos, "Reports local io closers that are neither closed with defer nor handed on.", single(closer.Analyzer)},
+		{"backingpin", config.Strict, originLogos, "Reports subslices and substrings that keep a backing store over 64 KiB alive past the function.", single(backingpin.Analyzer)},
+		{"unsizedint", config.Strict, originLogos, "Reports int and uint fields in JSON structs; their size depends on the platform.", single(unsizedint.Analyzer)},
 	}
 }

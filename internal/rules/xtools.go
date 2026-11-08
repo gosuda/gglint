@@ -72,7 +72,7 @@ func xtoolsRules() []Rule {
 		nilness.Analyzer, reflectvaluecompare.Analyzer, scannererr.Analyzer, sortslice.Analyzer,
 		sqlrowserr.Analyzer, unusedwrite.Analyzer,
 	}
-	out := []Rule{modernizeRule()}
+	out := []Rule{{"modernize", config.Standard, originGoAnalysis, "Suggests modern Go replacements for outdated idioms and library calls.", buildModernize}}
 	for _, a := range basic {
 		out = append(out, passRule(config.Basic, a))
 	}
@@ -83,30 +83,12 @@ func xtoolsRules() []Rule {
 }
 
 func passRule(mode config.Mode, a *analysis.Analyzer) Rule {
-	return Rule{
-		Name:   a.Name,
-		Mode:   mode,
-		Origin: originGoAnalysis,
-		Doc:    firstLine(a.Doc),
-		Build:  single(a),
-	}
+	doc, _, _ := strings.Cut(strings.TrimSpace(a.Doc), "\n")
+	return Rule{a.Name, mode, originGoAnalysis, strings.Join(strings.Fields(doc), " "), single(a)}
 }
 
-func modernizeRule() Rule {
-	return Rule{
-		Name:   "modernize",
-		Mode:   config.Standard,
-		Origin: originGoAnalysis,
-		Doc:    "Suggests modern Go replacements for outdated idioms and library calls.",
-		Build: func(config.Config) []*analysis.Analyzer {
-			return slices.DeleteFunc(slices.Clone(modernize.Suite), func(a *analysis.Analyzer) bool {
-				return a == modernize.AtomicTypesAnalyzer
-			})
-		},
-	}
-}
-
-func firstLine(doc string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(doc), "\n")
-	return strings.Join(strings.Fields(line), " ")
+func buildModernize(config.Config) []*analysis.Analyzer {
+	return slices.DeleteFunc(slices.Clone(modernize.Suite), func(a *analysis.Analyzer) bool {
+		return a == modernize.AtomicTypesAnalyzer
+	})
 }
