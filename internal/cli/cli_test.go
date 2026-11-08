@@ -39,9 +39,18 @@ func runTests(m *testing.M) int {
 	return m.Run()
 }
 
+var hermeticGo = []string{
+	"GO111MODULE=on",
+	"GOTOOLCHAIN=local",
+	"GOPROXY=off",
+	"GOSUMDB=off",
+	"CGO_ENABLED=0",
+}
+
 func setup(ctx context.Context, dir string) error {
 	binary = filepath.Join(dir, "gglint")
 	build := exec.CommandContext(ctx, "go", "build", "-o", binary, "github.com/gosuda/gglint/cmd/gglint")
+	build.Env = append(os.Environ(), hermeticGo...)
 	if out, err := build.CombinedOutput(); err != nil {
 		return fmt.Errorf("go build: %w\n%s", err, out)
 	}
@@ -61,7 +70,8 @@ type result struct {
 
 func childEnv(t *testing.T, dir string) []string {
 	t.Helper()
-	return append(os.Environ(),
+	env := append(os.Environ(), hermeticGo...)
+	return append(env,
 		"PWD="+dir,
 		"XDG_CACHE_HOME="+t.TempDir(),
 		"GOCACHE="+goCache,
@@ -254,7 +264,7 @@ func TestConfigErrors(t *testing.T) {
 		args   []string
 		stderr string
 	}{
-		{name: "unknown key", toml: "bogus = 1\n", stderr: `^gglint: CONFIG: \d+:\d+: unknown key bogus\n$`},
+		{name: "unknown key", toml: "bogus = 1\n", stderr: `^gglint: CONFIG: 1:1: unknown key bogus\n$`},
 		{name: "unknown mode", toml: "mode = \"loose\"\n", stderr: `^gglint: CONFIG: unknown mode "loose" \(want basic, standard, or strict\)\n$`},
 		{name: "unknown enable", toml: "enable = [\"nosuch\"]\n", stderr: `^gglint: CONFIG: enable: unknown rule "nosuch"\n$`},
 		{name: "unknown disable", toml: "disable = [\"nosuch\"]\n", stderr: `^gglint: CONFIG: disable: unknown rule "nosuch"\n$`},
