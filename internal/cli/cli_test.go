@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,7 +32,11 @@ func runTests(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	defer os.RemoveAll(dir)
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}()
 	if err := setup(context.Background(), dir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -207,7 +212,7 @@ func summary(toml string, findings int) string {
 		b.WriteString("gglint: config gglint.toml\n")
 	}
 	if findings > 0 {
-		fmt.Fprintf(&b, "gglint: %d findings (mode standard)\n", findings)
+		b.WriteString("gglint: " + strconv.Itoa(findings) + " findings (mode standard)\n")
 	}
 	return b.String()
 }

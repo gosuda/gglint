@@ -7,6 +7,7 @@ import (
 	"io"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/gosuda/gglint/internal/vettool"
@@ -24,7 +25,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return vettool.Main(args)
 	}
 	if len(args) == 0 {
-		return usage(stderr, errors.New("usage: gglint run|rules|version [flags]"))
+		return fail(stderr, exitUsage, errors.New("usage: gglint run|rules|version [flags]"))
 	}
 	switch args[0] {
 	case "run":
@@ -34,30 +35,27 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "version":
 		return versionCommand(stdout)
 	default:
-		return usage(stderr, fmt.Errorf("unknown command %q (want run, rules, or version)", args[0]))
+		return fail(stderr, exitUsage, fmt.Errorf("unknown command %q (want run, rules, or version)", args[0]))
 	}
 }
 
 func isVettoolInvocation(args []string) bool {
-	if len(args) == 0 {
-		return false
+	if slices.Contains(args, "-V=full") || slices.Contains(args, "-flags") {
+		return true
 	}
-	for _, arg := range args {
-		if arg == "-V=full" || arg == "-flags" {
-			return true
-		}
-	}
-	return strings.HasSuffix(args[len(args)-1], ".cfg")
+	return len(args) > 0 && strings.HasSuffix(args[len(args)-1], ".cfg")
 }
 
-func usage(stderr io.Writer, err error) int {
-	fmt.Fprintf(stderr, "gglint: %v\n", err)
-	return exitUsage
+func say(stderr io.Writer, format string, args ...any) error {
+	_, err := fmt.Fprintf(stderr, "gglint: "+format+"\n", args...)
+	return err
 }
 
-func failure(stderr io.Writer, err error) int {
-	fmt.Fprintf(stderr, "gglint: %v\n", err)
-	return exitFailure
+func fail(stderr io.Writer, code int, err error) int {
+	if say(stderr, "%v", err) != nil {
+		return exitFailure
+	}
+	return code
 }
 
 func versionCommand(stdout io.Writer) int {
@@ -65,6 +63,8 @@ func versionCommand(stdout io.Writer) int {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
 		version = info.Main.Version
 	}
-	fmt.Fprintf(stdout, "gglint %s %s\n", version, runtime.Version())
+	if _, err := fmt.Fprintf(stdout, "gglint %s %s\n", version, runtime.Version()); err != nil {
+		return exitFailure
+	}
 	return exitClean
 }

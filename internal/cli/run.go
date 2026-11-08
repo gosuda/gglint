@@ -76,31 +76,35 @@ func newSession(args []string, wd string, stderr io.Writer) (session, error) {
 func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	wd, err := os.Getwd()
 	if err != nil {
-		return failure(stderr, fmt.Errorf("internal: %w", err))
+		return fail(stderr, exitFailure, fmt.Errorf("internal: %w", err))
 	}
 	s, err := newSession(args, wd, stderr)
 	if err != nil {
-		return usage(stderr, err)
+		return fail(stderr, exitUsage, err)
 	}
-	if s.printed != "" {
-		fmt.Fprintf(stderr, "gglint: config %s\n", s.printed)
+	if s.printed != "" && say(stderr, "config %s", s.printed) != nil {
+		return exitFailure
 	}
 	findings, err := s.lint(ctx)
-	if err != nil {
-		return reportFailure(ctx, stderr, err)
+	switch {
+	case err == nil:
+		return s.finish(stdout, stderr, findings)
+	case ctx.Err() != nil || errors.Is(err, context.Canceled):
+		return fail(stderr, exitFailure, errors.New("interrupted"))
+	default:
+		return fail(stderr, exitFailure, err)
 	}
-	return s.finish(stdout, stderr, findings)
 }
 
 func (s *session) finish(stdout, stderr io.Writer, findings []finding.Finding) int {
-	if err := report.Write(stdout, s.opts.format, s.cfg.Mode, s.printed, findings); err != nil {
-		return failure(stderr, fmt.Errorf("internal: %w", err))
+	if report.Write(stdout, s.opts.format, s.cfg.Mode, s.printed, findings) != nil {
+		return exitFailure
 	}
 	if len(findings) == 0 {
 		return exitClean
 	}
-	if s.opts.format == report.FormatText {
-		fmt.Fprintf(stderr, "gglint: %d findings (mode %s)\n", len(findings), s.cfg.Mode)
+	if s.opts.format == report.FormatText && say(stderr, "%d findings (mode %s)", len(findings), s.cfg.Mode) != nil {
+		return exitFailure
 	}
 	return exitFindings
 }
@@ -108,38 +112,31 @@ func (s *session) finish(stdout, stderr io.Writer, findings []finding.Finding) i
 func (s *session) lint(ctx context.Context) ([]finding.Finding, error) {
 	inv, err := s.invocation()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("internal: %w", err)
 	}
 	if s.opts.fix {
-		return s.fixThenVet(ctx, inv)
+		if fixErr := driver.Fix(ctx, inv); fixErr != nil {
+			return nil, fixErr
+		}
 	}
-	return s.vet(ctx, inv)
-}
-
-func (s *session) fixThenVet(ctx context.Context, inv driver.Invocation) ([]finding.Finding, error) {
-	if err := driver.Fix(ctx, inv); err != nil {
-		return nil, err
-	}
-	return s.vet(ctx, inv)
-}
-
-func (s *session) vet(ctx context.Context, inv driver.Invocation) ([]finding.Finding, error) {
 	raw, err := driver.Vet(ctx, inv)
 	if err != nil {
 		return nil, err
 	}
-	options := finding.Options{WorkDir: s.wd, Tests: s.cfg.Tests, NewFromRev: s.opts.newFromRev}
-	return finding.Process(ctx, relabel(raw, s.selected), options)
+	for i := range raw {
+		raw[i].Rule, raw[i].Check = rules.Token(raw[i].Rule, s.selected)
+	}
+	return finding.Process(ctx, raw, finding.Options{WorkDir: s.wd, Tests: s.cfg.Tests, NewFromRev: s.opts.newFromRev})
 }
 
 func (s *session) invocation() (driver.Invocation, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return driver.Invocation{}, fmt.Errorf("internal: %w", err)
+		return driver.Invocation{}, err
 	}
 	configFile, err := writeResolvedConfig(s.cfg)
 	if err != nil {
-		return driver.Invocation{}, fmt.Errorf("internal: %w", err)
+		return driver.Invocation{}, err
 	}
 	return driver.Invocation{
 		Exe:        exe,
@@ -148,23 +145,6 @@ func (s *session) invocation() (driver.Invocation, error) {
 		BuildTags:  s.cfg.BuildTags,
 		Patterns:   s.opts.patterns,
 	}, nil
-}
-
-func relabel(fs []finding.Finding, selected []rules.Rule) []finding.Finding {
-	for i := range fs {
-		if fs[i].Rule != finding.TypecheckRule {
-			fs[i].Rule, fs[i].Check = rules.Token(fs[i].Rule, selected)
-		}
-	}
-	return fs
-}
-
-func reportFailure(ctx context.Context, stderr io.Writer, err error) int {
-	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
-		fmt.Fprintln(stderr, "gglint: interrupted")
-		return exitFailure
-	}
-	return failure(stderr, err)
 }
 
 func loadConfig(path, mode, wd string) (config.Config, error) {
@@ -212,13 +192,13 @@ func replaceFile(dir, path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
+	_, err = tmp.Write(data)
+	err = errors.Join(err, tmp.Close())
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
 	}
-	if err := tmp.Close(); err != nil {
-		return err
+	if err != nil {
+		return errors.Join(fmt.Errorf("write %s: %w", path, err), os.Remove(tmp.Name()))
 	}
-	return os.Rename(tmp.Name(), path)
+	return nil
 }

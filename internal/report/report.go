@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strings"
 
 	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/finding"
@@ -28,26 +27,22 @@ func Write(w io.Writer, format string, mode config.Mode, configPath string, fs [
 }
 
 func writeText(w io.Writer, fs []finding.Finding) error {
-	var b strings.Builder
+	var b []byte
 	for _, f := range fs {
-		fmt.Fprintf(&b, "%s:%d:%d: %s [%s]\n", f.Pos.Path, f.Pos.Line, max(f.Pos.Column, 1), f.Message, f.Token())
+		b = fmt.Appendf(b, "%s:%d:%d: %s [%s]\n", f.Pos.Path, f.Pos.Line, max(f.Pos.Column, 1), f.Message, f.Token())
 		for _, r := range f.Related {
-			fmt.Fprintf(&b, "\trelated: %s:%d:%d: %s\n", r.Path, r.Line, max(r.Column, 1), r.Message)
+			b = fmt.Appendf(b, "\trelated: %s:%d:%d: %s\n", r.Path, r.Line, max(r.Column, 1), r.Message)
 		}
-		writeFixes(&b, f)
+		messages := fixMessages(f)
+		for _, message := range messages {
+			b = fmt.Appendf(b, "\tfix: %s\n", message)
+		}
+		if len(messages) == 0 && f.Fixable {
+			b = append(b, "\tfix: available\n"...)
+		}
 	}
-	_, err := io.WriteString(w, b.String())
+	_, err := w.Write(b)
 	return err
-}
-
-func writeFixes(b *strings.Builder, f finding.Finding) {
-	messages := fixMessages(f)
-	for _, message := range messages {
-		fmt.Fprintf(b, "\tfix: %s\n", message)
-	}
-	if len(messages) == 0 && f.Fixable {
-		b.WriteString("\tfix: available\n")
-	}
 }
 
 func fixMessages(f finding.Finding) []string {
