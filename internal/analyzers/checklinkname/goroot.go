@@ -11,8 +11,15 @@ import (
 )
 
 func linknameFiles(pass *analysis.Pass) []*ast.File {
-	root := filepath.Join(build.Default.GOROOT, "src") + string(filepath.Separator)
+	root := realPath(filepath.Join(build.Default.GOROOT, "src")) + string(filepath.Separator)
 	return slices.DeleteFunc(slices.Clone(pass.Files), func(f *ast.File) bool {
-		return strings.HasPrefix(pass.Fset.Position(f.Package).Filename, root)
+		return strings.HasPrefix(realPath(pass.Fset.File(f.Package).Name()), root)
 	})
+}
+
+func realPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }
