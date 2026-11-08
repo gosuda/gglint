@@ -1,6 +1,10 @@
 package checkescape
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +21,48 @@ import (
 func TestEscapeModule(t *testing.T) {
 	requireObjdump(t)
 	analyzertest.RunIgnoringFacts(t, expandEscapeModule(t), New(ListExport(nil)), "./...")
+}
+
+func TestListExportRunsInPhysicalDirectory(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skipf("go is unavailable: %v", err)
+	}
+	t.Setenv("GOWORK", "off")
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module lined\n\ngo 1.27\n")
+	src := filepath.Join(dir, "lined.go")
+	writeFile(t, src, "//line "+filepath.Join(dir, "missing", "elsewhere.go")+":1\npackage lined\n")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, src, nil, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass := &analysis.Pass{Fset: fset, Files: []*ast.File{f}, Pkg: types.NewPackage("lined", "lined")}
+	archive, err := ListExport(nil)(pass)
+	if err != nil {
+		t.Fatalf("ListExport followed the //line directive: %v", err)
+	}
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("archive %q: %v", archive, err)
+	}
+}
+
+func TestListExportRejectsPackageOutsideFileSet(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "orphan.go", "package orphan\n", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pass := &analysis.Pass{Fset: token.NewFileSet(), Files: []*ast.File{f}}
+	if _, err := ListExport(nil)(pass); err == nil {
+		t.Fatal("ListExport returned no error for a package clause outside the file set")
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestBinaryArchiveUsesBuildTags(t *testing.T) {

@@ -35,7 +35,7 @@ func New(m config.Mode) *analysis.Analyzer {
 
 func run(pass *analysis.Pass, m config.Mode) {
 	for _, f := range pass.Files {
-		if strings.HasSuffix(pass.Fset.Position(f.Package).Filename, "_test.go") {
+		if strings.HasSuffix(pass.Fset.File(f.Package).Name(), "_test.go") {
 			continue
 		}
 		reportPanics(pass, f)
