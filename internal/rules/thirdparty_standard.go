@@ -76,11 +76,11 @@ func thirdPartyStandardRules() []Rule {
 }
 
 func standardRule(name, doc string, build func(config.Config) []*analysis.Analyzer) Rule {
-	return Rule{Name: name, Mode: config.Standard, Origin: "third-party", Doc: doc, Build: build}
+	return Rule{Name: name, Mode: config.Standard, Origin: originThirdParty, Doc: doc, Build: build}
 }
 
 func buildErrorlint(config.Config) []*analysis.Analyzer {
-	return []*analysis.Analyzer{setFlags("errorlint", errorlint.NewAnalyzer(), map[string]string{"errorf": "true"})}
+	return []*analysis.Analyzer{setFlags("errorlint", errorlint.NewAnalyzer(), map[string]string{"errorf": flagTrue})}
 }
 
 func buildGocritic(cfg config.Config) []*analysis.Analyzer {

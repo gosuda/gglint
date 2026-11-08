@@ -9,6 +9,8 @@ import (
 	"github.com/gosuda/gglint/internal/config"
 )
 
+const flagTrue = "true"
+
 func thirdPartyRules() []Rule {
 	return slices.Concat(thirdPartyBasicRules(), thirdPartyStandardRules(), thirdPartyStrictRules())
 }

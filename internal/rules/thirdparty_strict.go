@@ -47,7 +47,7 @@ func thirdPartyStrictRules() []Rule {
 }
 
 func strictRule(name, doc string, build func(config.Config) []*analysis.Analyzer) Rule {
-	return Rule{Name: name, Mode: config.Strict, Origin: "third-party", Doc: doc, Build: build}
+	return Rule{Name: name, Mode: config.Strict, Origin: originThirdParty, Doc: doc, Build: build}
 }
 
 func newWrapcheck() *analysis.Analyzer {

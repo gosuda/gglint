@@ -19,14 +19,14 @@ func staticcheckRules() []Rule {
 		{
 			Name:   "staticcheck",
 			Mode:   config.Basic,
-			Origin: "staticcheck",
+			Origin: originStaticcheck,
 			Doc:    "Staticcheck: SA bug checks; standard adds S and ST checks, strict adds QF quick fixes.",
 			Build:  buildStaticcheck,
 		},
 		{
 			Name:   "unused",
 			Mode:   config.Basic,
-			Origin: "staticcheck",
+			Origin: originStaticcheck,
 			Doc:    "Reports unused constants, variables, functions, types, and fields (staticcheck U1000).",
 			Build:  single(unused.Analyzer.Analyzer),
 		},
@@ -56,7 +56,7 @@ func staticcheckPolicy(m config.Mode) (prefixes, excluded []string) {
 		return []string{"SA"}, nil
 	case config.Standard:
 		return []string{"SA", "S", "ST"}, strings.Fields("ST1000 ST1003 ST1016 ST1020 ST1021 ST1022")
-	default:
-		return []string{"SA", "S", "ST", "QF"}, strings.Fields("ST1000 ST1016 ST1020 ST1021 ST1022")
+	case config.Strict:
 	}
+	return []string{"SA", "S", "ST", "QF"}, strings.Fields("ST1000 ST1016 ST1020 ST1021 ST1022")
 }

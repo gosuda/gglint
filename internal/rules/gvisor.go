@@ -1,6 +1,8 @@
 package rules
 
 import (
+	"strconv"
+
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/gosuda/gglint/internal/analyzers/checkaligned"
@@ -17,15 +19,15 @@ func gvisorRules() []Rule {
 		{
 			Name:   "checklocks",
 			Mode:   config.Basic,
-			Origin: "gvisor",
+			Origin: originGVisor,
 			Doc:    "Checks +checklocks and +checkatomic annotations and reports double acquisition of a held lock.",
 			Build:  buildChecklocks,
 		},
 		{
 			Name:   "checkescape",
 			Mode:   config.Basic,
-			Origin: "gvisor",
-			Doc:    "Checks +checkescape and +mustescape annotations; unannotated callees count as unknown.",
+			Origin: originGVisor,
+			Doc:    "Checks +checkescape and +mustescape annotations; unannotated callees read as unknown, failing only :all and :unknown.",
 			Build: func(cfg config.Config) []*analysis.Analyzer {
 				return []*analysis.Analyzer{checkescape.New(checkescape.ListExport(cfg.BuildTags))}
 			},
@@ -33,28 +35,28 @@ func gvisorRules() []Rule {
 		{
 			Name:   "checkconst",
 			Mode:   config.Basic,
-			Origin: "gvisor",
+			Origin: originGVisor,
 			Doc:    "Checks +checkconst, +checkalign, +checkoffset, and +checksize against assembly constants.",
 			Build:  single(checkconst.Analyzer),
 		},
 		{
 			Name:   "checklinkname",
 			Mode:   config.Basic,
-			Origin: "gvisor",
+			Origin: originGVisor,
 			Doc:    "Validates //go:linkname directives against the signatures of their targets.",
 			Build:  single(checklinkname.Analyzer),
 		},
 		{
 			Name:   "checkaligned",
 			Mode:   config.Standard,
-			Origin: "gvisor",
+			Origin: originGVisor,
 			Doc:    "Bans sync/atomic 32-bit and 64-bit function calls; use the typed atomics.",
 			Build:  single(checkaligned.Analyzer),
 		},
 		{
 			Name:   "checkimports",
 			Mode:   config.Strict,
-			Origin: "gvisor",
+			Origin: originGVisor,
 			Doc:    "Restricts unsafe to *_unsafe.go files and enforces the configured import deny list.",
 			Build: func(cfg config.Config) []*analysis.Analyzer {
 				return []*analysis.Analyzer{checkimports.New(cfg.Deny)}
@@ -65,12 +67,9 @@ func gvisorRules() []Rule {
 
 func buildChecklocks(cfg config.Config) []*analysis.Analyzer {
 	flags := map[string]string{
-		"atomic":   "true",
-		"wrappers": "true",
-		"inferred": "false",
-	}
-	if cfg.Mode >= config.Strict {
-		flags["inferred"] = "true"
+		"atomic":   flagTrue,
+		"wrappers": flagTrue,
+		"inferred": strconv.FormatBool(cfg.Mode >= config.Strict),
 	}
 	for name, value := range flags {
 		if err := checklocks.Analyzer.Flags.Set(name, value); err != nil {

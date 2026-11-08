@@ -86,7 +86,7 @@ func passRule(mode config.Mode, a *analysis.Analyzer) Rule {
 	return Rule{
 		Name:   a.Name,
 		Mode:   mode,
-		Origin: "go/analysis",
+		Origin: originGoAnalysis,
 		Doc:    firstLine(a.Doc),
 		Build:  single(a),
 	}
@@ -96,7 +96,7 @@ func modernizeRule() Rule {
 	return Rule{
 		Name:   "modernize",
 		Mode:   config.Standard,
-		Origin: "go/analysis",
+		Origin: originGoAnalysis,
 		Doc:    "Suggests modern Go replacements for outdated idioms and library calls.",
 		Build: func(config.Config) []*analysis.Analyzer {
 			return slices.DeleteFunc(slices.Clone(modernize.Suite), func(a *analysis.Analyzer) bool {

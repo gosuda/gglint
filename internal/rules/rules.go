@@ -16,6 +16,15 @@ const (
 	NolintName    = "nolint"
 )
 
+const (
+	originGoAnalysis  = "go/analysis"
+	originStaticcheck = "staticcheck"
+	originThirdParty  = "third-party"
+	originGVisor      = "gvisor"
+	originLogos       = "logos"
+	originGglint      = "gglint"
+)
+
 type Rule struct {
 	Name   string
 	Mode   config.Mode
@@ -44,13 +53,13 @@ func coreRules() []Rule {
 		{
 			Name:   TypecheckName,
 			Mode:   config.Basic,
-			Origin: "gglint",
+			Origin: originGglint,
 			Doc:    "Reports package load and type errors; it cannot be disabled or suppressed.",
 		},
 		{
 			Name:   NolintName,
 			Mode:   config.Basic,
-			Origin: "gglint",
+			Origin: originGglint,
 			Doc:    "Checks //nolint directives for unknown rules, missing names or reasons, and unused suppressions.",
 		},
 	}
