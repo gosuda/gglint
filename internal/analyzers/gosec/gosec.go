@@ -20,29 +20,31 @@ import (
 const doc = "gosec reports security problems found by the gosec rules and SSA analyzers.\n\n" +
 	"Each finding is printed as <rule ID>: <description>; excluded rule IDs are never run."
 
-type catalog struct {
-	ruleList     rules.RuleList
-	analyzerList *analyzers.AnalyzerList
-}
-
 func New(excluded []string) *analysis.Analyzer {
-	c := catalog{
-		ruleList:     rules.Generate(false, rules.NewRuleFilter(true, excluded...)),
-		analyzerList: analyzers.Generate(false, analyzers.NewAnalyzerFilter(true, excluded...)),
-	}
+	ruleList := rules.Generate(false, rules.NewRuleFilter(true, excluded...))
+	analyzerList := analyzers.Generate(false, analyzers.NewAnalyzerFilter(true, excluded...))
 	return &analysis.Analyzer{
 		Name:     "gosec",
 		Doc:      doc,
 		Requires: []*analysis.Analyzer{buildssa.Analyzer},
-		Run:      c.run,
+		Run: func(pass *analysis.Pass) (any, error) {
+			result, ok := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
+			if !ok {
+				panic("gosec: missing buildssa result")
+			}
+			scanner := securego.NewAnalyzer(securego.NewConfig(), true, true, false, 1, log.New(io.Discard, "", 0))
+			scanner.LoadRules(ruleList.RulesInfo())
+			scanner.LoadAnalyzers(analyzerList.AnalyzersInfo())
+			pkg := toPackage(pass)
+			scanner.CheckRules(pkg)
+			scanner.CheckAnalyzersWithSSA(pkg, result)
+			issues, _, _ := scanner.Report()
+			for _, iss := range issues {
+				report(pass, iss)
+			}
+			return nil, nil
+		},
 	}
-}
-
-func (c catalog) run(pass *analysis.Pass) (any, error) {
-	for _, iss := range c.scan(pass) {
-		report(pass, iss)
-	}
-	return nil, nil
 }
 
 func report(pass *analysis.Pass, iss *issue.Issue) {
@@ -54,26 +56,15 @@ func report(pass *analysis.Pass, iss *issue.Issue) {
 	pass.Reportf(position(pass, file, iss), "%s: %s", iss.RuleID, iss.What)
 }
 
-func (c catalog) scan(pass *analysis.Pass) []*issue.Issue {
-	scanner := securego.NewAnalyzer(securego.NewConfig(), true, true, false, 1, log.New(io.Discard, "", 0))
-	scanner.LoadRules(c.ruleList.RulesInfo())
-	scanner.LoadAnalyzers(c.analyzerList.AnalyzersInfo())
-	pkg := toPackage(pass)
-	scanner.CheckRules(pkg)
-	result, ok := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
-	if !ok {
-		panic("gosec: missing buildssa result")
-	}
-	scanner.CheckAnalyzersWithSSA(pkg, result)
-	issues, _, _ := scanner.Report()
-	return issues
-}
-
 func toPackage(pass *analysis.Pass) *packages.Package {
+	names := make([]string, len(pass.Files))
+	for i, file := range pass.Files {
+		names[i] = pass.Fset.File(file.FileStart).Name()
+	}
 	return &packages.Package{
 		Name:         pass.Pkg.Name(),
 		PkgPath:      pass.Pkg.Path(),
-		GoFiles:      fileNames(pass),
+		GoFiles:      names,
 		OtherFiles:   pass.OtherFiles,
 		IgnoredFiles: pass.IgnoredFiles,
 		Types:        pass.Pkg,
@@ -82,14 +73,6 @@ func toPackage(pass *analysis.Pass) *packages.Package {
 		TypesInfo:    pass.TypesInfo,
 		TypesSizes:   pass.TypesSizes,
 	}
-}
-
-func fileNames(pass *analysis.Pass) []string {
-	names := make([]string, len(pass.Files))
-	for i, file := range pass.Files {
-		names[i] = pass.Fset.File(file.FileStart).Name()
-	}
-	return names
 }
 
 func position(pass *analysis.Pass, file *ast.File, iss *issue.Issue) token.Pos {

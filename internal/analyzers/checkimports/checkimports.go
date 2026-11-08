@@ -31,33 +31,28 @@ func New(deny []config.Deny) *analysis.Analyzer {
 		Name: "checkimports",
 		Doc:  "enforces restrictions on package imports: unsafe only in *_unsafe.go and *_test.go files, plus the configured deny list",
 		Run: func(pass *analysis.Pass) (any, error) {
-			return run(pass, deny)
+			for _, f := range pass.Files {
+				checkFile(pass, f, deny)
+			}
+			return nil, nil
 		},
 	}
 }
 
-func run(pass *analysis.Pass, deny []config.Deny) (any, error) {
-	for _, f := range pass.Files {
-		for _, imp := range f.Imports {
-			pkg, err := strconv.Unquote(imp.Path.Value)
-			if err != nil {
-				continue
-			}
-			if pkg == "unsafe" {
-				checkUnsafe(pass, imp)
-			}
-			if denied(deny, pkg, pass.Pkg.Path()) {
-				pass.Reportf(imp.Pos(), "import of %q is denied in %s", pkg, pass.Pkg.Path())
-			}
+func checkFile(pass *analysis.Pass, f *ast.File, deny []config.Deny) {
+	filename := pass.Fset.File(f.FileStart).Name()
+	unsafeAllowed := strings.HasSuffix(filename, "_unsafe.go") || strings.HasSuffix(filename, "_test.go")
+	for _, imp := range f.Imports {
+		pkg, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
 		}
-	}
-	return nil, nil
-}
-
-func checkUnsafe(pass *analysis.Pass, imp *ast.ImportSpec) {
-	filename := pass.Fset.File(imp.Pos()).Name()
-	if !strings.HasSuffix(filename, "_unsafe.go") && !strings.HasSuffix(filename, "_test.go") {
-		pass.Reportf(imp.Pos(), "package unsafe imported by %s; must end with _unsafe.go", path.Base(filename))
+		if pkg == "unsafe" && !unsafeAllowed {
+			pass.Reportf(imp.Pos(), "package unsafe imported by %s; must end with _unsafe.go", path.Base(filename))
+		}
+		if denied(deny, pkg, pass.Pkg.Path()) {
+			pass.Reportf(imp.Pos(), "import of %q is denied in %s", pkg, pass.Pkg.Path())
+		}
 	}
 }
 

@@ -7,34 +7,29 @@ import (
 	"slices"
 )
 
-type namedGuard struct {
-	Name string
-	Info functionGuardInfo
-}
-
-type namedFieldGuard struct {
-	Name     string
-	Resolver fieldGuardResolver
+type entry[V any] struct {
+	Name  string
+	Value V
 }
 
 type lockFunctionFactsWire struct {
-	HeldOnEntry     []namedGuard
-	HeldOnExit      []namedGuard
-	ExcludedOnEntry []namedGuard
+	HeldOnEntry     []entry[functionGuardInfo]
+	HeldOnExit      []entry[functionGuardInfo]
+	ExcludedOnEntry []entry[functionGuardInfo]
 	Ignore          bool
 }
 
 type lockGuardFactsWire struct {
-	GuardedBy         []namedFieldGuard
+	GuardedBy         []entry[fieldGuardResolver]
 	ReadAny           bool
 	AtomicDisposition atomicDisposition
 }
 
 func (lff *lockFunctionFacts) GobEncode() ([]byte, error) {
 	return gobBytes(lockFunctionFactsWire{
-		HeldOnEntry:     sortedGuards(lff.HeldOnEntry),
-		HeldOnExit:      sortedGuards(lff.HeldOnExit),
-		ExcludedOnEntry: sortedGuards(lff.ExcludedOnEntry),
+		HeldOnEntry:     sortedEntries(lff.HeldOnEntry),
+		HeldOnExit:      sortedEntries(lff.HeldOnExit),
+		ExcludedOnEntry: sortedEntries(lff.ExcludedOnEntry),
 		Ignore:          lff.Ignore,
 	})
 }
@@ -45,20 +40,20 @@ func (lff *lockFunctionFacts) GobDecode(data []byte) error {
 		return err
 	}
 	*lff = lockFunctionFacts{
-		HeldOnEntry:     guardMap(wire.HeldOnEntry),
-		HeldOnExit:      guardMap(wire.HeldOnExit),
-		ExcludedOnEntry: guardMap(wire.ExcludedOnEntry),
+		HeldOnEntry:     entryMap(wire.HeldOnEntry),
+		HeldOnExit:      entryMap(wire.HeldOnExit),
+		ExcludedOnEntry: entryMap(wire.ExcludedOnEntry),
 		Ignore:          wire.Ignore,
 	}
 	return nil
 }
 
 func (lgf *lockGuardFacts) GobEncode() ([]byte, error) {
-	wire := lockGuardFactsWire{ReadAny: lgf.ReadAny, AtomicDisposition: lgf.AtomicDisposition}
-	for _, name := range slices.Sorted(maps.Keys(lgf.GuardedBy)) {
-		wire.GuardedBy = append(wire.GuardedBy, namedFieldGuard{Name: name, Resolver: lgf.GuardedBy[name]})
-	}
-	return gobBytes(wire)
+	return gobBytes(lockGuardFactsWire{
+		GuardedBy:         sortedEntries(lgf.GuardedBy),
+		ReadAny:           lgf.ReadAny,
+		AtomicDisposition: lgf.AtomicDisposition,
+	})
 }
 
 func (lgf *lockGuardFacts) GobDecode(data []byte) error {
@@ -66,33 +61,28 @@ func (lgf *lockGuardFacts) GobDecode(data []byte) error {
 	if err := gobInto(data, &wire); err != nil {
 		return err
 	}
-	*lgf = lockGuardFacts{ReadAny: wire.ReadAny, AtomicDisposition: wire.AtomicDisposition}
-	if len(wire.GuardedBy) > 0 {
-		lgf.GuardedBy = make(map[string]fieldGuardResolver, len(wire.GuardedBy))
-	}
-	for _, entry := range wire.GuardedBy {
-		lgf.GuardedBy[entry.Name] = entry.Resolver
+	*lgf = lockGuardFacts{
+		GuardedBy:         entryMap(wire.GuardedBy),
+		ReadAny:           wire.ReadAny,
+		AtomicDisposition: wire.AtomicDisposition,
 	}
 	return nil
 }
 
-func sortedGuards(guards map[string]functionGuardInfo) []namedGuard {
-	out := make([]namedGuard, 0, len(guards))
-	for _, name := range slices.Sorted(maps.Keys(guards)) {
-		out = append(out, namedGuard{Name: name, Info: guards[name]})
+func sortedEntries[V any](m map[string]V) []entry[V] {
+	out := make([]entry[V], 0, len(m))
+	for _, name := range slices.Sorted(maps.Keys(m)) {
+		out = append(out, entry[V]{Name: name, Value: m[name]})
 	}
 	return out
 }
 
-func guardMap(entries []namedGuard) map[string]functionGuardInfo {
-	if len(entries) == 0 {
-		return nil
+func entryMap[V any](entries []entry[V]) map[string]V {
+	m := make(map[string]V, len(entries))
+	for _, e := range entries {
+		m[e.Name] = e.Value
 	}
-	guards := make(map[string]functionGuardInfo, len(entries))
-	for _, entry := range entries {
-		guards[entry.Name] = entry.Info
-	}
-	return guards
+	return m
 }
 
 func gobBytes(v any) ([]byte, error) {

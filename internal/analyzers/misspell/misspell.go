@@ -31,21 +31,17 @@ func checkFile(pass *analysis.Pass, replacer *misspelllib.Replacer, tf *token.Fi
 	}
 	_, diffs := replacer.ReplaceGo(string(src))
 	for _, d := range diffs {
-		pass.Report(diagnostic(tf, d))
+		pos := tf.LineStart(d.Line) + token.Pos(d.Column)
+		end := pos + token.Pos(len(d.Original))
+		pass.Report(analysis.Diagnostic{
+			Pos:     pos,
+			End:     end,
+			Message: fmt.Sprintf("%q is a misspelling of %q", d.Original, d.Corrected),
+			SuggestedFixes: []analysis.SuggestedFix{{
+				Message:   fmt.Sprintf("replace %q with %q", d.Original, d.Corrected),
+				TextEdits: []analysis.TextEdit{{Pos: pos, End: end, NewText: []byte(d.Corrected)}},
+			}},
+		})
 	}
 	return nil
-}
-
-func diagnostic(tf *token.File, d misspelllib.Diff) analysis.Diagnostic {
-	pos := tf.LineStart(d.Line) + token.Pos(d.Column)
-	end := pos + token.Pos(len(d.Original))
-	return analysis.Diagnostic{
-		Pos:     pos,
-		End:     end,
-		Message: fmt.Sprintf("%q is a misspelling of %q", d.Original, d.Corrected),
-		SuggestedFixes: []analysis.SuggestedFix{{
-			Message:   fmt.Sprintf("replace %q with %q", d.Original, d.Corrected),
-			TextEdits: []analysis.TextEdit{{Pos: pos, End: end, NewText: []byte(d.Corrected)}},
-		}},
-	}
 }

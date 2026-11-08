@@ -30,27 +30,17 @@ var Analyzer = &analysis.Analyzer{
 	Run: run,
 }
 
-var typedAtomicsLongestFirst = []string{"Uint32", "Uint64", "Int32", "Int64"}
+var atomicTypes = []string{"Uint32", "Uint64", "Int32", "Int64"}
 
 func run(pass *analysis.Pass) (any, error) {
 	if hasIgnoreDirective(pass.Files) {
 		return nil, nil
 	}
-
-	for _, file := range pass.Files {
-		ast.Inspect(file, func(node ast.Node) bool {
-			ident, ok := node.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			fn, typed, ok := blockedFunc(pass.TypesInfo, ident)
-			if ok {
-				pass.Reportf(ident.Pos(), "don't call atomic.%s; use the atomic.%s type instead", fn, typed)
-			}
-			return true
-		})
+	for ident, obj := range pass.TypesInfo.Uses {
+		if fn, typed, ok := blockedFunc(obj); ok {
+			pass.Reportf(ident.Pos(), "don't call atomic.%s; use the atomic.%s type instead", fn, typed)
+		}
 	}
-
 	return nil, nil
 }
 
@@ -68,14 +58,14 @@ func hasIgnoreDirective(files []*ast.File) bool {
 	return false
 }
 
-func blockedFunc(info *types.Info, ident *ast.Ident) (name, typed string, ok bool) {
-	fn, isFunc := info.Uses[ident].(*types.Func)
+func blockedFunc(obj types.Object) (name, typed string, ok bool) {
+	fn, isFunc := obj.(*types.Func)
 	if !isFunc || fn.Pkg() == nil || fn.Pkg().Path() != "sync/atomic" || fn.Signature().Recv() != nil {
 		return "", "", false
 	}
-	i := slices.IndexFunc(typedAtomicsLongestFirst, func(t string) bool { return strings.HasSuffix(fn.Name(), t) })
+	i := slices.IndexFunc(atomicTypes, func(t string) bool { return strings.HasSuffix(fn.Name(), t) })
 	if i < 0 {
 		return "", "", false
 	}
-	return fn.Name(), typedAtomicsLongestFirst[i], true
+	return fn.Name(), atomicTypes[i], true
 }

@@ -14,20 +14,15 @@ var Analyzer = &analysis.Analyzer{
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	files := tokenFiles(pass)
+	files := make(map[string]*token.File, len(pass.Files))
+	for _, f := range pass.Files {
+		tf := pass.Fset.File(f.FileStart)
+		files[tf.Name()] = tf
+	}
 	for _, p := range unconvertlib.Run(pass) {
 		if tf, ok := files[p.Filename]; ok {
 			pass.Reportf(tf.LineStart(p.Line)+token.Pos(p.Column-1), "unnecessary conversion")
 		}
 	}
 	return nil, nil
-}
-
-func tokenFiles(pass *analysis.Pass) map[string]*token.File {
-	files := make(map[string]*token.File, len(pass.Files))
-	for _, f := range pass.Files {
-		tf := pass.Fset.File(f.FileStart)
-		files[tf.Name()] = tf
-	}
-	return files
 }

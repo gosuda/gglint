@@ -18,12 +18,7 @@ func Of(pass *analysis.Pass) *inspector.Inspector {
 }
 
 func Node[N ast.Node](c inspector.Cursor) N {
-	node, ok := c.Node().(N)
-	if !ok {
-		var want N
-		panic(fmt.Sprintf("cursor node is %T, want %T", c.Node(), want))
-	}
-	return node
+	return As[N](c.Node())
 }
 
 func As[N ast.Node](n ast.Node) N {
