@@ -1,0 +1,10 @@
+package spelling
+
+// Deliver waits until the peer can recieve data. // want `"rec.eve" is a misspelling of "receive"`
+func Deliver() {}
+
+// Receive waits until the peer can receive data.
+func Receive() {}
+
+// Misnamed shows that identifiers are never checked.
+func Recieved() {}

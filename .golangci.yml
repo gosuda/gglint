@@ -1,0 +1,170 @@
+version: "2"
+
+run:
+  timeout: 10m
+  go: "1.27"
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - cyclop
+    - dupword
+    - durationcheck
+    - errcheck
+    - errname
+    - errorlint
+    - exhaustive
+    - exptostd
+    - fatcontext
+    - forcetypeassert
+    - funlen
+    - gocheckcompilerdirectives
+    - gochecknoinits
+    - gocognit
+    - goconst
+    - gocritic
+    - gosec
+    - govet
+    - iface
+    - ineffassign
+    - intrange
+    - makezero
+    - mirror
+    - misspell
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx
+    - nolintlint
+    - perfsprint
+    - predeclared
+    - reassign
+    - recvcheck
+    - revive
+    - staticcheck
+    - testableexamples
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+  settings:
+    cyclop:
+      max-complexity: 9
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    exhaustive:
+      default-signifies-exhaustive: false
+    funlen:
+      lines: 60
+      statements: 40
+    gocognit:
+      min-complexity: 14
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - opinionated
+      settings:
+        hugeParam:
+          sizeThreshold: 256
+        rangeValCopy:
+          sizeThreshold: 256
+    gosec:
+      excludes:
+        - G104
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    nakedret:
+      max-func-lines: 0
+    nilnil:
+      checked-types:
+        - ptr
+        - func
+        - map
+        - chan
+    nestif:
+      min-complexity: 4
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+    unparam:
+      check-exported: false
+  exclusions:
+    generated: strict
+    presets:
+      - comments
+      - std-error-handling
+    paths:
+      - internal/analyzers/checklocks/(analysis|annotations|checklocks|facts|importfacts|state)\.go
+      - internal/analyzers/checkescape/checkescape(_test)?\.go
+      - internal/analyzers/checkconst/checkconst\.go
+      - internal/analyzers/checklinkname/check_linkname\.go
+    rules:
+      - path: _test\.go
+        linters:
+          - cyclop
+          - funlen
+          - goconst
+          - gocognit
+          - gosec
+      - path: internal/(driver/driver|analyzers/checkescape/archive)\.go
+        text: G204
+        linters:
+          - gosec
+      - path: internal/(config/load|vettool/engine|vettool/vettool)\.go
+        text: G304
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      module-path: github.com/gosuda/gglint
+    goimports:
+      local-prefixes:
+        - github.com/gosuda/gglint
+  exclusions:
+    paths:
+      - internal/analyzers/checklocks/(analysis|annotations|checklocks|facts|importfacts|state)\.go
+      - internal/analyzers/checkescape/checkescape(_test)?\.go
+      - internal/analyzers/checkconst/checkconst\.go
+      - internal/analyzers/checklinkname/check_linkname\.go

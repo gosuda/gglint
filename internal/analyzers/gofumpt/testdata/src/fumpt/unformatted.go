@@ -1,0 +1,6 @@
+package fumpt // want "file is not gofumpt-formatted"
+
+func Unformatted() int {
+
+	return 1
+}
