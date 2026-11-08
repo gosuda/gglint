@@ -139,7 +139,7 @@ func (c *checker) lockCallKey(call *ast.CallExpr) lockKey {
 	return c.mutexKey(call, "Lock")
 }
 
-func (c *checker) stmtKey(s ast.Stmt, method string) lockKey {
+func (c *checker) lockStmtKey(s ast.Stmt) lockKey {
 	es, ok := s.(*ast.ExprStmt)
 	if !ok {
 		return lockKey{}
@@ -148,7 +148,7 @@ func (c *checker) stmtKey(s ast.Stmt, method string) lockKey {
 	if !ok {
 		return lockKey{}
 	}
-	return c.mutexKey(call, method)
+	return c.lockCallKey(call)
 }
 
 func (c *checker) substitute(k lockKey, call *ast.CallExpr, fn *types.Func) lockKey {

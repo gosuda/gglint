@@ -19,22 +19,22 @@ var Analyzer = &analysis.Analyzer{
 	Doc: `report locking a sync mutex that the same goroutine already holds
 
 A Lock statement on a sync.Mutex or sync.RWMutex holds the mutex over the
-statements after it in the same statement list, up to the next Unlock
-statement on the same receiver, or to the end of the list when no such
-Unlock follows, as with a deferred Unlock. Inside that region, a Lock on the
-same receiver blocks forever, and so does a call to a same-package function
-whose synchronous execution locks it at any depth; mutually recursive
-helpers reach a fixed point. A same-package function that calls one of its
-function parameters while it holds a mutex runs the function literal, named
-function, or method value passed there under that mutex, with a method
-value's receiver bound to the call-site operand. A go statement evaluates
-its function operand and arguments synchronously and runs the call in a new
-goroutine; a function literal that is neither invoked directly nor passed to
-a parameter its callee invokes is skipped. Two receivers match when they name
-the same variable through the same chain of field selections, ignoring
-address-of and dereference; any other receiver never matches. A parameter
-that is not a pointer receives a copy, so a mutex reached through it never
-matches.`,
+statements after it in the same statement list, up to the first statement
+that unlocks the same receiver anywhere outside a defer, go statement, or
+function literal, or to the end of the list, as with a deferred Unlock.
+Inside that region, a Lock on the same receiver blocks forever, and so does
+a call to a same-package function whose synchronous execution locks it at
+any depth; mutually recursive helpers reach a fixed point. A same-package
+function that calls one of its function parameters while it holds a mutex
+runs the function literal, named function, or method value passed there
+under that mutex, with a method value's receiver bound to the call-site
+operand. A go statement evaluates its function operand and arguments
+synchronously and runs the call in a new goroutine; a function literal that
+is neither invoked directly nor passed to a parameter its callee invokes is
+skipped. Two receivers match when they name the same variable through the
+same chain of field selections, ignoring address-of and dereference; any
+other receiver never matches. A parameter that is not a pointer receives a
+copy, so a mutex reached through it never matches.`,
 	Run: run,
 }
 
@@ -43,7 +43,7 @@ type declared struct {
 	decl *ast.FuncDecl
 }
 
-type helper struct {
+type heldCall struct {
 	key   lockKey
 	param int
 }
@@ -53,7 +53,7 @@ type checker struct {
 	order     []declared
 	decls     map[*types.Func]*ast.FuncDecl
 	invokes   map[*types.Func]map[int]bool
-	helpers   map[*types.Func][]helper
+	heldCalls map[*types.Func][]heldCall
 	summaries map[*types.Func]map[lockKey]bool
 	limit     int
 	reported  map[*ast.CallExpr]bool
@@ -68,7 +68,7 @@ func run(pass *analysis.Pass) (any, error) {
 	}
 	c.index()
 	c.invokes = c.findInvokes()
-	c.helpers = c.findHelpers()
+	c.heldCalls = c.findHeldCalls()
 	c.summarize()
 	for _, d := range c.order {
 		c.check(d.decl)
@@ -135,25 +135,39 @@ func (c *checker) findInvokes() map[*types.Func]map[int]bool {
 
 func (c *checker) regions(list []ast.Stmt, visit func(lockKey, []ast.Stmt)) {
 	for i, s := range list {
-		key := c.stmtKey(s, "Lock")
+		key := c.lockStmtKey(s)
 		if key.root == nil {
 			continue
 		}
 		end := i + 1
-		for end < len(list) && c.stmtKey(list[end], "Unlock") != key {
+		for end < len(list) && !c.unlocks(list[end], key) {
 			end++
 		}
 		visit(key, list[i+1:end])
 	}
 }
 
-func (c *checker) findHelpers() map[*types.Func][]helper {
-	found := make(map[*types.Func][]helper)
+func (c *checker) unlocks(s ast.Stmt, key lockKey) bool {
+	found := false
+	ast.Inspect(s, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.DeferStmt, *ast.GoStmt, *ast.FuncLit:
+			return false
+		case *ast.CallExpr:
+			found = found || c.mutexKey(n, "Unlock") == key
+		}
+		return !found
+	})
+	return found
+}
+
+func (c *checker) findHeldCalls() map[*types.Func][]heldCall {
+	found := make(map[*types.Func][]heldCall)
 	for _, d := range c.order {
 		f := &flow{c: c}
 		f.onStmts = func(list []ast.Stmt) {
 			c.regions(list, func(key lockKey, region []ast.Stmt) {
-				found[d.fn] = append(found[d.fn], c.regionHelpers(d.fn, key, region)...)
+				found[d.fn] = append(found[d.fn], c.regionHeldCalls(d.fn, key, region)...)
 			})
 		}
 		f.walk(d.decl.Body)
@@ -161,12 +175,12 @@ func (c *checker) findHelpers() map[*types.Func][]helper {
 	return found
 }
 
-func (c *checker) regionHelpers(fn *types.Func, key lockKey, region []ast.Stmt) []helper {
-	var found []helper
+func (c *checker) regionHeldCalls(fn *types.Func, key lockKey, region []ast.Stmt) []heldCall {
+	var found []heldCall
 	sig := fn.Signature()
 	f := &flow{c: c, onCall: func(call *ast.CallExpr) {
 		if i := c.paramIndex(sig, call.Fun); i >= 0 {
-			found = append(found, helper{key: key, param: i})
+			found = append(found, heldCall{key: key, param: i})
 		}
 	}}
 	f.walkStmts(region)
@@ -192,9 +206,21 @@ func (c *checker) pathLimit(calls map[*types.Func][]*ast.CallExpr) int {
 	limit := -1
 	for _, list := range calls {
 		for _, call := range list {
-			if k := c.lockCallKey(call); k.root != nil {
-				limit = max(limit, len(k.path))
-			}
+			limit = max(limit, c.heldPath(call))
+		}
+	}
+	return limit
+}
+
+func (c *checker) heldPath(call *ast.CallExpr) int {
+	limit := -1
+	if k := c.lockCallKey(call); k.root != nil {
+		limit = len(k.path)
+	}
+	fn := c.callee(call)
+	for _, h := range c.heldCalls[fn] {
+		if k := c.substitute(h.key, call, fn); k.root != nil {
+			limit = max(limit, len(k.path))
 		}
 	}
 	return limit
@@ -294,7 +320,7 @@ func (c *checker) receiverBinding(fn *types.Func, sel *ast.SelectorExpr) map[typ
 }
 
 func (c *checker) check(decl *ast.FuncDecl) {
-	f := &flow{c: c, onCall: c.checkHelperCall}
+	f := &flow{c: c, onCall: c.checkHeldCallbacks}
 	f.onStmts = func(list []ast.Stmt) {
 		c.regions(list, func(key lockKey, region []ast.Stmt) {
 			c.heldFlow(key, binding{}).walkStmts(region)
@@ -309,9 +335,9 @@ func (c *checker) heldFlow(key lockKey, b binding) *flow {
 	}}
 }
 
-func (c *checker) checkHelperCall(call *ast.CallExpr) {
+func (c *checker) checkHeldCallbacks(call *ast.CallExpr) {
 	fn := c.callee(call)
-	for _, h := range c.helpers[fn] {
+	for _, h := range c.heldCalls[fn] {
 		key := c.substitute(h.key, call, fn)
 		if key.root != nil && h.param < len(call.Args) {
 			c.checkCallback(key, call.Args[h.param])

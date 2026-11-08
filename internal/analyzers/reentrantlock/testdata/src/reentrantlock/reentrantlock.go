@@ -167,3 +167,14 @@ func spawnedAndStored() {
 	}
 	_ = stored
 }
+
+func bothArms(mu *sync.Mutex, cond bool) {
+	mu.Lock()
+	if cond {
+		mu.Unlock()
+	} else {
+		mu.Unlock()
+	}
+	mu.Lock()
+	mu.Unlock()
+}

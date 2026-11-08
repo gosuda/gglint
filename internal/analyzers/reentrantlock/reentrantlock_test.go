@@ -9,5 +9,5 @@ import (
 )
 
 func TestAnalyzer(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), reentrantlock.Analyzer, "reentrantlock")
+	analysistest.Run(t, analysistest.TestData(), reentrantlock.Analyzer, "reentrantlock", "heldpath")
 }
