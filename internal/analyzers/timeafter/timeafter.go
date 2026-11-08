@@ -6,6 +6,8 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/ast/edge"
+	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/inspection"
@@ -26,15 +28,12 @@ statement, range operand) runs outside the body and is not reported.`,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	ins := inspection.Of(pass)
-	calls := []ast.Node{(*ast.CallExpr)(nil)}
-	ins.WithStack(calls, func(n ast.Node, push bool, stack []ast.Node) bool {
-		call := inspection.As[*ast.CallExpr](n)
-		if push && isTimeAfter(pass.TypesInfo, call) && inLoopBody(stack) {
+	for cur := range inspection.Of(pass).Root().Preorder((*ast.CallExpr)(nil)) {
+		call := inspection.Node[*ast.CallExpr](cur)
+		if isTimeAfter(pass.TypesInfo, call) && inLoopBody(cur) {
 			pass.Report(analysis.Diagnostic{Pos: call.Pos(), End: call.End(), Message: message})
 		}
-		return true
-	})
+	}
 	return nil, nil
 }
 
@@ -44,17 +43,10 @@ func isTimeAfter(info *types.Info, call *ast.CallExpr) bool {
 		fn.Signature().Recv() == nil
 }
 
-func inLoopBody(stack []ast.Node) bool {
-	for i := len(stack) - 2; i >= 0; i-- {
-		switch n := stack[i].(type) {
-		case *ast.ForStmt:
-			if stack[i+1] == n.Body {
-				return true
-			}
-		case *ast.RangeStmt:
-			if stack[i+1] == n.Body {
-				return true
-			}
+func inLoopBody(cur inspector.Cursor) bool {
+	for ; cur.Node() != nil; cur = cur.Parent() {
+		if kind := cur.ParentEdgeKind(); kind == edge.ForStmt_Body || kind == edge.RangeStmt_Body {
+			return true
 		}
 	}
 	return false

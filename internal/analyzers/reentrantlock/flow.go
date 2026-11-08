@@ -71,11 +71,7 @@ func (f *flow) async(call *ast.CallExpr) {
 	if _, ok := ast.Unparen(call.Fun).(*ast.FuncLit); !ok {
 		f.walk(call.Fun)
 	}
-	f.walkExprs(call.Args)
-}
-
-func (f *flow) walkExprs(list []ast.Expr) {
-	for _, e := range list {
-		f.walk(e)
+	for _, arg := range call.Args {
+		f.walk(arg)
 	}
 }

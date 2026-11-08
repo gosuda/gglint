@@ -51,20 +51,16 @@ func (c *checker) keyOf(e ast.Expr) lockKey {
 	path := ""
 	for e != nil {
 		if id, ok := e.(*ast.Ident); ok {
-			return c.rootKey(id, path)
+			if v, ok := c.pass.TypesInfo.Uses[id].(*types.Var); ok {
+				return lockKey{root: v, path: path}
+			}
+			return lockKey{}
 		}
 		var field string
 		e, field = c.keyStep(e)
 		if field != "" {
 			path = "." + field + path
 		}
-	}
-	return lockKey{}
-}
-
-func (c *checker) rootKey(id *ast.Ident, path string) lockKey {
-	if v, ok := c.pass.TypesInfo.Uses[id].(*types.Var); ok {
-		return lockKey{root: v, path: path}
 	}
 	return lockKey{}
 }
@@ -114,11 +110,6 @@ func deref(t types.Type) types.Type {
 	return t
 }
 
-func isPointer(t types.Type) bool {
-	_, ok := t.Underlying().(*types.Pointer)
-	return ok
-}
-
 func (c *checker) mutexKey(call *ast.CallExpr, method string) lockKey {
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
 	if !ok || !isMutexMethod(typeutil.StaticCallee(c.pass.TypesInfo, call), method) {
@@ -135,10 +126,6 @@ func isMutexMethod(fn *types.Func, method string) bool {
 	return name == "(*sync.Mutex)."+method || name == "(*sync.RWMutex)."+method
 }
 
-func (c *checker) lockCallKey(call *ast.CallExpr) lockKey {
-	return c.mutexKey(call, "Lock")
-}
-
 func (c *checker) lockStmtKey(s ast.Stmt) lockKey {
 	es, ok := s.(*ast.ExprStmt)
 	if !ok {
@@ -148,7 +135,7 @@ func (c *checker) lockStmtKey(s ast.Stmt) lockKey {
 	if !ok {
 		return lockKey{}
 	}
-	return c.lockCallKey(call)
+	return c.mutexKey(call, "Lock")
 }
 
 func (c *checker) substitute(k lockKey, call *ast.CallExpr, fn *types.Func) lockKey {
@@ -175,7 +162,7 @@ func (c *checker) argumentKey(root types.Object, call *ast.CallExpr, sig *types.
 		if p != root {
 			continue
 		}
-		if i >= len(call.Args) || !isPointer(p.Type()) {
+		if _, ptr := p.Type().Underlying().(*types.Pointer); i >= len(call.Args) || !ptr {
 			return lockKey{}, true
 		}
 		return c.keyOf(call.Args[i]), true

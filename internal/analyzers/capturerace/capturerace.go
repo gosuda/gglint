@@ -121,11 +121,10 @@ func (d *declScan) addWrites(info *types.Info, targets ...ast.Expr) {
 func writtenVar(info *types.Info, e ast.Expr) *types.Var {
 	for e != nil {
 		if id, ok := e.(*ast.Ident); ok {
-			v, isVar := info.Uses[id].(*types.Var)
-			if !isVar {
-				return nil
+			if v, ok := info.Uses[id].(*types.Var); ok {
+				return v
 			}
-			return v
+			return nil
 		}
 		e = inPlaceOperand(info, e)
 	}
@@ -141,19 +140,11 @@ func inPlaceOperand(info *types.Info, e ast.Expr) ast.Expr {
 			return x.X
 		}
 	case *ast.IndexExpr:
-		if isArray(info.TypeOf(x.X)) {
+		if _, ok := info.TypeOf(x.X).Underlying().(*types.Array); ok {
 			return x.X
 		}
 	}
 	return nil
-}
-
-func isArray(t types.Type) bool {
-	if t == nil {
-		return false
-	}
-	_, ok := t.Underlying().(*types.Array)
-	return ok
 }
 
 func isSpawnCall(info *types.Info, call *ast.CallExpr) bool {
@@ -206,7 +197,7 @@ func (d *declScan) captured(pkg *types.Package, body *ast.FuncLit) []*types.Var 
 }
 
 func isOuterLocal(pkg *types.Package, v *types.Var, body *ast.FuncLit) bool {
-	return !v.IsField() && v.Pkg() == pkg && v.Parent() != nil && v.Parent() != pkg.Scope() && !within(v.Pos(), body)
+	return v.Pkg() == pkg && v.Parent() != nil && v.Parent() != pkg.Scope() && !within(v.Pos(), body)
 }
 
 func within(p token.Pos, n ast.Node) bool {
@@ -276,17 +267,12 @@ func isSyncType(t types.Type) bool {
 	return path == "sync" || path == "sync/atomic"
 }
 
-func isTypeParam(t types.Type) bool {
-	_, ok := types.Unalias(t).(*types.TypeParam)
-	return ok
-}
-
 func wordSize(sizes types.Sizes) int64 {
 	return sizes.Sizeof(types.Typ[types.Int])
 }
 
 func valueBytes(t types.Type, sizes types.Sizes) int64 {
-	if isTypeParam(t) {
+	if _, ok := types.Unalias(t).(*types.TypeParam); ok {
 		return wordSize(sizes)
 	}
 	switch u := t.Underlying().(type) {

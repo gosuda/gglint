@@ -19,10 +19,6 @@ func funcMetrics(fset *token.FileSet, info *types.Info, fn *ast.FuncDecl) metric
 	return m
 }
 
-func litMetrics(fset *token.FileSet, lit *ast.FuncLit) metrics {
-	return bodyMetrics(fset, lit.Pos(), lit.Type.Params, lit.Body)
-}
-
 func bodyMetrics(fset *token.FileSet, start token.Pos, params *ast.FieldList, body *ast.BlockStmt) metrics {
 	w := &walker{chained: make(map[*ast.IfStmt]bool), inChain: make(map[*ast.BinaryExpr]bool)}
 	ast.Inspect(body, w.visit)
@@ -46,7 +42,7 @@ func countParams(fields *ast.FieldList) int {
 func countBoolParams(info *types.Info, fields *ast.FieldList) int {
 	n := 0
 	for _, f := range fields.List {
-		if isBool(info.TypeOf(f.Type)) {
+		if t := info.TypeOf(f.Type); t != nil && types.Identical(t, types.Typ[types.Bool]) {
 			n += paramNames(f)
 		}
 	}
@@ -55,22 +51,6 @@ func countBoolParams(info *types.Info, fields *ast.FieldList) int {
 
 func paramNames(f *ast.Field) int {
 	return max(1, len(f.Names))
-}
-
-func isBool(t types.Type) bool {
-	return t != nil && types.Identical(t, types.Typ[types.Bool])
-}
-
-func interfaceMethods(iface *ast.InterfaceType) int {
-	n := 0
-	for _, f := range iface.Methods.List {
-		n += len(f.Names)
-	}
-	return n
-}
-
-func fileLines(fset *token.FileSet, f *ast.File) int {
-	return fset.File(f.Package).LineCount()
 }
 
 type walker struct {
@@ -121,7 +101,10 @@ func (w *walker) weigh(n ast.Node) bool {
 	case *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
 		return w.structure()
 	case *ast.CaseClause, *ast.CommClause:
-		w.caseClause(n)
+		if conditioned(n) {
+			w.cyclomatic++
+			w.score += w.level
+		}
 	case *ast.BranchStmt:
 		w.jump(n)
 	case *ast.BinaryExpr:
@@ -145,13 +128,6 @@ func (w *walker) branch(n *ast.IfStmt) bool {
 		return false
 	}
 	return w.structure()
-}
-
-func (w *walker) caseClause(n ast.Node) {
-	if conditioned(n) {
-		w.cyclomatic++
-		w.score += w.level
-	}
 }
 
 func conditioned(n ast.Node) bool {

@@ -30,32 +30,16 @@ assignment from a call.`,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	in := inspection.Of(pass)
-	for fn := range in.Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		body := funcBody(fn.Node())
-		if body == nil {
-			continue
-		}
-		s := &scan{pass: pass, fn: fn, body: body, first: map[*types.Var]*ast.Ident{}, released: map[*types.Var]bool{}}
+	for fn := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		s := &scan{pass: pass, fn: fn, first: map[*types.Var]*ast.Ident{}, released: map[*types.Var]bool{}}
 		s.run()
 	}
 	return nil, nil
 }
 
-func funcBody(n ast.Node) *ast.BlockStmt {
-	switch n := n.(type) {
-	case *ast.FuncDecl:
-		return n.Body
-	case *ast.FuncLit:
-		return n.Body
-	}
-	return nil
-}
-
 type scan struct {
 	pass     *analysis.Pass
 	fn       inspector.Cursor
-	body     *ast.BlockStmt
 	first    map[*types.Var]*ast.Ident
 	order    []*types.Var
 	released map[*types.Var]bool
@@ -122,7 +106,7 @@ func (s *scan) holdTuple(targets []ast.Expr, value ast.Expr) {
 
 func (s *scan) hold(target, value ast.Expr, result types.Type) {
 	id, ok := ast.Unparen(target).(*ast.Ident)
-	if !ok || result == nil || !s.isCall(value) || !hasClose(result) {
+	if !ok || !s.isCall(value) || !hasClose(result) {
 		return
 	}
 	v, ok := s.pass.TypesInfo.ObjectOf(id).(*types.Var)
@@ -145,7 +129,8 @@ func (s *scan) isCall(e ast.Expr) bool {
 }
 
 func (s *scan) declaredHere(v *types.Var) bool {
-	return v.Kind() == types.LocalVar && s.body.Pos() <= v.Pos() && v.Pos() < s.body.End()
+	fn := s.fn.Node()
+	return v.Kind() == types.LocalVar && fn.Pos() <= v.Pos() && v.Pos() < fn.End()
 }
 
 func hasClose(t types.Type) bool {
@@ -213,17 +198,12 @@ func (s *scan) isPlain(cur inspector.Cursor) bool {
 }
 
 func (s *scan) isPlainSelection(cur inspector.Cursor) bool {
-	sel := s.pass.TypesInfo.Selections[inspection.Node[*ast.SelectorExpr](cur)]
-	if sel == nil {
-		return false
-	}
-	switch sel.Kind() {
+	switch s.pass.TypesInfo.Selections[inspection.Node[*ast.SelectorExpr](cur)].Kind() {
 	case types.FieldVal:
 		return true
 	case types.MethodVal:
 		return cur.ParentEdgeKind() == edge.CallExpr_Fun
 	case types.MethodExpr:
-		return false
 	}
 	return false
 }
@@ -238,11 +218,8 @@ func isDiscarded(cur inspector.Cursor) bool {
 }
 
 func owner(cur inspector.Cursor) inspector.Cursor {
-	for c := cur; c.Node() != nil; c = c.Parent() {
-		switch c.Node().(type) {
-		case *ast.FuncDecl, *ast.FuncLit:
-			return c
-		}
+	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		return fn
 	}
 	return inspector.Cursor{}
 }

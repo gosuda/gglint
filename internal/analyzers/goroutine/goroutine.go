@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/go/types/typeutil"
 
@@ -99,19 +100,9 @@ func (c checker) spawnCall(site inspector.Cursor, call *ast.CallExpr) {
 	if body, ok := spawnedBody(site, call.Args[0]); ok {
 		c.checkBody(body)
 	}
-	if c.mode >= config.Strict {
-		c.checkFanOut(site, call, kind)
+	if c.mode >= config.Strict && inLoopBody(site) && (kind != errgroupSpawn || !c.limitedBefore(site, call)) {
+		c.pass.Reportf(call.Pos(), msgFanOut)
 	}
-}
-
-func (c checker) checkFanOut(site inspector.Cursor, call *ast.CallExpr, kind spawner) {
-	if !inLoopBody(site) {
-		return
-	}
-	if kind == errgroupSpawn && c.limitedBefore(site, call) {
-		return
-	}
-	c.pass.Reportf(call.Pos(), msgFanOut)
 }
 
 func (c checker) spawnerOf(call *ast.CallExpr) spawner {
@@ -158,25 +149,19 @@ func spans(n ast.Node, pos token.Pos) bool {
 }
 
 func (c checker) joined(site, body inspector.Cursor) bool {
-	fn, ok := enclosing(site, isFunc)
-	if !ok {
-		return false
-	}
+	fn, _ := nearest(site, (*ast.FuncDecl)(nil), (*ast.FuncLit)(nil))
 	scope := outerScope{fn: fn.Node(), lit: body.Node()}
 	for cur := range ownNodes(body, (*ast.DeferStmt)(nil), (*ast.SendStmt)(nil)) {
-		if c.joinEvidence(cur.Node(), scope) {
-			return true
+		switch n := cur.Node().(type) {
+		case *ast.DeferStmt:
+			if c.waitGroupDone(n.Call) || c.closesOuter(n.Call, scope) {
+				return true
+			}
+		case *ast.SendStmt:
+			if c.outerChan(n.Chan, scope) {
+				return true
+			}
 		}
-	}
-	return false
-}
-
-func (c checker) joinEvidence(n ast.Node, scope outerScope) bool {
-	switch n := n.(type) {
-	case *ast.DeferStmt:
-		return c.waitGroupDone(n.Call) || c.closesOuter(n.Call, scope)
-	case *ast.SendStmt:
-		return c.outerChan(n.Chan, scope)
 	}
 	return false
 }
@@ -214,11 +199,11 @@ func (c checker) checkBody(body inspector.Cursor) {
 func (c checker) checkBlocking(cur inspector.Cursor) {
 	switch n := cur.Node().(type) {
 	case *ast.ForStmt:
-		if n.Cond == nil && !c.leaves(cur, n.Body) {
+		if n.Cond == nil && !c.leaves(cur, cur.ChildAt(edge.ForStmt_Body, -1)) {
 			c.pass.Reportf(n.Pos(), msgNoExit)
 		}
 	case *ast.RangeStmt:
-		if c.ticks(n.X) && !c.leaves(cur, n.Body) {
+		if c.ticks(n.X) && !c.leaves(cur, cur.ChildAt(edge.RangeStmt_Body, -1)) {
 			c.pass.Reportf(n.Pos(), msgNoExit)
 		}
 	case *ast.SelectStmt:
@@ -238,27 +223,20 @@ func (c checker) ticks(x ast.Expr) bool {
 	return false
 }
 
-func (c checker) leaves(loop inspector.Cursor, body *ast.BlockStmt) bool {
-	bodyCur, ok := loop.FindNode(body)
-	if !ok {
-		return false
-	}
-	for cur := range ownNodes(bodyCur, (*ast.ReturnStmt)(nil), (*ast.BranchStmt)(nil), (*ast.CallExpr)(nil)) {
-		if c.exits(loop, cur) {
+func (c checker) leaves(loop, body inspector.Cursor) bool {
+	for cur := range ownNodes(body, (*ast.ReturnStmt)(nil), (*ast.BranchStmt)(nil), (*ast.CallExpr)(nil)) {
+		switch n := cur.Node().(type) {
+		case *ast.ReturnStmt:
 			return true
+		case *ast.BranchStmt:
+			if c.branchLeaves(loop, cur, n) {
+				return true
+			}
+		case *ast.CallExpr:
+			if c.terminates(n) {
+				return true
+			}
 		}
-	}
-	return false
-}
-
-func (c checker) exits(loop, cur inspector.Cursor) bool {
-	switch n := cur.Node().(type) {
-	case *ast.ReturnStmt:
-		return true
-	case *ast.BranchStmt:
-		return c.branchLeaves(loop, cur, n)
-	case *ast.CallExpr:
-		return c.terminates(n)
 	}
 	return false
 }
@@ -270,7 +248,8 @@ func (c checker) branchLeaves(loop, cur inspector.Cursor, br *ast.BranchStmt) bo
 	case br.Label != nil:
 		return c.jumpsOut(loop, br)
 	case br.Tok == token.BREAK:
-		target, ok := enclosing(cur, isBreakable)
+		target, ok := nearest(cur, (*ast.ForStmt)(nil), (*ast.RangeStmt)(nil), (*ast.SwitchStmt)(nil),
+			(*ast.TypeSwitchStmt)(nil), (*ast.SelectStmt)(nil))
 		return ok && target == loop
 	}
 	return false
@@ -296,17 +275,14 @@ func (c checker) terminates(call *ast.CallExpr) bool {
 	case *types.Builtin:
 		return fn.Name() == "panic"
 	case *types.Func:
-		return isObject(fn, "os", "Exit") || isObject(fn, "runtime", "Goexit") || isLogFatal(fn)
+		return isObject(fn, "os", "Exit") || isObject(fn, "runtime", "Goexit") ||
+			fn.Pkg() != nil && fn.Pkg().Path() == "log" && strings.HasPrefix(fn.Name(), "Fatal")
 	}
 	return false
 }
 
-func isLogFatal(fn *types.Func) bool {
-	return fn.Pkg() != nil && fn.Pkg().Path() == "log" && strings.HasPrefix(fn.Name(), "Fatal")
-}
-
 func (c checker) limitedBefore(site inspector.Cursor, call *ast.CallExpr) bool {
-	fn, ok := enclosing(site, isFunc)
+	fn, ok := nearest(site, (*ast.FuncDecl)(nil), (*ast.FuncLit)(nil))
 	key := c.receiverKey(call)
 	if !ok || key == nil {
 		return false
@@ -350,47 +326,23 @@ func (c checker) objectPath(e ast.Expr) []types.Object {
 }
 
 func inLoopBody(site inspector.Cursor) bool {
-	pos := site.Node().Pos()
-	for p := site.Parent(); p.Node() != nil; p = p.Parent() {
-		switch n := p.Node().(type) {
-		case *ast.FuncDecl, *ast.FuncLit:
+	for cur := site; cur.Node() != nil; cur = cur.Parent() {
+		kind := cur.ParentEdgeKind()
+		if kind == edge.ForStmt_Body || kind == edge.RangeStmt_Body {
+			return true
+		}
+		if kind == edge.FuncDecl_Body || kind == edge.FuncLit_Body {
 			return false
-		case *ast.ForStmt:
-			if spans(n.Body, pos) {
-				return true
-			}
-		case *ast.RangeStmt:
-			if spans(n.Body, pos) {
-				return true
-			}
 		}
 	}
 	return false
 }
 
-func enclosing(cur inspector.Cursor, match func(ast.Node) bool) (inspector.Cursor, bool) {
-	for p := cur.Parent(); p.Node() != nil; p = p.Parent() {
-		if match(p.Node()) {
-			return p, true
-		}
+func nearest(cur inspector.Cursor, kinds ...ast.Node) (inspector.Cursor, bool) {
+	for c := range cur.Enclosing(kinds...) {
+		return c, true
 	}
 	return inspector.Cursor{}, false
-}
-
-func isFunc(n ast.Node) bool {
-	switch n.(type) {
-	case *ast.FuncDecl, *ast.FuncLit:
-		return true
-	}
-	return false
-}
-
-func isBreakable(n ast.Node) bool {
-	switch n.(type) {
-	case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-		return true
-	}
-	return false
 }
 
 func ownNodes(root inspector.Cursor, kinds ...ast.Node) iter.Seq[inspector.Cursor] {

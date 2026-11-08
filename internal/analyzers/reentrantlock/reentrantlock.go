@@ -38,11 +38,6 @@ copy, so a mutex reached through it never matches.`,
 	Run: run,
 }
 
-type declared struct {
-	fn   *types.Func
-	decl *ast.FuncDecl
-}
-
 type heldCall struct {
 	key   lockKey
 	param int
@@ -50,7 +45,7 @@ type heldCall struct {
 
 type checker struct {
 	pass      *analysis.Pass
-	order     []declared
+	order     []*types.Func
 	decls     map[*types.Func]*ast.FuncDecl
 	invokes   map[*types.Func]map[int]bool
 	heldCalls map[*types.Func][]heldCall
@@ -70,8 +65,8 @@ func run(pass *analysis.Pass) (any, error) {
 	c.invokes = c.findInvokes()
 	c.heldCalls = c.findHeldCalls()
 	c.summarize()
-	for _, d := range c.order {
-		c.check(d.decl)
+	for _, fn := range c.order {
+		c.check(c.decls[fn])
 	}
 	return nil, nil
 }
@@ -85,7 +80,7 @@ func (c *checker) index() {
 			}
 			if fn, ok := c.pass.TypesInfo.Defs[fd.Name].(*types.Func); ok {
 				c.decls[fn] = fd
-				c.order = append(c.order, declared{fn: fn, decl: fd})
+				c.order = append(c.order, fn)
 			}
 		}
 	}
@@ -119,16 +114,16 @@ func (c *checker) paramIndex(sig *types.Signature, fun ast.Expr) int {
 
 func (c *checker) findInvokes() map[*types.Func]map[int]bool {
 	found := make(map[*types.Func]map[int]bool)
-	for _, d := range c.order {
+	for _, fn := range c.order {
 		set := make(map[int]bool)
-		sig := d.fn.Signature()
+		sig := fn.Signature()
 		f := &flow{c: c, onCall: func(call *ast.CallExpr) {
 			if i := c.paramIndex(sig, call.Fun); i >= 0 {
 				set[i] = true
 			}
 		}}
-		f.walk(d.decl.Body)
-		found[d.fn] = set
+		f.walk(c.decls[fn].Body)
+		found[fn] = set
 	}
 	return found
 }
@@ -163,14 +158,14 @@ func (c *checker) unlocks(s ast.Stmt, key lockKey) bool {
 
 func (c *checker) findHeldCalls() map[*types.Func][]heldCall {
 	found := make(map[*types.Func][]heldCall)
-	for _, d := range c.order {
+	for _, fn := range c.order {
 		f := &flow{c: c}
 		f.onStmts = func(list []ast.Stmt) {
 			c.regions(list, func(key lockKey, region []ast.Stmt) {
-				found[d.fn] = append(found[d.fn], c.regionHeldCalls(d.fn, key, region)...)
+				found[fn] = append(found[fn], c.regionHeldCalls(fn, key, region)...)
 			})
 		}
-		f.walk(d.decl.Body)
+		f.walk(c.decls[fn].Body)
 	}
 	return found
 }
@@ -189,12 +184,12 @@ func (c *checker) regionHeldCalls(fn *types.Func, key lockKey, region []ast.Stmt
 
 func (c *checker) summarize() {
 	calls := make(map[*types.Func][]*ast.CallExpr)
-	for _, d := range c.order {
+	for _, fn := range c.order {
 		f := &flow{c: c, onCall: func(call *ast.CallExpr) {
-			calls[d.fn] = append(calls[d.fn], call)
+			calls[fn] = append(calls[fn], call)
 		}}
-		f.walk(d.decl.Body)
-		c.summaries[d.fn] = make(map[lockKey]bool)
+		f.walk(c.decls[fn].Body)
+		c.summaries[fn] = make(map[lockKey]bool)
 	}
 	c.limit = c.pathLimit(calls)
 	for grew := true; grew; {
@@ -214,7 +209,7 @@ func (c *checker) pathLimit(calls map[*types.Func][]*ast.CallExpr) int {
 
 func (c *checker) heldPath(call *ast.CallExpr) int {
 	limit := -1
-	if k := c.lockCallKey(call); k.root != nil {
+	if k := c.mutexKey(call, "Lock"); k.root != nil {
 		limit = len(k.path)
 	}
 	fn := c.callee(call)
@@ -248,7 +243,7 @@ func (c *checker) add(summary map[lockKey]bool, keys []lockKey) bool {
 }
 
 func (c *checker) reach(call *ast.CallExpr) []lockKey {
-	if k := c.lockCallKey(call); k.root != nil {
+	if k := c.mutexKey(call, "Lock"); k.root != nil {
 		return []lockKey{k}
 	}
 	fn := c.callee(call)
@@ -356,7 +351,7 @@ func (c *checker) checkCallback(key lockKey, arg ast.Expr) {
 }
 
 func (c *checker) checkInner(call *ast.CallExpr, key lockKey, b binding) {
-	if k := c.lockCallKey(call); k.root != nil {
+	if k := c.mutexKey(call, "Lock"); k.root != nil {
 		if b.bindKey(k) == key {
 			c.report(call, fmt.Sprintf(relockFormat, key))
 		}
