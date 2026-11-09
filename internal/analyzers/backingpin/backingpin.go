@@ -132,10 +132,11 @@ func (c checker) stringLength(x ast.Expr) int64 {
 	if !ok || len(call.Args) != 1 || !c.info.Types[call.Fun].IsType() || !isByteSlice(c.info.TypeOf(call.Args[0])) {
 		return 0
 	}
-	return c.sliceLength(call.Args[0])
+	length, _ := c.sliceLength(call.Args[0])
+	return length
 }
 
-func (c checker) sliceLength(x ast.Expr) int64 {
+func (c checker) sliceLength(x ast.Expr) (int64, bool) {
 	switch v := c.staticValue(x).(type) {
 	case *ast.CallExpr:
 		return c.makeLength(v)
@@ -144,24 +145,27 @@ func (c checker) sliceLength(x ast.Expr) int64 {
 			return c.slicedLength(v)
 		}
 	}
-	return 0
+	return 0, false
 }
 
-func (c checker) slicedLength(s *ast.SliceExpr) int64 {
+func (c checker) slicedLength(s *ast.SliceExpr) (int64, bool) {
 	lo, ok := c.boundOr(s.Low, 0)
 	if !ok {
-		return 0
+		return 0, false
 	}
-	hi, ok := c.boundOr(s.High, c.operandLength(s))
+	hi, ok := c.operandLength(s)
+	if s.High != nil {
+		hi, ok = c.constInt(s.High)
+	}
 	if !ok || hi < lo {
-		return 0
+		return 0, false
 	}
-	return hi - lo
+	return hi - lo, true
 }
 
-func (c checker) operandLength(s *ast.SliceExpr) int64 {
+func (c checker) operandLength(s *ast.SliceExpr) (int64, bool) {
 	if a := arrayOf(c.info.TypeOf(s.X)); a != nil {
-		return a.Len()
+		return a.Len(), true
 	}
 	return c.sliceLength(s.X)
 }
@@ -173,14 +177,18 @@ func (c checker) coversBacking(s *ast.SliceExpr, size int64) bool {
 	if lo, ok := c.boundOr(s.Low, 0); !ok || lo != 0 {
 		return false
 	}
-	if s.High == nil {
-		return true
+	var hi int64
+	var ok bool
+	if s.High == nil || c.isLenOf(s.High, s.X) {
+		hi, ok = c.operandLength(s)
+		if !ok {
+			return true
+		}
+	} else if hi, ok = c.constInt(s.High); !ok {
+		return false
 	}
-	if hi, ok := c.constInt(s.High); ok {
-		elem := c.elemSize(s)
-		return elem > 0 && hi == size/elem
-	}
-	return c.isLenOf(s.High, s.X)
+	elem := c.elemSize(s)
+	return elem > 0 && hi == size/elem
 }
 
 func (c checker) elemSize(s *ast.SliceExpr) int64 {
@@ -262,12 +270,11 @@ func (c checker) makeBytes(call *ast.CallExpr) int64 {
 	return saturatingMul(capacity, c.sizeOf(slice.Elem()))
 }
 
-func (c checker) makeLength(call *ast.CallExpr) int64 {
+func (c checker) makeLength(call *ast.CallExpr) (int64, bool) {
 	if c.makeCall(call) == nil {
-		return 0
+		return 0, false
 	}
-	length, _ := c.constInt(call.Args[1])
-	return length
+	return c.constInt(call.Args[1])
 }
 
 func (c checker) flowOf(cur inspector.Cursor) flow {

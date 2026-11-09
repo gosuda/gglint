@@ -72,6 +72,31 @@ func makeCapAbove() []byte {
 	return b[:10] // want `subslice keeps a 65537-byte backing array alive`
 }
 
+func makeShortWholeSlice() []byte {
+	b := make([]byte, 1, 1<<20)
+	return b[:] // want `subslice keeps a 1048576-byte backing array alive`
+}
+
+func makeShortWholeSliceLen() []byte {
+	b := make([]byte, 1, 1<<20)
+	return b[:len(b)] // want `subslice keeps a 1048576-byte backing array alive`
+}
+
+func makeZeroWholeSlice() []byte {
+	b := make([]byte, 0, 1<<20)
+	return b[:] // want `subslice keeps a 1048576-byte backing array alive`
+}
+
+func makeWholeSlice() []byte {
+	b := make([]byte, 1<<20)
+	return b[:]
+}
+
+func makeDynamicWholeSlice(n int) []byte {
+	b := make([]byte, n, 1<<20)
+	return b[:]
+}
+
 func makeWordsAt() []int32 {
 	b := make([]int32, 16384)
 	return b[:10]
