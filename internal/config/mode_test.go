@@ -7,6 +7,7 @@ import (
 )
 
 func TestParseModeAcceptsExactlyTheDocumentedNames(t *testing.T) {
+	t.Parallel()
 	for _, m := range allModes {
 		got, err := config.ParseMode(modeNames[m])
 		if err != nil || got != m || got.String() != modeNames[m] {
@@ -21,6 +22,7 @@ func TestParseModeAcceptsExactlyTheDocumentedNames(t *testing.T) {
 }
 
 func TestModeTextRoundTripsAndRejectsUnknownText(t *testing.T) {
+	t.Parallel()
 	for _, m := range allModes {
 		text, err := m.MarshalText()
 		if err != nil || string(text) != modeNames[m] {

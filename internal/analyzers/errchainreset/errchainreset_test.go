@@ -9,5 +9,6 @@ import (
 )
 
 func TestAnalyzer(t *testing.T) {
+	t.Parallel()
 	analysistest.RunWithSuggestedFixes(t, analysistest.TestData(), errchainreset.Analyzer, "errchainreset")
 }

@@ -19,6 +19,7 @@ import (
 )
 
 func TestEscapeModule(t *testing.T) {
+	t.Parallel()
 	requireObjdump(t)
 	analyzertest.RunIgnoringFacts(t, expandEscapeModule(t), New(ListExport(nil)), "./...")
 }
@@ -48,6 +49,7 @@ func TestListExportRunsInPhysicalDirectory(t *testing.T) {
 }
 
 func TestListExportRejectsPackageOutsideFileSet(t *testing.T) {
+	t.Parallel()
 	f, err := parser.ParseFile(token.NewFileSet(), "orphan.go", "package orphan\n", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +68,7 @@ func writeFile(t *testing.T, path, content string) {
 }
 
 func TestBinaryArchiveUsesBuildTags(t *testing.T) {
+	t.Parallel()
 	requireObjdump(t)
 	tags := []string{"checkescape_binary"}
 	pkgs, err := packages.Load(&packages.Config{

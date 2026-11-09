@@ -46,11 +46,13 @@ func excludeFor(states [4]fieldState, isTest bool) config.Exclude {
 }
 
 func TestExcludeMatchesIffEverySetFieldMatches(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"legacy/a.go", "legacy/a_test.go"} {
 		isTest := path == "legacy/a_test.go"
 		for n := range 81 {
 			states := [4]fieldState{fieldState(n % 3), fieldState(n / 3 % 3), fieldState(n / 9 % 3), fieldState(n / 27 % 3)}
 			t.Run(fmt.Sprintf("%s/paths=%d,rules=%d,text=%d,tests=%d", path, states[0], states[1], states[2], states[3]), func(t *testing.T) {
+				t.Parallel()
 				checkExclude(t, excludeFor(states, isTest), path, states)
 			})
 		}
@@ -76,6 +78,7 @@ func checkExclude(t *testing.T, e config.Exclude, path string, states [4]fieldSt
 }
 
 func TestExcludeListFieldMatchesWhenAnyEntryMatches(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		exclude config.Exclude
@@ -102,6 +105,7 @@ func TestExcludeListFieldMatchesWhenAnyEntryMatches(t *testing.T) {
 }
 
 func TestExcludeTestsFieldSelectsByTestGoSuffix(t *testing.T) {
+	t.Parallel()
 	compiled, err := config.CompileExcludes([]config.Exclude{{Tests: new(true)}, {Tests: new(false)}})
 	if err != nil {
 		t.Fatal(err)
@@ -128,6 +132,7 @@ func TestExcludeTestsFieldSelectsByTestGoSuffix(t *testing.T) {
 type findingID struct{ rule, check string }
 
 func TestMatchTokenRuleCoversAllChecksAndRuleCheckOnlyOne(t *testing.T) {
+	t.Parallel()
 	findings := []findingID{{"staticcheck", "SA1019"}, {"staticcheck", "SA1000"}, {"unused", ""}, {"printf", ""}}
 	matches := map[string][]findingID{
 		"staticcheck":          {{"staticcheck", "SA1019"}, {"staticcheck", "SA1000"}},

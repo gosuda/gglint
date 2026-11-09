@@ -36,6 +36,7 @@ func decode(t *testing.T, output string) map[string]any {
 }
 
 func TestTextPrintsEachClauseOfTheDocumentedLineShape(t *testing.T) {
+	t.Parallel()
 	plain := finding.Finding{Rule: "printf", Message: "bad verb", Pos: pos("a/b.go", 3, 2)}
 	cases := []struct {
 		name string
@@ -90,6 +91,7 @@ func TestTextPrintsEachClauseOfTheDocumentedLineShape(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			if got := render(t, report.FormatText, config.Standard, "", c.fs); got != c.want {
 				t.Fatalf("text output:\n%q\nwant:\n%q", got, c.want)
 			}
@@ -98,6 +100,7 @@ func TestTextPrintsEachClauseOfTheDocumentedLineShape(t *testing.T) {
 }
 
 func TestJSONMatchesTheReadmeExample(t *testing.T) {
+	t.Parallel()
 	const readme = `{"mode":"standard","config":"gglint.toml","findings":[{"rule":"staticcheck","check":"SA1015","path":"a/b.go","line":3,"column":2,"end_line":3,"end_column":9,"message":"...","related":[{"path":"a/b.go","line":1,"column":1,"message":"..."}],"fixes":["..."],"fixable":true}]}`
 	fs := []finding.Finding{{
 		Rule: "staticcheck", Check: "SA1015", Message: "...",
@@ -112,6 +115,7 @@ func TestJSONMatchesTheReadmeExample(t *testing.T) {
 }
 
 func TestJSONOptionalFindingFieldsAppearExactlyWhenSet(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		key  string
 		set  func(*finding.Finding)
@@ -128,6 +132,7 @@ func TestJSONOptionalFindingFieldsAppearExactlyWhenSet(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.key, func(t *testing.T) {
+			t.Parallel()
 			f := finding.Finding{Rule: "r", Message: "m", Pos: pos("a.go", 1, 1)}
 			if _, present := onlyFinding(t, f)[c.key]; present {
 				t.Fatalf("%s present on a finding that does not set it", c.key)
@@ -155,6 +160,7 @@ func onlyFinding(t *testing.T, f finding.Finding) map[string]any {
 }
 
 func TestJSONRequiredFindingFieldsAlwaysAppear(t *testing.T) {
+	t.Parallel()
 	got := onlyFinding(t, finding.Finding{Rule: "printf", Message: "", Pos: pos("a.go", 12, 0)})
 	want := map[string]any{"rule": "printf", "path": "a.go", "line": float64(12), "column": float64(1), "message": ""}
 	if !reflect.DeepEqual(got, want) {
@@ -163,8 +169,10 @@ func TestJSONRequiredFindingFieldsAlwaysAppear(t *testing.T) {
 }
 
 func TestJSONMessagesRoundTripThroughEscaping(t *testing.T) {
+	t.Parallel()
 	for _, message := range []string{`quote " and \ backslash`, "<html> & ampersand", "line\nbreak\ttab", "unicode é 世界", "\x01 control"} {
 		t.Run(message, func(t *testing.T) {
+			t.Parallel()
 			got := onlyFinding(t, finding.Finding{Rule: "r", Message: message, Pos: pos("a.go", 1, 1)})
 			if got["message"] != message {
 				t.Fatalf("message decoded as %q, want %q", got["message"], message)
@@ -174,6 +182,7 @@ func TestJSONMessagesRoundTripThroughEscaping(t *testing.T) {
 }
 
 func TestJSONDocumentCarriesModeConfigAndEmptyFindingsArray(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		mode       config.Mode
 		configPath string
@@ -185,6 +194,7 @@ func TestJSONDocumentCarriesModeConfigAndEmptyFindingsArray(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.mode.String(), func(t *testing.T) {
+			t.Parallel()
 			if got := decode(t, render(t, report.FormatJSON, c.mode, c.configPath, nil)); !reflect.DeepEqual(got, c.want) {
 				t.Fatalf("document = %#v, want %#v", got, c.want)
 			}
@@ -193,9 +203,11 @@ func TestJSONDocumentCarriesModeConfigAndEmptyFindingsArray(t *testing.T) {
 }
 
 func TestWriteRejectsUnknownFormatsWithoutWriting(t *testing.T) {
+	t.Parallel()
 	fs := []finding.Finding{{Rule: "r", Message: "m", Pos: pos("a.go", 1, 1)}}
 	for _, format := range []string{"", "sarif", "TEXT", "Json", " text", "json "} {
 		t.Run(format, func(t *testing.T) {
+			t.Parallel()
 			var out bytes.Buffer
 			if err := report.Write(&out, format, config.Standard, "", fs); err == nil || out.Len() != 0 {
 				t.Fatalf("format %q: error %v, wrote %q; want an error and no output", format, err, out.String())
@@ -211,6 +223,7 @@ type brokenWriter struct{}
 func (brokenWriter) Write([]byte) (int, error) { return 0, errBroken }
 
 func TestWritePropagatesTheWriterError(t *testing.T) {
+	t.Parallel()
 	one := []finding.Finding{{Rule: "r", Message: "m", Pos: pos("a.go", 1, 1)}}
 	cases := []struct {
 		format string
@@ -222,6 +235,7 @@ func TestWritePropagatesTheWriterError(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.format, func(t *testing.T) {
+			t.Parallel()
 			if err := report.Write(brokenWriter{}, c.format, config.Standard, "", c.fs); !errors.Is(err, errBroken) {
 				t.Fatalf("error = %v, want the writer's error", err)
 			}

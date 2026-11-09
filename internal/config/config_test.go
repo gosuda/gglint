@@ -80,6 +80,7 @@ func regexpError(t *testing.T, source string) string {
 }
 
 func TestLoadRejectsInvalidFileWithDocumentedPathPrefixedMessage(t *testing.T) {
+	t.Parallel()
 	type errorCase struct{ name, toml, want string }
 	cases := []errorCase{
 		{"unknown top key", "mode = \"basic\"\nbogus = 1\n", "2:1: unknown key bogus"},
@@ -98,7 +99,10 @@ func TestLoadRejectsInvalidFileWithDocumentedPathPrefixedMessage(t *testing.T) {
 	}
 	for _, tc := range cases {
 		for _, form := range []string{"absolute", "relative"} {
-			t.Run(tc.name+"/"+form, func(t *testing.T) { checkFileError(t, tc.toml, form, tc.want) })
+			t.Run(tc.name+"/"+form, func(t *testing.T) {
+				t.Parallel()
+				checkFileError(t, tc.toml, form, tc.want)
+			})
 		}
 	}
 }
@@ -115,6 +119,7 @@ func checkFileError(t *testing.T, toml, form, message string) {
 }
 
 func TestLoadRejectsUnreadableOrMistypedFileWithPathPrefix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, toml string
 		write      bool
@@ -127,6 +132,7 @@ func TestLoadRejectsUnreadableOrMistypedFileWithPathPrefix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, config.FileName)
 			if tc.write {
@@ -139,6 +145,7 @@ func TestLoadRejectsUnreadableOrMistypedFileWithPathPrefix(t *testing.T) {
 		})
 	}
 	t.Run("directory as config", func(t *testing.T) {
+		t.Parallel()
 		dir := t.TempDir()
 		if _, err := config.Load(dir, dir, ""); err == nil || !strings.HasPrefix(err.Error(), dir+": ") {
 			t.Fatalf("Load error = %v, want %q prefix", err, dir+": ")
@@ -147,6 +154,7 @@ func TestLoadRejectsUnreadableOrMistypedFileWithPathPrefix(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidModeOverrideWithoutPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeFile(t, dir, config.FileName, "mode = \"strict\"\n")
 	for _, override := range invalidModeNames[1:] {
@@ -159,6 +167,7 @@ func TestLoadRejectsInvalidModeOverrideWithoutPath(t *testing.T) {
 }
 
 func TestLoadModeOverrideBeatsFileModeAndLimitsFollowFinalMode(t *testing.T) {
+	t.Parallel()
 	names := []string{"", "basic", "standard", "strict"}
 	for _, fileMode := range names {
 		for _, override := range names {
@@ -192,8 +201,10 @@ func checkModePrecedence(t *testing.T, fileMode, override, limits string) {
 }
 
 func TestLoadWithoutFileHonorsModeOverride(t *testing.T) {
+	t.Parallel()
 	for _, override := range []string{"basic", "standard", "strict"} {
 		t.Run(fmt.Sprintf("%q", override), func(t *testing.T) {
+			t.Parallel()
 			dir := t.TempDir()
 			cfg, err := config.Load("", dir, override)
 			if err != nil {
@@ -208,6 +219,7 @@ func TestLoadWithoutFileHonorsModeOverride(t *testing.T) {
 }
 
 func TestLoadComplexityOverrideSetsOneLimitKeepsOthersAndRejectsNegative(t *testing.T) {
+	t.Parallel()
 	for _, m := range allModes {
 		for key := range limitFields {
 			for _, value := range []int{-1, 0, 1, readmeLimits[key][m] + 1} {
@@ -236,6 +248,7 @@ func checkLimitOverride(t *testing.T, m config.Mode, key string, value int) {
 }
 
 func TestLoadCarriesEveryFileFieldAndRootsExcludesAtConfigDir(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeFile(t, dir, filepath.Join("conf", config.FileName), `
 mode = "strict"
@@ -313,6 +326,7 @@ func TestLoadWithoutFileUsesDefaultsRootedAtAbsoluteWorkingDirectory(t *testing.
 }
 
 func TestLoadEmptyFileEqualsDefaultsWithPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeFile(t, dir, filepath.Join("sub", config.FileName), "")
 	cfg, err := config.Load(path, dir, "")
@@ -326,6 +340,7 @@ func TestLoadEmptyFileEqualsDefaultsWithPath(t *testing.T) {
 }
 
 func TestLoadRunTestsDefaultsToTrue(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		toml string
 		want bool
@@ -345,6 +360,7 @@ func TestLoadRunTestsDefaultsToTrue(t *testing.T) {
 }
 
 func TestLoadAcceptsExcludeWithExactlyOneFieldSet(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		toml string
 		want config.Exclude

@@ -33,6 +33,7 @@ func mainWithBrokenStdout(t *testing.T, args ...string) (code int, stderr string
 }
 
 func TestVersionStdoutWriteFailureExitsInternalWithOneLine(t *testing.T) {
+	t.Parallel()
 	code, stderr := mainWithBrokenStdout(t, "version")
 	if code != exitInternal {
 		t.Errorf("exit code = %d, want %d", code, exitInternal)
@@ -43,6 +44,7 @@ func TestVersionStdoutWriteFailureExitsInternalWithOneLine(t *testing.T) {
 }
 
 func TestRulesStdoutWriteFailureExitsInternalWithOneLine(t *testing.T) {
+	t.Parallel()
 	code, stderr := mainWithBrokenStdout(t, "rules")
 	if code != exitInternal {
 		t.Errorf("exit code = %d, want %d", code, exitInternal)
@@ -53,6 +55,7 @@ func TestRulesStdoutWriteFailureExitsInternalWithOneLine(t *testing.T) {
 }
 
 func TestVersionWorkingStdoutExitsCleanWithSilentStderr(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	code := cli.Main(t.Context(), []string{"version"}, &stdout, &stderr)
 	if code != 0 {
@@ -67,6 +70,7 @@ func TestVersionWorkingStdoutExitsCleanWithSilentStderr(t *testing.T) {
 }
 
 func TestRunFindingsOnFullStdoutExitsInternalWithOneLine(t *testing.T) {
+	t.Parallel()
 	devFull, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
 	if err != nil {
 		t.Skipf("open /dev/full: %v", err)

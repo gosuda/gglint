@@ -34,6 +34,7 @@ func populated(m config.Mode) config.Config {
 }
 
 func TestDecodeInvertsEncodeUpToSortedSlices(t *testing.T) {
+	t.Parallel()
 	for _, m := range allModes {
 		want := populated(m)
 		want.Enable = []string{"chanblock", "dupl", "goconst"}
@@ -60,6 +61,7 @@ func shuffled(r *rand.Rand, s []string) []string {
 }
 
 func TestEncodeIsInvariantUnderSliceOrder(t *testing.T) {
+	t.Parallel()
 	property := func(enable, disable, tags []string, seed uint64) bool {
 		r := rand.New(rand.NewPCG(seed, seed))
 		c := config.Config{Mode: config.Strict, Enable: enable, Disable: disable, BuildTags: tags}
@@ -73,6 +75,7 @@ func TestEncodeIsInvariantUnderSliceOrder(t *testing.T) {
 }
 
 func TestDecodeRejectsUnknownMembersInvalidValuesAndBadExcludes(t *testing.T) {
+	t.Parallel()
 	if _, err := config.Decode([]byte(`{"mode":"strict","excludes":[{"text":"x"}]}`)); err != nil {
 		t.Fatalf("Decode rejected a valid document: %v", err)
 	}

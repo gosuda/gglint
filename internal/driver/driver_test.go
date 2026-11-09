@@ -57,7 +57,7 @@ func vet(t *testing.T, run goRun) ([]finding.Finding, error) {
 	return driver.Vet(t.Context(), invocation(t.TempDir()))
 }
 
-func TestVetMapsEachDiagnosticFieldOntoTheFinding(t *testing.T) {
+func TestVetMapsEachDiagnosticFieldOntoTheFinding(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
 	cases := []struct {
 		name, diagnostic string
 		want             finding.Finding
@@ -96,7 +96,7 @@ func TestVetMapsEachDiagnosticFieldOntoTheFinding(t *testing.T) {
 			}},
 		},
 	}
-	for _, c := range cases {
+	for _, c := range cases { //nolint:paralleltest // subtests set PATH through installGo
 		t.Run(c.name, func(t *testing.T) {
 			got, err := vet(t, goRun{stdout: `{"m/a":{"modernize_forvar":[` + c.diagnostic + `]}}` + "\n"})
 			if err != nil {
@@ -114,7 +114,7 @@ func pos(path string, line, column int) finding.Position {
 	return finding.Position{Path: path, Line: line, Column: column}
 }
 
-func TestVetCollectsEveryPackageAndAnalyzerInTheStream(t *testing.T) {
+func TestVetCollectsEveryPackageAndAnalyzerInTheStream(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
 	stream := `{"m/a":{"printf":[{"posn":"/w/a.go:1:1","message":"a1"}],"errcheck":[{"posn":"/w/a.go:2:1","message":"a2"}]}}` + "\n" +
 		`{"m/b":{"printf":[{"posn":"/w/b.go:1:1","message":"b1"},{"posn":"/w/b.go:2:1","message":"b2"}]}}` + "\n"
 	got, err := vet(t, goRun{stdout: stream})
@@ -131,8 +131,8 @@ func TestVetCollectsEveryPackageAndAnalyzerInTheStream(t *testing.T) {
 	}
 }
 
-func TestVetCleanOutputHasNoFindingsAndNoError(t *testing.T) {
-	for _, stdout := range []string{"", "{}\n", `{"m/a":{}}`, `{"m/a":{"printf":[]}}` + "\n" + `{"m/b":{"errcheck":[]}}`} {
+func TestVetCleanOutputHasNoFindingsAndNoError(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
+	for _, stdout := range []string{"", "{}\n", `{"m/a":{}}`, `{"m/a":{"printf":[]}}` + "\n" + `{"m/b":{"errcheck":[]}}`} { //nolint:paralleltest // subtests set PATH through installGo
 		t.Run(strconv.Quote(stdout), func(t *testing.T) {
 			got, err := vet(t, goRun{stdout: stdout, stderr: "go: downloading example.com/x v1.0.0\n"})
 			if err != nil || len(got) != 0 {
@@ -142,14 +142,14 @@ func TestVetCleanOutputHasNoFindingsAndNoError(t *testing.T) {
 	}
 }
 
-func TestVetAnalyzerErrorObjectIsInternalError(t *testing.T) {
+func TestVetAnalyzerErrorObjectIsInternalError(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
 	const failure = `"errcheck":{"error":"boom"}`
 	cases := map[string]string{
 		"alone":                          `{"m/z":{` + failure + `}}`,
 		"after another package's output": `{"m/a":{"printf":[{"posn":"/w/a.go:1:1","message":"m"}]}}` + "\n" + `{"m/z":{` + failure + `}}`,
 		"beside a diagnostic analyzer":   `{"m/z":{"printf":[{"posn":"/w/a.go:1:1","message":"m"}],` + failure + `}}`,
 	}
-	for name, stdout := range cases {
+	for name, stdout := range cases { //nolint:paralleltest // subtests set PATH through installGo
 		t.Run(name, func(t *testing.T) {
 			got, err := vet(t, goRun{stdout: stdout})
 			if want := "internal: m/z: errcheck: boom"; err == nil || err.Error() != want {
@@ -162,8 +162,8 @@ func TestVetAnalyzerErrorObjectIsInternalError(t *testing.T) {
 	}
 }
 
-func TestVetMalformedStdoutIsLoadError(t *testing.T) {
-	for _, stdout := range []string{
+func TestVetMalformedStdoutIsLoadError(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
+	for _, stdout := range []string{ //nolint:paralleltest // subtests set PATH through installGo
 		`{"m/a":`,
 		`[1]`,
 		`{} trailing`,
@@ -183,7 +183,7 @@ func TestVetMalformedStdoutIsLoadError(t *testing.T) {
 	}
 }
 
-func TestVetTypecheckLineGrammar(t *testing.T) {
+func TestVetTypecheckLineGrammar(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
 	work := t.TempDir()
 	typecheck := func(path string, line, column int, message string) *finding.Finding {
 		return &finding.Finding{Rule: finding.TypecheckRule, Message: message, Pos: pos(path, line, column)}
@@ -207,7 +207,7 @@ func TestVetTypecheckLineGrammar(t *testing.T) {
 		{"a.go:1:2:", nil},
 		{"go: no Go files in /w", nil},
 	}
-	for _, c := range cases {
+	for _, c := range cases { //nolint:paralleltest // subtests set PATH through installGo
 		t.Run(c.line, func(t *testing.T) {
 			stderr := "# m/a\n" + c.line + "\n"
 			installGo(t, goRun{stderr: stderr, code: 1})
@@ -228,7 +228,7 @@ func TestVetTypecheckLineGrammar(t *testing.T) {
 	}
 }
 
-func TestVetFailureKeepsAnalyzerFindingsBesideTypecheck(t *testing.T) {
+func TestVetFailureKeepsAnalyzerFindingsBesideTypecheck(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
 	got, err := vet(t, goRun{
 		stdout: `{"m/b":{"printf":[{"posn":"/w/b.go:1:1","message":"bad verb"}]}}`,
 		stderr: "# m/a\n/w/a.go:4:2: undefined: x\n",
@@ -247,7 +247,7 @@ func TestVetFailureKeepsAnalyzerFindingsBesideTypecheck(t *testing.T) {
 	}
 }
 
-func TestGoCommandLine(t *testing.T) {
+func TestGoCommandLine(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
 	cases := []struct {
 		name      string
 		fix       bool
@@ -259,7 +259,7 @@ func TestGoCommandLine(t *testing.T) {
 		{"fix", true, nil, []string{"-config=/cache/config.json", "-fix", "-vettool=/opt/gglint"}},
 		{"fix with tags", true, []string{"integration"}, []string{"-config=/cache/config.json", "-fix", "-tags=integration", "-vettool=/opt/gglint"}},
 	}
-	for _, c := range cases {
+	for _, c := range cases { //nolint:paralleltest // subtests set PATH through installGo
 		t.Run(c.name, func(t *testing.T) {
 			dir := installGo(t, goRun{})
 			inv := invocation(t.TempDir())
@@ -302,7 +302,7 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-func TestFixErrorClassification(t *testing.T) {
+func TestFixErrorClassification(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
 	cases := []struct {
 		name    string
 		run     goRun
@@ -312,7 +312,7 @@ func TestFixErrorClassification(t *testing.T) {
 		{"failure with a source position", goRun{stderr: "# m/a\n./a.go:1:2: undefined: x\n", code: 1}, "<nil>"},
 		{"failure without a source position", goRun{stderr: "\ngo: go.mod file not found\n\n", code: 1}, "load: go: go.mod file not found"},
 	}
-	for _, c := range cases {
+	for _, c := range cases { //nolint:paralleltest // subtests set PATH through installGo
 		t.Run(c.name, func(t *testing.T) {
 			installGo(t, c.run)
 			err := driver.Fix(t.Context(), invocation(t.TempDir()))
@@ -334,7 +334,7 @@ func TestMissingGoCommandIsLoadError(t *testing.T) {
 	}
 }
 
-func TestCanceledContextIsReportedAsCancellation(t *testing.T) {
+func TestCanceledContextIsReportedAsCancellation(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
 	installGo(t, goRun{})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

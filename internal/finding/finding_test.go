@@ -42,6 +42,7 @@ func keys(fs []finding.Finding) []string {
 }
 
 func TestProcessPrintsEveryPathRelativeToWorkDir(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"/w/repo/pkg/x.go": "pkg/x.go",
 		"/w/repo/x.go":     "x.go",
@@ -51,6 +52,7 @@ func TestProcessPrintsEveryPathRelativeToWorkDir(t *testing.T) {
 	}
 	for in, want := range cases {
 		t.Run(in, func(t *testing.T) {
+			t.Parallel()
 			f := finding.Finding{
 				Rule: "a", Message: "m", Pos: at(abs(in), 3, 2), End: at(abs(in), 3, 9),
 				Related: []finding.Related{{Position: at(abs(in), 1, 1), Message: "r"}},
@@ -65,8 +67,10 @@ func TestProcessPrintsEveryPathRelativeToWorkDir(t *testing.T) {
 }
 
 func TestProcessMissingColumnPrintsOne(t *testing.T) {
+	t.Parallel()
 	for column, want := range map[int]int{0: 1, 1: 1, 2: 2, 17: 17} {
 		t.Run(strconv.Itoa(column), func(t *testing.T) {
+			t.Parallel()
 			f := finding.Finding{
 				Rule: "a", Message: "m", Pos: at(abs("/w/repo/a.go"), 4, column),
 				Related: []finding.Related{{Position: at(abs("/w/repo/a.go"), 2, column), Message: "r"}},
@@ -80,6 +84,7 @@ func TestProcessMissingColumnPrintsOne(t *testing.T) {
 }
 
 func TestProcessTestsFalseDropsExactlyTestFileFindings(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		rule, path, related string
 		dropped             bool
@@ -98,6 +103,7 @@ func TestProcessTestsFalseDropsExactlyTestFileFindings(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.rule+" "+c.path+" "+c.related, func(t *testing.T) {
+			t.Parallel()
 			fs := []finding.Finding{{
 				Rule: c.rule, Message: "m", Pos: at(abs(c.path), 1, 1),
 				Related: []finding.Related{{Position: at(abs(c.related), 1, 1), Message: "r"}},
@@ -113,6 +119,7 @@ func TestProcessTestsFalseDropsExactlyTestFileFindings(t *testing.T) {
 }
 
 func TestProcessDedupeKeyIsTokenPathLineColumnMessage(t *testing.T) {
+	t.Parallel()
 	base := finding.Finding{Rule: "a", Message: "m", Pos: at(abs("/w/repo/a.go"), 3, 1)}
 	other := finding.Finding{Rule: "z", Message: "z", Pos: at(abs("/w/repo/z.go"), 1, 1)}
 	cases := []struct {
@@ -136,6 +143,7 @@ func TestProcessDedupeKeyIsTokenPathLineColumnMessage(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			twin := base
 			c.mutate(&twin)
 			out := process(t, []finding.Finding{base, other, twin, base}, finding.Options{WorkDir: work, Tests: true})
@@ -147,6 +155,7 @@ func TestProcessDedupeKeyIsTokenPathLineColumnMessage(t *testing.T) {
 }
 
 func TestProcessSortIsPathLineColumnTokenMessageForAnyInputOrder(t *testing.T) {
+	t.Parallel()
 	root := abs("/w/m")
 	in := []finding.Finding{
 		{Rule: "a", Message: "m", Pos: at(abs("/w/m/a.go"), 10, 10)},

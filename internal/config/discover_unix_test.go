@@ -11,6 +11,7 @@ import (
 )
 
 func TestDiscoverStopsAtSymlinkToWorldWritableDir(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeFile(t, root, config.FileName, "")
 	shared := filepath.Join(root, "real", "shared")

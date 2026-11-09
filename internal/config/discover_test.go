@@ -32,8 +32,10 @@ func discoverCases() []discoverCase {
 }
 
 func TestDiscoverReturnsNearestConfigUpToAndIncludingGitDir(t *testing.T) {
+	t.Parallel()
 	for _, c := range discoverCases() {
 		t.Run(fmt.Sprintf("configs=%04b/git=%d/%s", c.configs, c.git, c.gitKind), func(t *testing.T) {
+			t.Parallel()
 			root := t.TempDir()
 			levels := []string{filepath.Join(root, "a", "b", "c"), filepath.Join(root, "a", "b"), filepath.Join(root, "a"), root}
 			want := buildLevels(t, levels, c)
@@ -75,6 +77,7 @@ func markGit(t *testing.T, dir, kind string) {
 }
 
 func TestDiscoverIgnoresConfigsBelowAndBesideWorkingDirectory(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	markGit(t, root, "dir")
 	wd := filepath.Join(root, "a")
@@ -101,6 +104,7 @@ func makeWorldWritable(t *testing.T, dir string) {
 }
 
 func TestDiscoverStopsAtAnyWorldWritableDirIncludingOwnOnes(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeFile(t, root, config.FileName, "")
 	shared := filepath.Join(root, "shared")
@@ -108,6 +112,7 @@ func TestDiscoverStopsAtAnyWorldWritableDirIncludingOwnOnes(t *testing.T) {
 	makeWorldWritable(t, shared)
 	for name, wd := range sharedWorkDirs(shared) {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			got, err := config.Discover(wd)
 			if err != nil || got != "" {
 				t.Fatalf("Discover = %q, %v; want none", got, err)
@@ -117,6 +122,7 @@ func TestDiscoverStopsAtAnyWorldWritableDirIncludingOwnOnes(t *testing.T) {
 }
 
 func TestDiscoverReturnsConfigBelowAWorldWritableAncestor(t *testing.T) {
+	t.Parallel()
 	shared := filepath.Join(t.TempDir(), "shared")
 	makeWorldWritable(t, shared)
 	writeFile(t, shared, config.FileName, "")
@@ -128,6 +134,7 @@ func TestDiscoverReturnsConfigBelowAWorldWritableAncestor(t *testing.T) {
 }
 
 func TestDiscoverWalksUpFromMissingWorkingDirectory(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	want := writeFile(t, root, config.FileName, "")
 	got, err := config.Discover(filepath.Join(root, "missing", "deeper"))

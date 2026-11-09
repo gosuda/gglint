@@ -28,6 +28,7 @@ func main() { missing() }
 `
 
 func TestLineDirectiveClaimingGOROOTDoesNotHideUnresolvedLinkname(t *testing.T) {
+	t.Parallel()
 	gorootSrc, err := filepath.EvalSymlinks(filepath.Join(build.Default.GOROOT, "src"))
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +43,7 @@ func TestLineDirectiveClaimingGOROOTDoesNotHideUnresolvedLinkname(t *testing.T) 
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			messages := rootDiagnosticMessages(t, tc.header+unresolvedRuntimeLinknameMain)
 			if !slices.Contains(messages, unresolvedRuntimeLinkname) {
 				t.Errorf("diagnostics = %q, want one equal to %q", messages, unresolvedRuntimeLinkname)

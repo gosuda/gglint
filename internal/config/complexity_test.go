@@ -8,6 +8,7 @@ import (
 )
 
 func TestComplexityForEqualsReadmeTableForEveryMetric(t *testing.T) {
+	t.Parallel()
 	if n := reflect.TypeFor[config.Complexity]().NumField(); n != len(readmeLimits) || n != len(limitFields) {
 		t.Fatalf("Complexity has %d limits, README documents %d", n, len(readmeLimits))
 	}
@@ -26,6 +27,7 @@ func noLooser(tight, loose int) bool {
 }
 
 func TestComplexityLimitsNeverLoosenAsModeRises(t *testing.T) {
+	t.Parallel()
 	pairs := [][2]config.Mode{{config.Basic, config.Standard}, {config.Standard, config.Strict}, {config.Basic, config.Strict}}
 	for key, field := range limitFields {
 		for _, pair := range pairs {
