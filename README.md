@@ -1,4 +1,4 @@
-# gglint
+# gglint: Go needs Great LINTer.
 
 gglint is a Go linter that ships as one binary with one rule catalog. It runs every check through `go vet -vettool`, so the go command owns the package graph, parallelism, analysis facts, and the cache. The go command caches each package's results keyed by the gglint version, the vet flags, and the package inputs, so a second run over unchanged code reuses the cached results. The resolved configuration is part of the vet flags, so a change to `gglint.toml` takes effect on the next run. gglint itself selects the rules, filters the findings, and prints the report. You choose how much it checks with one of three nested modes: `basic`, `standard` (the default), or `strict`.
 
