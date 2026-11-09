@@ -62,8 +62,10 @@ func (f *flow) call(call *ast.CallExpr) {
 	}
 	f.operand(call.Fun)
 	invoked := f.c.invokes[f.c.callee(call)]
+	_, _, args := f.c.callOperands(call)
+	skip := len(call.Args) - len(args)
 	for i, arg := range call.Args {
-		if invoked[i] {
+		if invoked[i-skip] {
 			f.operand(arg)
 		} else {
 			f.walk(arg)

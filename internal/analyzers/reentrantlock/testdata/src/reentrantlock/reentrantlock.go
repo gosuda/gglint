@@ -291,3 +291,38 @@ func methodExprParameter() {
 	locker.lock(locker{}, &other)
 	locker.lock(locker{}, &mu) // want `call to lock locks mu while it is already held`
 }
+
+func (locker) with(mu *sync.Mutex, fn func()) {
+	mu.Lock()
+	defer mu.Unlock()
+	fn()
+}
+
+func (locker) run(fn func()) {
+	fn()
+}
+
+func methodExprHeldCallback() {
+	var mu sync.Mutex
+	locker.with(locker{}, &mu, func() {
+		mu.Lock() // want `mu is locked again while already held`
+		mu.Unlock()
+	})
+}
+
+func methodExprInvokedMethodValue() {
+	var c counter
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	locker.run(locker{}, c.inc) // want `call to run locks c\.mu while it is already held`
+}
+
+func methodExprInvokedLiteral() {
+	var mu sync.Mutex
+	mu.Lock()
+	defer mu.Unlock()
+	locker.run(locker{}, func() {
+		mu.Lock() // want `mu is locked again while already held`
+		mu.Unlock()
+	})
+}

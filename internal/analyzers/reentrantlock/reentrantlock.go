@@ -284,11 +284,12 @@ func (c *checker) callKeys(fn *types.Func, call *ast.CallExpr) []lockKey {
 
 func (c *checker) callbackKeys(fn *types.Func, call *ast.CallExpr) []lockKey {
 	var keys []lockKey
+	_, _, args := c.callOperands(call)
 	for i := range c.invokes[fn] {
-		if i >= len(call.Args) {
+		if i >= len(args) {
 			continue
 		}
-		target, b := c.namedCallback(call.Args[i])
+		target, b := c.namedCallback(args[i])
 		for k := range c.summaries[target] {
 			if bk := b.bindKey(k); bk.root != nil {
 				keys = append(keys, bk)
@@ -353,10 +354,11 @@ func (c *checker) heldFlow(key lockKey, b binding) *flow {
 
 func (c *checker) checkHeldCallbacks(call *ast.CallExpr) {
 	fn := c.callee(call)
+	_, _, args := c.callOperands(call)
 	for _, h := range c.heldCalls[fn] {
 		key := c.substitute(h.key, call, fn)
-		if key.root != nil && h.param < len(call.Args) {
-			c.checkCallback(key, call.Args[h.param])
+		if key.root != nil && h.param < len(args) {
+			c.checkCallback(key, args[h.param])
 		}
 	}
 }
