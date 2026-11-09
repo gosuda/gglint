@@ -33,7 +33,7 @@ synchronously and runs the call in a new goroutine. A defer statement
 evaluates its function operand and arguments synchronously and runs the call
 at function exit; within a held region that reaches the end of its statement
 list, the call runs under the mutex unless a later deferred Unlock of the
-same mutex runs first. A function literal that
+same mutex, written directly in that region, runs first. A function literal that
 is neither invoked directly nor passed to a parameter its callee invokes is
 skipped. Two receivers match when they name the same variable through the
 same chain of field selections, ignoring address-of and dereference; any
@@ -161,22 +161,12 @@ func (c *checker) unlocks(s ast.Stmt, key lockKey) bool {
 }
 
 func (c *checker) deferredUnlockAfter(region []ast.Stmt, key lockKey, d *ast.DeferStmt) bool {
-	found := false
 	for _, s := range region {
-		ast.Inspect(s, func(n ast.Node) bool {
-			switch n := n.(type) {
-			case *ast.GoStmt, *ast.FuncLit:
-				return false
-			case *ast.DeferStmt:
-				found = found || d.Pos() < n.Pos() && c.mutexKey(n.Call, "Unlock") == key
-			}
-			return !found
-		})
-		if found {
-			break
+		if u, ok := s.(*ast.DeferStmt); ok && d.Pos() < u.Pos() && c.mutexKey(u.Call, "Unlock") == key {
+			return true
 		}
 	}
-	return found
+	return false
 }
 
 func (c *checker) findHeldCalls() map[*types.Func][]heldCall {

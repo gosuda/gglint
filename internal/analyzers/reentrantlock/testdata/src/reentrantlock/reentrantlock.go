@@ -135,6 +135,15 @@ func deferredUnlockBeforeHelper() {
 	defer helperLocks(&mu) // want `call to helperLocks locks mu while it is already held`
 }
 
+func conditionalDeferredUnlockAfterHelper(cond bool) {
+	var mu sync.Mutex
+	mu.Lock()
+	defer helperLocks(&mu) // want `call to helperLocks locks mu while it is already held`
+	if cond {
+		defer mu.Unlock()
+	}
+}
+
 func synchronousUnlockEndsDeferredHelperRegion() {
 	var mu sync.Mutex
 	mu.Lock()
