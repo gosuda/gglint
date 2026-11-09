@@ -247,3 +247,47 @@ func deferredCallbackBeforeUnlock() {
 		mu.Unlock()
 	})
 }
+
+func methodExprRelock() {
+	var mu sync.Mutex
+	mu.Lock()
+	defer mu.Unlock()
+	(*sync.Mutex).Lock(&mu) // want `mu is locked again while already held`
+}
+
+func methodExprUnlockBetween() {
+	var mu sync.Mutex
+	(*sync.Mutex).Lock(&mu)
+	(*sync.Mutex).Unlock(&mu)
+	mu.Lock()
+	mu.Unlock()
+}
+
+func methodExprEmbeddedRelock() {
+	var g guarded
+	g.Lock()
+	defer g.Unlock()
+	(*guarded).Lock(&g) // want `g\.Mutex is locked again while already held`
+}
+
+func methodExprPromotedMethod() {
+	var w wrapped
+	w.counter.mu.Lock()
+	defer w.counter.mu.Unlock()
+	(*wrapped).inc(&w) // want `call to inc locks w\.counter\.mu while it is already held`
+}
+
+type locker struct{}
+
+func (locker) lock(mu *sync.Mutex) {
+	mu.Lock()
+	mu.Unlock()
+}
+
+func methodExprParameter() {
+	var mu, other sync.Mutex
+	mu.Lock()
+	defer mu.Unlock()
+	locker.lock(locker{}, &other)
+	locker.lock(locker{}, &mu) // want `call to lock locks mu while it is already held`
+}

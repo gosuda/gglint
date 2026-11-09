@@ -83,8 +83,8 @@ func (c *checker) keyStep(e ast.Expr) (inner ast.Expr, field string) {
 	return nil, ""
 }
 
-func (c *checker) recvKey(sel *ast.SelectorExpr) lockKey {
-	k := c.keyOf(sel.X)
+func (c *checker) recvKey(sel *ast.SelectorExpr, recv ast.Expr) lockKey {
+	k := c.keyOf(recv)
 	s := c.pass.TypesInfo.Selections[sel]
 	if k.root == nil || s == nil {
 		return k
@@ -111,11 +111,23 @@ func deref(t types.Type) types.Type {
 }
 
 func (c *checker) mutexKey(call *ast.CallExpr, method string) lockKey {
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || !isMutexMethod(typeutil.StaticCallee(c.pass.TypesInfo, call), method) {
+	sel, recv, _ := c.callOperands(call)
+	if sel == nil || !isMutexMethod(typeutil.StaticCallee(c.pass.TypesInfo, call), method) {
 		return lockKey{}
 	}
-	return c.recvKey(sel)
+	return c.recvKey(sel, recv)
+}
+
+func (c *checker) callOperands(call *ast.CallExpr) (sel *ast.SelectorExpr, recv ast.Expr, args []ast.Expr) {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return nil, nil, call.Args
+	}
+	s := c.pass.TypesInfo.Selections[sel]
+	if s != nil && s.Kind() == types.MethodExpr && len(call.Args) > 0 {
+		return sel, call.Args[0], call.Args[1:]
+	}
+	return sel, sel.X, call.Args
 }
 
 func isMutexMethod(fn *types.Func, method string) bool {
@@ -150,22 +162,22 @@ func (c *checker) substitute(k lockKey, call *ast.CallExpr, fn *types.Func) lock
 }
 
 func (c *checker) argumentKey(root types.Object, call *ast.CallExpr, sig *types.Signature) (lockKey, bool) {
+	sel, recv, args := c.callOperands(call)
 	if r := sig.Recv(); r != nil && r == root {
-		sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-		if !ok {
+		if sel == nil {
 			return lockKey{}, true
 		}
-		return c.recvKey(sel), true
+		return c.recvKey(sel, recv), true
 	}
 	for i := range sig.Params().Len() {
 		p := sig.Params().At(i)
 		if p != root {
 			continue
 		}
-		if _, ptr := p.Type().Underlying().(*types.Pointer); i >= len(call.Args) || !ptr {
+		if _, ptr := p.Type().Underlying().(*types.Pointer); i >= len(args) || !ptr {
 			return lockKey{}, true
 		}
-		return c.keyOf(call.Args[i]), true
+		return c.keyOf(args[i]), true
 	}
 	return lockKey{}, false
 }

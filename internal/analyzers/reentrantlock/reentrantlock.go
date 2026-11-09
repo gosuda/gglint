@@ -326,7 +326,7 @@ func (c *checker) receiverBinding(fn *types.Func, sel *ast.SelectorExpr) map[typ
 	if sel == nil || r == nil {
 		return nil
 	}
-	k := c.recvKey(sel)
+	k := c.recvKey(sel, sel.X)
 	if k.root == nil {
 		return nil
 	}
