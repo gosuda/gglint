@@ -5,6 +5,7 @@ run:
   go: "1.27"
   tests: true
   modules-download-mode: readonly
+  allow-parallel-runners: true
 
 linters:
   default: none
@@ -48,6 +49,7 @@ linters:
     - nilnil
     - noctx
     - nolintlint
+    - paralleltest
     - perfsprint
     - predeclared
     - reassign
