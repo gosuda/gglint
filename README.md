@@ -139,7 +139,7 @@ gglint selects every rule whose mode is at or below the configured mode, adds `e
 ### How gglint finds the file
 
 1. If you pass `-config PATH`, gglint uses that file.
-2. Otherwise it looks for `gglint.toml` in the working directory, then in each parent directory. It stops after the first directory that contains `.git`, and checks that directory too. Without a `.git` directory it walks up to the filesystem root. Your home directory gets no special treatment. It stops before checking any world-writable directory, such as `/tmp`, because any local user can create files there, and uses no file from there or above.
+2. Otherwise it looks for `gglint.toml` in the working directory, then in each parent directory. It stops after the first directory that contains `.git`, and checks that directory too. Without a `.git` directory it walks up to the filesystem root. Your home directory gets no special treatment. It stops before checking any world-writable directory, such as `/tmp`, because any local user can create files there, and uses no file from there or above. The world-writable check applies on Unix-like systems and is skipped on Windows, where permission bits do not reflect directory access.
 3. If no file is found, gglint uses the defaults: mode `standard`, tests reported.
 
 `[[exclude]]` paths match the slash-separated path relative to the directory of the config file, or to the working directory when there is no file.
