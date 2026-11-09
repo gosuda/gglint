@@ -422,10 +422,7 @@ func (c checker) containerFlow(e ast.Expr, p part) flow {
 
 func (c checker) literalFlow(elem inspector.Cursor) flow {
 	lit, p := c.literalPart(elem)
-	if v := c.boundVar(lit); v != nil {
-		return c.trackedFlow(v, p)
-	}
-	return c.flowOf(lit)
+	return c.useFlow(unparenParent(lit), p)
 }
 
 func (c checker) literalPart(elem inspector.Cursor) (inspector.Cursor, part) {
@@ -535,6 +532,9 @@ func (c checker) trackedFlow(obj types.Object, p part) flow {
 }
 
 func (c checker) useFlow(use inspector.Cursor, p part) flow {
+	if next, ok := pointerStep(use); ok {
+		return c.useFlow(unparenParent(next), p)
+	}
 	kind := use.ParentEdgeKind()
 	if p.elem && kind == edge.IndexExpr_X {
 		return c.elemReadFlow(use.Parent(), p.index)
@@ -546,6 +546,17 @@ func (c checker) useFlow(use inspector.Cursor, p part) flow {
 		return c.trackedFlow(v, p)
 	}
 	return c.flowOf(use)
+}
+
+func pointerStep(use inspector.Cursor) (inspector.Cursor, bool) {
+	kind := use.ParentEdgeKind()
+	if kind == edge.StarExpr_X {
+		return use.Parent(), true
+	}
+	if kind == edge.UnaryExpr_X && inspection.As[*ast.UnaryExpr](use.Parent().Node()).Op == token.AND {
+		return use.Parent(), true
+	}
+	return use, false
 }
 
 func (c checker) elemReadFlow(read inspector.Cursor, stored string) flow {

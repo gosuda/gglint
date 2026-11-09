@@ -586,3 +586,39 @@ func literalOtherElemAliasReturned() []byte {
 	alias := parts
 	return alias[1]
 }
+
+func temporaryLiteralFieldReturned() []byte {
+	var buf [1 << 20]byte
+	return (struct{ b []byte }{buf[:1]}).b // want `subslice keeps a 1048576-byte backing array alive`
+}
+
+func temporaryLiteralSiblingFieldReturned() int {
+	var buf [1 << 20]byte
+	return (struct {
+		b []byte
+		n int
+	}{b: buf[:1], n: 1}).n
+}
+
+func temporaryLiteralElemReturned() []byte {
+	var buf [1 << 20]byte
+	return [][]byte{buf[:1], nil}[0] // want `subslice keeps a 1048576-byte backing array alive`
+}
+
+func temporaryLiteralOtherElemReturned() []byte {
+	var buf [1 << 20]byte
+	return [][]byte{buf[:1], nil}[1]
+}
+
+func pointerLiteralFieldReturned() []byte {
+	var buf [1 << 20]byte
+	h := &struct{ b []byte }{buf[:1]} // want `subslice keeps a 1048576-byte backing array alive`
+	return h.b
+}
+
+func derefFieldReturned() []byte {
+	var buf [1 << 20]byte
+	h := struct{ b []byte }{buf[:1]} // want `subslice keeps a 1048576-byte backing array alive`
+	p := &h
+	return (*p).b
+}
