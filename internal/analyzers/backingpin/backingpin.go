@@ -304,6 +304,8 @@ func (c checker) flowOf(cur inspector.Cursor) flow {
 		return c.specFlow(inspection.As[*ast.ValueSpec](cur.Parent().Node()), index)
 	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value:
 		return c.literalFlow(cur)
+	case edge.KeyValueExpr_Key:
+		return c.flowOf(cur.Parent().Parent())
 	case edge.UnaryExpr_X:
 		return c.addressFlow(cur.Parent())
 	case edge.CallExpr_Args:

@@ -537,3 +537,20 @@ func literalOtherElemReturned() []byte {
 	parts := [][]byte{buf[:1], nil}
 	return parts[1]
 }
+
+func substringMapKeyReturned() map[string]int {
+	s := string(make([]byte, 1<<17))
+	return map[string]int{s[:1]: 1} // want `substring keeps a 131072-byte backing string alive`
+}
+
+func substringMapKeyBoundReturned() map[string]int {
+	s := string(make([]byte, 1<<17))
+	m := map[string]int{s[:1]: 1} // want `substring keeps a 131072-byte backing string alive`
+	return m
+}
+
+func substringMapKeyLookup() int {
+	s := string(make([]byte, 1<<17))
+	m := map[string]int{s[:1]: 1}
+	return m["x"]
+}
