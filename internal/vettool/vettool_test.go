@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -44,6 +45,7 @@ func nameCounts(analyzers []*analysis.Analyzer) map[string]int {
 }
 
 func TestBuildFactsOnlyUnitReturnsOnlyFactProducers(t *testing.T) {
+	t.Parallel()
 	got := buildUnit(t, config.Config{Mode: config.Strict}, `{"VetxOnly":true}`)
 	for _, a := range got {
 		if len(a.FactTypes) == 0 {
@@ -61,7 +63,7 @@ func TestBuildFactsOnlyUnitReturnsOnlyFactProducers(t *testing.T) {
 			t.Errorf("facts-only unit runs non-producer %s", absent)
 		}
 	}
-	if slices.Contains(got, nilness.Analyzer) {
+	if slices.ContainsFunc(got, func(a *analysis.Analyzer) bool { return a.URL == nilness.Analyzer.URL }) {
 		t.Errorf("facts-only unit runs the go/analysis nilness pass, which produces no facts")
 	}
 	for _, present := range []string{"printf", "checklocks"} {
@@ -75,6 +77,7 @@ func TestBuildFactsOnlyUnitReturnsOnlyFactProducers(t *testing.T) {
 }
 
 func TestBuildReportingUnitAddsNolint(t *testing.T) {
+	t.Parallel()
 	got := buildUnit(t, config.Config{Mode: config.Strict}, `{"VetxOnly":false}`)
 	counts := nameCounts(got)
 	for _, present := range []string{rules.NolintName, "gosec", "unparam", "printf"} {
@@ -108,7 +111,7 @@ func captureStderr(t *testing.T, run func()) string {
 	return string(out)
 }
 
-func TestMainReportsMissingConfigAsInternalError(t *testing.T) {
+func TestMainReportsMissingConfigAsInternalError(t *testing.T) { //nolint:paralleltest // swaps os.Stderr and registers flag.CommandLine
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	unit := writeFile(t, "unit.cfg", []byte(`{"VetxOnly":false}`))
 	code := 0
@@ -135,6 +138,7 @@ type boomFact struct{}
 func (*boomFact) AFact() {}
 
 func TestReportPanicsTurnsPanicIntoError(t *testing.T) {
+	t.Parallel()
 	wrapped := reportPanics([]*analysis.Analyzer{panicking()})
 	_, err := wrapped[0].Run(&analysis.Pass{})
 	if err == nil {
@@ -152,12 +156,16 @@ func runPanics(a *analysis.Analyzer) (recovered any) {
 }
 
 func TestFactsOnlyUnitDoesNotRecoverPanics(t *testing.T) {
+	t.Parallel()
 	e := newTestEngine(t, config.Config{Mode: config.Standard})
 	boom := panicking()
-	rule := rules.Rule{Name: "boom", Build: func(config.Config) []*analysis.Analyzer { return []*analysis.Analyzer{boom} }}
+	rule := rules.Rule{Name: "boomrule", Build: func(config.Config) []*analysis.Analyzer { return []*analysis.Analyzer{boom} }}
 	got := e.factsOnly([]rules.Rule{rule})
-	if len(got) != 1 || got[0] != boom {
-		t.Fatalf("facts-only unit = %v, want only the boom producer", got)
+	if len(got) != 1 || got[0].Name != "boomrule" || got[0] == boom {
+		t.Fatalf("facts-only unit = %v, want one copy of the boom producer", got)
+	}
+	if boom.Name != "boom" || reflect.ValueOf(boom.Run).Pointer() != reflect.ValueOf(panicking().Run).Pointer() {
+		t.Fatalf("engine rewrote the shared boom analyzer: name %q", boom.Name)
 	}
 	if recovered := runPanics(got[0]); recovered != "boom" {
 		t.Fatalf("facts-only Run recovered the panic (got %v), want it to propagate", recovered)

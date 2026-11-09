@@ -67,21 +67,21 @@ func (e *engine) analyzers(selected []rules.Rule) []*analysis.Analyzer {
 		}
 		built := r.Build(e.cfg)
 		for _, a := range built {
-			e.adopt(r, a, len(built))
+			out = append(out, e.adopt(r, a, len(built)))
 		}
-		out = append(out, built...)
 	}
 	return out
 }
 
-func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) {
+func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) *analysis.Analyzer {
 	check := ""
 	if siblings > 1 {
 		check = a.Name
 	}
-	a.Name = rules.AnalyzerName(r, a, siblings)
+	wrapped := *a
+	wrapped.Name = rules.AnalyzerName(r, a, siblings)
 	run := a.Run
-	a.Run = func(pass *analysis.Pass) (any, error) {
+	wrapped.Run = func(pass *analysis.Pass) (any, error) {
 		filtered := *pass
 		filtered.ReadFile = func(name string) ([]byte, error) { return e.source(pass, name) }
 		filtered.Report = func(d analysis.Diagnostic) {
@@ -91,12 +91,15 @@ func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) {
 		}
 		return run(&filtered)
 	}
+	return &wrapped
 }
 
 func reportPanics(analyzers []*analysis.Analyzer) []*analysis.Analyzer {
-	for _, a := range analyzers {
+	out := make([]*analysis.Analyzer, len(analyzers))
+	for i, a := range analyzers {
+		wrapped := *a
 		run := a.Run
-		a.Run = func(pass *analysis.Pass) (result any, err error) {
+		wrapped.Run = func(pass *analysis.Pass) (result any, err error) {
 			defer func() {
 				if p := recover(); p != nil {
 					err = fmt.Errorf("panic: %v\n%s", p, debug.Stack())
@@ -104,8 +107,9 @@ func reportPanics(analyzers []*analysis.Analyzer) []*analysis.Analyzer {
 			}()
 			return run(pass)
 		}
+		out[i] = &wrapped
 	}
-	return analyzers
+	return out
 }
 
 func (e *engine) keep(pass *analysis.Pass, rule, check string, d analysis.Diagnostic) bool {

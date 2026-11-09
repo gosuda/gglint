@@ -2,6 +2,7 @@ package rules
 
 import (
 	"strconv"
+	"sync"
 
 	"golang.org/x/tools/go/analysis"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/gosuda/gglint/internal/analyzers/checklocks"
 	"github.com/gosuda/gglint/internal/config"
 )
+
+var checklocksRuns sync.Mutex
 
 func gvisorRules() []Rule {
 	return []Rule{
@@ -30,12 +33,12 @@ func gvisorRules() []Rule {
 }
 
 func buildChecklocks(cfg config.Config) []*analysis.Analyzer {
-	flags := map[string]string{
+	checklocksGlobal := globalAnalyzer{"checklocks", checklocks.Analyzer, &checklocksRuns}
+	return []*analysis.Analyzer{checklocksGlobal.build(map[string]string{
 		"atomic":   strconv.FormatBool(true),
 		"wrappers": strconv.FormatBool(true),
 		"inferred": strconv.FormatBool(cfg.Mode >= config.Strict),
-	}
-	return []*analysis.Analyzer{setFlags("checklocks", checklocks.Analyzer, flags)}
+	})}
 }
 
 func single(a *analysis.Analyzer) func(config.Config) []*analysis.Analyzer {

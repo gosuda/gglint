@@ -128,6 +128,7 @@ func readmeRuleTables(t *testing.T) map[string]documentedRule {
 }
 
 func TestCatalogNamesModesOriginsAndDocsMatchReadmeTables(t *testing.T) {
+	t.Parallel()
 	documented := readmeRuleTables(t)
 	seen := map[string]bool{}
 	for _, r := range rules.All() {
@@ -152,6 +153,7 @@ func TestCatalogNamesModesOriginsAndDocsMatchReadmeTables(t *testing.T) {
 }
 
 func TestSelectedRuleCountsPerModeMatchReadme(t *testing.T) {
+	t.Parallel()
 	re := regexp.MustCompile("The catalog has (\\d+) rules\\. `basic` runs (\\d+) of them, `standard` runs (\\d+), and `strict` runs all (\\d+)\\.")
 	m := re.FindStringSubmatch(readme(t))
 	if m == nil {
@@ -198,6 +200,7 @@ func readmeDroppedLinters(t *testing.T) []string {
 }
 
 func TestCatalogOmitsEveryDroppedOrRenamedGolangciLinter(t *testing.T) {
+	t.Parallel()
 	renamedOrFormatters := []string{"govet", "nolintlint", "gochecknoinits", "gci", "gofmt", "goimports", "golines", "swaggo"}
 	catalog := ruleNames(rules.All())
 	for _, name := range slices.Concat(readmeDroppedLinters(t), renamedOrFormatters) {
@@ -208,6 +211,7 @@ func TestCatalogOmitsEveryDroppedOrRenamedGolangciLinter(t *testing.T) {
 }
 
 func TestAllIsStrictlySortedByModeThenName(t *testing.T) {
+	t.Parallel()
 	all := rules.All()
 	for i := 1; i < len(all); i++ {
 		prev, cur := all[i-1], all[i]
@@ -218,6 +222,7 @@ func TestAllIsStrictlySortedByModeThenName(t *testing.T) {
 }
 
 func TestRuleDocsAreOneTabFreeLineOfAtMost120Bytes(t *testing.T) {
+	t.Parallel()
 	for _, r := range rules.All() {
 		switch {
 		case r.Doc == "":
@@ -231,6 +236,7 @@ func TestRuleDocsAreOneTabFreeLineOfAtMost120Bytes(t *testing.T) {
 }
 
 func TestBuildIsNilExactlyForDriverBuiltRules(t *testing.T) {
+	t.Parallel()
 	for _, r := range rules.All() {
 		driverBuilt := r.Name == rules.TypecheckName || r.Name == rules.NolintName
 		if (r.Build == nil) != driverBuilt {
@@ -273,6 +279,7 @@ func assertSelectionLaw(t *testing.T, cfg config.Config) {
 }
 
 func TestSelectIsModeClosurePlusEnableMinusDisableForEveryRuleAtEveryMode(t *testing.T) {
+	t.Parallel()
 	for _, m := range allModes() {
 		assertSelectionLaw(t, config.Config{Mode: m})
 		for _, r := range rules.All() {
@@ -285,6 +292,7 @@ func TestSelectIsModeClosurePlusEnableMinusDisableForEveryRuleAtEveryMode(t *tes
 }
 
 func TestModeSelectionsAreStrictlyNested(t *testing.T) {
+	t.Parallel()
 	var prev []string
 	for _, m := range allModes() {
 		cur := ruleNames(selectOrFatal(t, config.Config{Mode: m}))
@@ -332,6 +340,7 @@ func selectNamesOrNil(cfg config.Config) []string {
 }
 
 func TestSelectLawHoldsForRandomEnableDisableSetsInAnyOrder(t *testing.T) {
+	t.Parallel()
 	law := func(in selectionInput) bool {
 		enable, disable := slices.Clone(in.Enable), slices.Clone(in.Disable)
 		got := selectNamesOrNil(config.Config{Mode: in.Mode, Enable: in.Enable, Disable: in.Disable})
@@ -396,9 +405,11 @@ func excludeCases(path string) []selectErrorCase {
 }
 
 func TestSelectRejectsInvalidConfigWithDocumentedMessageAndNoRules(t *testing.T) {
+	t.Parallel()
 	const path = "/p/gglint.toml"
 	for _, tt := range slices.Concat(unknownNameCases(path), conflictCases(path), excludeCases(path)) {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := rules.Select(tt.cfg)
 			if err == nil || err.Error() != tt.want {
 				t.Errorf("Select error = %v, want %q", err, tt.want)
@@ -411,6 +422,7 @@ func TestSelectRejectsInvalidConfigWithDocumentedMessageAndNoRules(t *testing.T)
 }
 
 func TestSelectAcceptsExcludeTokensWithoutChangingSelection(t *testing.T) {
+	t.Parallel()
 	excludes := []config.Exclude{{Rules: []string{"printf", "staticcheck:SA1019", "err_chain_reset", rules.NolintName, "chanblock:anything"}}}
 	for _, m := range []config.Mode{config.Basic, config.Standard} {
 		assertSelectionLaw(t, config.Config{Path: "/p/gglint.toml", Mode: m, Excludes: excludes})
@@ -450,6 +462,7 @@ func buildAll(t *testing.T, cfg config.Config, owners map[string]string) []*anal
 }
 
 func TestFullCatalogAnalyzerNamesAreUniqueIdentifiersAndValidateAtEveryMode(t *testing.T) {
+	t.Parallel()
 	for _, m := range allModes() {
 		cfg := fullCatalogConfig(m)
 		if n := len(selectOrFatal(t, cfg)); n != len(rules.All()) {
@@ -490,6 +503,7 @@ func assertTokenRoundTrip(t *testing.T, r rules.Rule, built []*analysis.Analyzer
 }
 
 func TestTokenInvertsAnalyzerNameForEveryBuiltAnalyzerInAnyRuleOrder(t *testing.T) {
+	t.Parallel()
 	strict := ruleNames(selectOrFatal(t, modeConfig(config.Strict)))
 	for _, name := range []string{"err_chain_reset", "discarded_error", "infinite_recursion", "structtag_malformed", "reentrant_withlock_deadlock"} {
 		if !slices.Contains(strict, name) {
@@ -525,6 +539,7 @@ func findBuilt(t *testing.T, built []*analysis.Analyzer, upstream string) *analy
 }
 
 func TestReadmeTokensPrintFromUpstreamAnalyzerNames(t *testing.T) {
+	t.Parallel()
 	cfg := modeConfig(config.Strict)
 	selected := selectOrFatal(t, cfg)
 	tests := []struct{ rule, upstream, wantToken string }{
@@ -542,6 +557,7 @@ func TestReadmeTokensPrintFromUpstreamAnalyzerNames(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.wantToken, func(t *testing.T) {
+			t.Parallel()
 			r := findRule(t, tt.rule)
 			built := r.Build(cfg)
 			rule, check := rules.Token(rules.AnalyzerName(r, findBuilt(t, built, tt.upstream), len(built)), selected)
@@ -573,6 +589,7 @@ func familiesOf(names []string, families map[string]string) []string {
 }
 
 func TestStaticcheckRunsEverySACheckInBasicAndAddsReadmeFamiliesPerModeNested(t *testing.T) {
+	t.Parallel()
 	families := upstreamStaticcheckFamilies()
 	wantFamilies := map[config.Mode][]string{
 		config.Basic:    {"SA"},
@@ -603,6 +620,7 @@ func TestStaticcheckRunsEverySACheckInBasicAndAddsReadmeFamiliesPerModeNested(t 
 }
 
 func TestIfaceBuildsTheDocumentedChecksAtEveryMode(t *testing.T) {
+	t.Parallel()
 	iface := findRule(t, "iface")
 	wantIface := []string{"identical", "unexported", "unused", "unusedmethod"}
 	for _, m := range allModes() {
@@ -612,20 +630,26 @@ func TestIfaceBuildsTheDocumentedChecksAtEveryMode(t *testing.T) {
 	}
 }
 
-func flagValue(t *testing.T, rule string, cfg config.Config, flag string) string {
+func flagValue(t *testing.T, a *analysis.Analyzer, rule, flag string) string {
 	t.Helper()
-	built := findRule(t, rule).Build(cfg)
-	if len(built) != 1 {
-		t.Fatalf("rule %q builds %d analyzers, want 1", rule, len(built))
-	}
-	f := built[0].Flags.Lookup(flag)
+	f := a.Flags.Lookup(flag)
 	if f == nil {
 		t.Fatalf("rule %q analyzer has no flag %q", rule, flag)
 	}
 	return f.Value.String()
 }
 
-func TestModeDependentFlagsFollowTheModeOfTheLatestBuild(t *testing.T) {
+func buildOne(t *testing.T, rule string, cfg config.Config) *analysis.Analyzer {
+	t.Helper()
+	built := findRule(t, rule).Build(cfg)
+	if len(built) != 1 {
+		t.Fatalf("rule %q builds %d analyzers, want 1", rule, len(built))
+	}
+	return built[0]
+}
+
+func TestModeDependentFlagsStayOnEachBuiltAnalyzer(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		rule, flag string
 		want       [3]bool
@@ -637,9 +661,14 @@ func TestModeDependentFlagsFollowTheModeOfTheLatestBuild(t *testing.T) {
 		{"checklocks", "wrappers", [3]bool{true, true, true}},
 		{"errorlint", "errorf", [3]bool{true, true, true}},
 	}
-	for _, m := range []config.Mode{config.Strict, config.Basic, config.Standard, config.Strict} {
-		for _, tt := range tests {
-			if got, want := flagValue(t, tt.rule, modeConfig(m), tt.flag), strconv.FormatBool(tt.want[m]); got != want {
+	modes := []config.Mode{config.Strict, config.Basic, config.Standard, config.Strict}
+	for _, tt := range tests {
+		built := make([]*analysis.Analyzer, len(modes))
+		for i, m := range modes {
+			built[i] = buildOne(t, tt.rule, modeConfig(m))
+		}
+		for i, m := range modes {
+			if got, want := flagValue(t, built[i], tt.rule, tt.flag), strconv.FormatBool(tt.want[m]); got != want {
 				t.Errorf("mode %v: %s flag %s = %q, want %q", m, tt.rule, tt.flag, got, want)
 			}
 		}
@@ -647,6 +676,7 @@ func TestModeDependentFlagsFollowTheModeOfTheLatestBuild(t *testing.T) {
 }
 
 func TestGocriticEnablesDiagnosticsAndDeferInLoopAndAddsOpinionatedAndPerformanceOnlyInStrict(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		checker string
 		want    [3]bool
@@ -657,15 +687,36 @@ func TestGocriticEnablesDiagnosticsAndDeferInLoopAndAddsOpinionatedAndPerformanc
 		{"paramTypeCombine", [3]bool{false, false, true}},
 	}
 	for _, m := range []config.Mode{config.Strict, config.Basic, config.Standard} {
-		cfg := modeConfig(m)
-		enabled := strings.Split(flagValue(t, "gocritic", cfg, "enable"), ",")
+		gocritic := buildOne(t, "gocritic", modeConfig(m))
+		enabled := strings.Split(flagValue(t, gocritic, "gocritic", "enable"), ",")
 		for _, tt := range tests {
 			if got := slices.Contains(enabled, tt.checker); got != tt.want[m] {
 				t.Errorf("mode %v: gocritic enables %s = %v, want %v", m, tt.checker, got, tt.want[m])
 			}
 		}
-		if disabled := flagValue(t, "gocritic", cfg, "disable"); disabled != "" {
+		if disabled := flagValue(t, gocritic, "gocritic", "disable"); disabled != "" {
 			t.Errorf("mode %v: gocritic disable = %q, want empty", m, disabled)
 		}
+	}
+}
+
+func TestDeferredFlagsRejectValuesTheUpstreamParserRejects(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ rule, flag, bad, keep string }{
+		{"errcheck", "blank", "banana", "true"},
+		{"checklocks", "inferred-threshold", "abc", "0.9"},
+		{"gocritic", "@hugeParam.sizeThreshold", "abc", "80"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.rule+"."+tt.flag, func(t *testing.T) {
+			t.Parallel()
+			a := buildOne(t, tt.rule, modeConfig(config.Standard))
+			if err := a.Flags.Set(tt.flag, tt.bad); err == nil {
+				t.Fatalf("%s accepted -%s=%s", tt.rule, tt.flag, tt.bad)
+			}
+			if got := flagValue(t, a, tt.rule, tt.flag); got != tt.keep {
+				t.Errorf("%s flag %s = %q after a rejected value, want %q", tt.rule, tt.flag, got, tt.keep)
+			}
+		})
 	}
 }

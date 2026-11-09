@@ -63,6 +63,7 @@ func readerRule(name string, wrongReads chan<- string) rules.Rule {
 }
 
 func TestConcurrentAnalyzersReadEachFileOwnBytesAndDirectives(t *testing.T) {
+	t.Parallel()
 	e := newTestEngine(t, config.Config{Mode: config.Standard, Tests: true})
 	e.known["reader"], e.selected["reader"] = true, true
 	pass := multiFilePass(t)

@@ -10,6 +10,7 @@ import (
 )
 
 func TestNolintTypecheckTokenDoesNotHideUnusedTokens(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		directive string
@@ -33,6 +34,7 @@ func TestNolintTypecheckTokenDoesNotHideUnusedTokens(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newTestEngine(t, config.Config{Mode: config.Standard})
 			var got []string
 			src := "package p\n\nvar X = 1 " + tc.directive + "\n"

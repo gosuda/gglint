@@ -1,7 +1,9 @@
 package rules
 
 import (
+	"flag"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,7 +27,6 @@ import (
 	perfsprint "github.com/catenacyber/perfsprint/analyzer"
 	"github.com/charithe/durationcheck"
 	reassign "github.com/curioswitch/go-reassign"
-	"github.com/go-critic/go-critic/checkers"
 	gocritic "github.com/go-critic/go-critic/checkers/analyzer"
 	"github.com/go-critic/go-critic/linter"
 	"github.com/golangci/asciicheck"
@@ -65,12 +66,15 @@ import (
 	"github.com/gosuda/gglint/internal/config"
 )
 
-var gocriticCheckers = sync.OnceValues(func() ([]*linter.CheckerInfo, error) {
-	if err := checkers.InitEmbeddedRules(); err != nil {
-		return nil, err
-	}
-	return linter.GetCheckersInfo(), nil
-})
+var (
+	errcheckRuns sync.Mutex
+	gocriticRuns sync.Mutex
+
+	disableGocriticCache = sync.OnceFunc(func() { gocritic.DisableCache = true })
+	contextcheckAnalyzer = sync.OnceValue(func() *analysis.Analyzer {
+		return contextcheck.NewAnalyzer(contextcheck.Configuration{})
+	})
+)
 
 func thirdPartyRules() []Rule {
 	const basic, standard, strict, origin = config.Basic, config.Standard, config.Strict, originThirdParty
@@ -117,7 +121,8 @@ func thirdPartyRules() []Rule {
 		{"nilnil", strict, origin, "Reports returning a nil error together with an invalid nil value.", construct(nilnil.New)},
 		{"gochecknoglobals", strict, origin, "Reports package-level variables.", construct(checknoglobals.Analyzer)},
 		{"wrapcheck", strict, origin, "Reports errors from other packages returned without wrapping.", construct(newWrapcheck)},
-		{"contextcheck", strict, origin, "Reports functions that use a non-inherited context.", construct(newContextcheck)},
+		{"contextcheck", strict, origin, "Reports functions that use a non-inherited context.", buildContextcheck},
+
 		{"iface", strict, origin, "Reports identical, unused, and unexported interfaces and interface methods never called.", buildIface},
 		{"paralleltest", strict, origin, "Requires tests and subtests to call t.Parallel.", construct(paralleltest.NewAnalyzer)},
 		{"perfsprint", strict, origin, "Reports fmt.Sprintf calls that a faster strconv or string operation can replace.", construct(perfsprint.New)},
@@ -144,35 +149,8 @@ func construct(newAnalyzer func() *analysis.Analyzer) func(config.Config) []*ana
 	return func(config.Config) []*analysis.Analyzer { return []*analysis.Analyzer{newAnalyzer()} }
 }
 
-func buildErrcheck(cfg config.Config) []*analysis.Analyzer {
-	flags := map[string]string{
-		"blank":  strconv.FormatBool(cfg.Mode >= config.Standard),
-		"assert": strconv.FormatBool(cfg.Mode >= config.Strict),
-	}
-	return []*analysis.Analyzer{setFlags("errcheck", errcheck.Analyzer, flags)}
-}
-
 func buildErrorlint(config.Config) []*analysis.Analyzer {
 	return []*analysis.Analyzer{setFlags("errorlint", errorlint.NewAnalyzer(), map[string]string{"errorf": strconv.FormatBool(true)})}
-}
-
-func buildGocritic(cfg config.Config) []*analysis.Analyzer {
-	excluded := []string{linter.ExperimentalTag, linter.SecurityTag}
-	if cfg.Mode < config.Strict {
-		excluded = append(excluded, linter.OpinionatedTag, linter.PerformanceTag)
-	}
-	infos, err := gocriticCheckers()
-	var enabled []string
-	for _, info := range must("gocritic", infos, err) {
-		if !slices.ContainsFunc(info.Tags, func(tag string) bool { return slices.Contains(excluded, tag) }) {
-			enabled = append(enabled, info.Name)
-		}
-	}
-	flags := map[string]string{
-		"enable":  strings.Join(append(enabled, "deferInLoop"), ","),
-		"disable": "",
-	}
-	return []*analysis.Analyzer{setFlags("gocritic", gocritic.Analyzer, flags)}
 }
 
 func buildGosec(cfg config.Config) []*analysis.Analyzer {
@@ -180,6 +158,129 @@ func buildGosec(cfg config.Config) []*analysis.Analyzer {
 		return []*analysis.Analyzer{gosec.New([]string{"G104"})}
 	}
 	return []*analysis.Analyzer{gosec.New([]string{"G104", "G115", "G304"})}
+}
+
+type deferredFlag struct {
+	name     string
+	usage    string
+	value    string
+	isBool   bool
+	validate func(string) error
+}
+
+func (f *deferredFlag) String() string { return f.value }
+
+func (f *deferredFlag) Set(value string) error {
+	if err := f.validate(value); err != nil {
+		return err
+	}
+	f.value = value
+	return nil
+}
+
+func (f *deferredFlag) IsBoolFlag() bool { return f.isBool }
+
+func (f *deferredFlag) Get() any { return f.value }
+
+func isBoolFlag(v flag.Value) bool {
+	b, ok := v.(interface{ IsBoolFlag() bool })
+	return ok && b.IsBoolFlag()
+}
+
+var flagValueType = reflect.TypeFor[flag.Value]()
+
+func freshParser(rule string, f *flag.Flag) func(string) error {
+	t := reflect.TypeOf(f.Value)
+	if t == nil || t.Kind() != reflect.Pointer || !t.Implements(flagValueType) {
+		panic(fmt.Sprintf("rules: %s: flag %q has unsupported value type %T", rule, f.Name, f.Value))
+	}
+	return func(s string) error {
+		fresh, ok := reflect.TypeAssert[flag.Value](reflect.New(t.Elem()))
+		if !ok {
+			return fmt.Errorf("flag %s: value type %s is not a flag.Value", f.Name, t)
+		}
+		return fresh.Set(s)
+	}
+}
+
+type globalAnalyzer struct {
+	rule     string
+	upstream *analysis.Analyzer
+	runs     *sync.Mutex
+}
+
+func (g globalAnalyzer) build(overrides map[string]string) *analysis.Analyzer {
+	a := &analysis.Analyzer{
+		Name:             g.upstream.Name,
+		Doc:              g.upstream.Doc,
+		URL:              g.upstream.URL,
+		RunDespiteErrors: g.upstream.RunDespiteErrors,
+		Requires:         g.upstream.Requires,
+		ResultType:       g.upstream.ResultType,
+		FactTypes:        g.upstream.FactTypes,
+	}
+	a.Flags.Init(g.rule, flag.ContinueOnError)
+	deferred := g.deferredFlags(overrides)
+	for _, d := range deferred {
+		a.Flags.Var(d, d.name, d.usage)
+	}
+	a.Run = func(pass *analysis.Pass) (any, error) {
+		g.runs.Lock()
+		defer g.runs.Unlock()
+		for _, d := range deferred {
+			if err := g.upstream.Flags.Set(d.name, d.value); err != nil {
+				return nil, fmt.Errorf("flag %s: %w", d.name, err)
+			}
+		}
+		return g.upstream.Run(pass)
+	}
+	return a
+}
+
+func (g globalAnalyzer) deferredFlags(overrides map[string]string) []*deferredFlag {
+	g.runs.Lock()
+	defer g.runs.Unlock()
+	for name := range overrides {
+		if g.upstream.Flags.Lookup(name) == nil {
+			panic(fmt.Sprintf("rules: %s: unknown flag %q", g.rule, name))
+		}
+	}
+	var deferred []*deferredFlag
+	g.upstream.Flags.VisitAll(func(f *flag.Flag) {
+		d := &deferredFlag{name: f.Name, usage: f.Usage, value: f.DefValue, isBool: isBoolFlag(f.Value), validate: freshParser(g.rule, f)}
+		if value, ok := overrides[f.Name]; ok {
+			must(g.rule, struct{}{}, d.Set(value))
+		}
+		deferred = append(deferred, d)
+	})
+	return deferred
+}
+
+func buildErrcheck(cfg config.Config) []*analysis.Analyzer {
+	errcheckGlobal := globalAnalyzer{"errcheck", errcheck.Analyzer, &errcheckRuns}
+	return []*analysis.Analyzer{errcheckGlobal.build(map[string]string{
+		"blank":  strconv.FormatBool(cfg.Mode >= config.Standard),
+		"assert": strconv.FormatBool(cfg.Mode >= config.Strict),
+	})}
+}
+
+func buildGocritic(cfg config.Config) []*analysis.Analyzer {
+	disableGocriticCache()
+	excluded := []string{linter.ExperimentalTag, linter.SecurityTag}
+	if cfg.Mode < config.Strict {
+		excluded = append(excluded, linter.OpinionatedTag, linter.PerformanceTag)
+	}
+	var enabled []string
+	for _, info := range linter.GetCheckersInfo() {
+		if !slices.ContainsFunc(info.Tags, func(tag string) bool { return slices.Contains(excluded, tag) }) {
+			enabled = append(enabled, info.Name)
+		}
+	}
+	gocriticGlobal := globalAnalyzer{"gocritic", gocritic.Analyzer, &gocriticRuns}
+	return []*analysis.Analyzer{gocriticGlobal.build(map[string]string{
+		"enable":  strings.Join(append(enabled, "deferInLoop"), ","),
+		"disable": "",
+	})}
 }
 
 func buildIface(config.Config) []*analysis.Analyzer {
@@ -221,6 +322,6 @@ func newWrapcheck() *analysis.Analyzer {
 	return wrapcheck.NewAnalyzer(wrapcheck.NewDefaultConfig())
 }
 
-func newContextcheck() *analysis.Analyzer {
-	return contextcheck.NewAnalyzer(contextcheck.Configuration{})
+func buildContextcheck(config.Config) []*analysis.Analyzer {
+	return []*analysis.Analyzer{contextcheckAnalyzer()}
 }

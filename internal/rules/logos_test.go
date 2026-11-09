@@ -53,10 +53,13 @@ func logosPorts() []logosPort {
 }
 
 func TestLogosPorts(t *testing.T) {
+	t.Parallel()
 	ports := logosPorts()
+
 	for i := range ports {
 		port := &ports[i]
 		t.Run(port.dir, func(t *testing.T) {
+			t.Parallel()
 			analyzertest.RunIgnoringFacts(t, analysistest.TestData(), portAnalyzer(t, port), port.dir)
 		})
 	}
