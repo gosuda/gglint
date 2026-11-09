@@ -279,6 +279,10 @@ func (s *frameScan) carry(x ast.Expr) (addrKind, *ast.CallExpr) {
 		return s.carryArith(x)
 	case *ast.CompositeLit:
 		return s.carryElems(x)
+	case *ast.UnaryExpr:
+		if lit, ok := ast.Unparen(x.X).(*ast.CompositeLit); x.Op == token.AND && ok {
+			return s.carryElems(lit)
+		}
 	}
 	return addrNone, nil
 }
@@ -316,7 +320,11 @@ func (s *frameScan) carryArith(op *ast.BinaryExpr) (addrKind, *ast.CallExpr) {
 
 func (s *frameScan) carryElems(lit *ast.CompositeLit) (addrKind, *ast.CallExpr) {
 	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if ok {
+			if kind, call := s.carry(kv.Key); kind != addrNone {
+				return kind, call
+			}
 			elt = kv.Value
 		}
 		if kind, call := s.carry(elt); kind != addrNone {

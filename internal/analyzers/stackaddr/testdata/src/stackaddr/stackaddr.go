@@ -88,6 +88,22 @@ func compositeField() {
 	_ = h
 }
 
+func compositeMapKey() map[uintptr]int {
+	var x int
+	return map[uintptr]int{uintptr(unsafe.Pointer(&x)): 1} // want `uintptr\(unsafe\.Pointer\(&x\)\) keeps the address of stack storage`
+}
+
+func addressedCompositeElements() *struct{ addr uintptr } {
+	var x int
+	return &struct{ addr uintptr }{uintptr(unsafe.Pointer(&x))} // want `uintptr\(unsafe\.Pointer\(&x\)\) keeps the address of stack storage`
+}
+
+func compositeFieldName() struct{ addr int } {
+	var addr int
+	_ = addr
+	return struct{ addr int }{addr: 1}
+}
+
 func reconverted() addr {
 	x := 1
 	return addr(uintptr(unsafe.Pointer(&x))) // want `addr\(uintptr\(unsafe\.Pointer\(&x\)\)\) keeps the address of stack storage`
