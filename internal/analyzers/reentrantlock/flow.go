@@ -3,9 +3,10 @@ package reentrantlock
 import "go/ast"
 
 type flow struct {
-	c       *checker
-	onCall  func(*ast.CallExpr)
-	onStmts func([]ast.Stmt)
+	c         *checker
+	onCall    func(*ast.CallExpr)
+	onStmts   func([]ast.Stmt)
+	deferHeld func(*ast.DeferStmt) bool
 }
 
 func (f *flow) walk(n ast.Node) {
@@ -20,6 +21,9 @@ func (f *flow) walkStmts(list []ast.Stmt) {
 
 func (f *flow) visit(n ast.Node) bool {
 	switch n := n.(type) {
+	case *ast.DeferStmt:
+		f.deferred(n)
+		return false
 	case *ast.GoStmt:
 		f.async(n.Call)
 		return false
@@ -36,6 +40,14 @@ func (f *flow) visit(n ast.Node) bool {
 		f.stmts(n.Body)
 	}
 	return true
+}
+
+func (f *flow) deferred(d *ast.DeferStmt) {
+	if f.deferHeld == nil || f.deferHeld(d) {
+		f.call(d.Call)
+		return
+	}
+	f.async(d.Call)
 }
 
 func (f *flow) stmts(list []ast.Stmt) {

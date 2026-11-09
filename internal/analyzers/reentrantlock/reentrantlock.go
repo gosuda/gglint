@@ -29,7 +29,11 @@ function that calls one of its function parameters while it holds a mutex
 runs the function literal, named function, or method value passed there
 under that mutex, with a method value's receiver bound to the call-site
 operand. A go statement evaluates its function operand and arguments
-synchronously and runs the call in a new goroutine; a function literal that
+synchronously and runs the call in a new goroutine. A defer statement
+evaluates its function operand and arguments synchronously and runs the call
+at function exit; within a held region that reaches the end of its statement
+list, the call runs under the mutex unless a later deferred Unlock of the
+same mutex runs first. A function literal that
 is neither invoked directly nor passed to a parameter its callee invokes is
 skipped. Two receivers match when they name the same variable through the
 same chain of field selections, ignoring address-of and dereference; any
@@ -128,7 +132,7 @@ func (c *checker) findInvokes() map[*types.Func]map[int]bool {
 	return found
 }
 
-func (c *checker) regions(list []ast.Stmt, visit func(lockKey, []ast.Stmt)) {
+func (c *checker) regions(list []ast.Stmt, visit func(lockKey, []ast.Stmt, []ast.Stmt)) {
 	for i, s := range list {
 		key := c.lockStmtKey(s)
 		if key.root == nil {
@@ -138,7 +142,7 @@ func (c *checker) regions(list []ast.Stmt, visit func(lockKey, []ast.Stmt)) {
 		for end < len(list) && !c.unlocks(list[end], key) {
 			end++
 		}
-		visit(key, list[i+1:end])
+		visit(key, list[i+1:end], list[end:])
 	}
 }
 
@@ -156,12 +160,31 @@ func (c *checker) unlocks(s ast.Stmt, key lockKey) bool {
 	return found
 }
 
+func (c *checker) deferredUnlockAfter(region []ast.Stmt, key lockKey, d *ast.DeferStmt) bool {
+	found := false
+	for _, s := range region {
+		ast.Inspect(s, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.GoStmt, *ast.FuncLit:
+				return false
+			case *ast.DeferStmt:
+				found = found || d.Pos() < n.Pos() && c.mutexKey(n.Call, "Unlock") == key
+			}
+			return !found
+		})
+		if found {
+			break
+		}
+	}
+	return found
+}
+
 func (c *checker) findHeldCalls() map[*types.Func][]heldCall {
 	found := make(map[*types.Func][]heldCall)
 	for _, fn := range c.order {
 		f := &flow{c: c}
 		f.onStmts = func(list []ast.Stmt) {
-			c.regions(list, func(key lockKey, region []ast.Stmt) {
+			c.regions(list, func(key lockKey, region, _ []ast.Stmt) {
 				found[fn] = append(found[fn], c.regionHeldCalls(fn, key, region)...)
 			})
 		}
@@ -317,8 +340,12 @@ func (c *checker) receiverBinding(fn *types.Func, sel *ast.SelectorExpr) map[typ
 func (c *checker) check(decl *ast.FuncDecl) {
 	f := &flow{c: c, onCall: c.checkHeldCallbacks}
 	f.onStmts = func(list []ast.Stmt) {
-		c.regions(list, func(key lockKey, region []ast.Stmt) {
-			c.heldFlow(key, binding{}).walkStmts(region)
+		c.regions(list, func(key lockKey, region, tail []ast.Stmt) {
+			held := c.heldFlow(key, binding{})
+			held.deferHeld = func(d *ast.DeferStmt) bool {
+				return len(tail) == 0 && !c.deferredUnlockAfter(region, key, d)
+			}
+			held.walkStmts(region)
 		})
 	}
 	f.walk(decl.Body)

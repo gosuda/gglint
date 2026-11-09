@@ -44,6 +44,10 @@ func lockCopy(mu sync.Mutex) {
 	mu.Unlock()
 }
 
+func helperLocks(mu *sync.Mutex) {
+	lockPtr(mu)
+}
+
 func lockAndReturn(mu *sync.Mutex) int {
 	lockPtr(mu)
 	return 0
@@ -115,6 +119,34 @@ func goArgument() {
 	mu.Lock()
 	defer mu.Unlock()
 	go sink(lockAndReturn(&mu)) // want `call to lockAndReturn locks mu while it is already held`
+}
+
+func deferredUnlockAfterHelper() {
+	var mu sync.Mutex
+	mu.Lock()
+	defer helperLocks(&mu)
+	defer mu.Unlock()
+}
+
+func deferredUnlockBeforeHelper() {
+	var mu sync.Mutex
+	mu.Lock()
+	defer mu.Unlock()
+	defer helperLocks(&mu) // want `call to helperLocks locks mu while it is already held`
+}
+
+func synchronousUnlockEndsDeferredHelperRegion() {
+	var mu sync.Mutex
+	mu.Lock()
+	defer helperLocks(&mu)
+	mu.Unlock()
+}
+
+func deferredArgumentEvaluation() {
+	var mu sync.Mutex
+	mu.Lock()
+	defer sink(lockAndReturn(&mu)) // want `call to lockAndReturn locks mu while it is already held`
+	defer mu.Unlock()
 }
 
 func promotedMethodSameMutex() {
