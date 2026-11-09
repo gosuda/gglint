@@ -319,19 +319,29 @@ func (s *frameScan) carryArith(op *ast.BinaryExpr) (addrKind, *ast.CallExpr) {
 }
 
 func (s *frameScan) carryElems(lit *ast.CompositeLit) (addrKind, *ast.CallExpr) {
-	for _, elt := range lit.Elts {
-		kv, ok := elt.(*ast.KeyValueExpr)
-		if ok {
-			if kind, call := s.carry(kv.Key); kind != addrNone {
-				return kind, call
-			}
-			elt = kv.Value
-		}
-		if kind, call := s.carry(elt); kind != addrNone {
+	found, at := addrNone, (*ast.CallExpr)(nil)
+	for _, x := range elemExprs(lit) {
+		kind, call := s.carry(x)
+		if kind == addrInteger {
 			return kind, call
 		}
+		if found == addrNone {
+			found, at = kind, call
+		}
 	}
-	return addrNone, nil
+	return found, at
+}
+
+func elemExprs(lit *ast.CompositeLit) []ast.Expr {
+	exprs := make([]ast.Expr, 0, len(lit.Elts))
+	for _, elt := range lit.Elts {
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			exprs = append(exprs, kv.Key, kv.Value)
+			continue
+		}
+		exprs = append(exprs, elt)
+	}
+	return exprs
 }
 
 func (s *frameScan) frameAddr(x ast.Expr) bool {

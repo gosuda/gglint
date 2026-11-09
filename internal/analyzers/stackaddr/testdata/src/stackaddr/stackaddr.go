@@ -315,3 +315,12 @@ func plainPointer() *int {
 	x := 1
 	return &x
 }
+
+func integerAfterPointerElement() uintptr {
+	var x, y int
+	v := struct {
+		p unsafe.Pointer
+		u uintptr
+	}{unsafe.Pointer(&x), uintptr(unsafe.Pointer(&y))} // want `uintptr\(unsafe\.Pointer\(&y\)\) keeps the address of stack storage`
+	return v.u
+}
