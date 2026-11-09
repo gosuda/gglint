@@ -289,7 +289,7 @@ func (c checker) flowOf(cur inspector.Cursor) flow {
 		return c.assignFlow(inspection.As[*ast.AssignStmt](cur.Parent().Node()), index)
 	case edge.ValueSpec_Values:
 		return c.specFlow(inspection.As[*ast.ValueSpec](cur.Parent().Node()), index)
-	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value:
+	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value, edge.SelectorExpr_X:
 		return c.flowOf(cur.Parent())
 	case edge.UnaryExpr_X:
 		return c.addressFlow(cur.Parent())

@@ -444,3 +444,10 @@ func reassigned(n int) []byte {
 	b = make([]byte, n)
 	return b[:10]
 }
+
+func localFieldReadReturned() []byte {
+	var buf [1 << 20]byte
+	var h struct{ b []byte }
+	h.b = buf[:1] // want `subslice keeps a 1048576-byte backing array alive`
+	return h.b
+}
