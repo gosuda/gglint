@@ -1,48 +1,86 @@
 package report
 
 import (
+	"cmp"
 	json "encoding/json/v2"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
+	"strings"
 
 	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/finding"
 )
 
 const (
-	FormatText = "text"
-	FormatJSON = "json"
+	FormatAgent = "agent"
+	FormatText  = "text"
+	FormatJSON  = "json"
 )
 
 func Write(w io.Writer, format string, mode config.Mode, configPath string, fs []finding.Finding) error {
 	switch format {
+	case FormatAgent:
+		return writeAgent(w, mode, fs)
 	case FormatText:
 		return writeText(w, fs)
 	case FormatJSON:
 		return writeJSON(w, mode, configPath, fs)
 	default:
-		return fmt.Errorf("unknown format %q (want text or json)", format)
+		return fmt.Errorf("unknown format %q (want agent, text, or json)", format)
 	}
 }
 
-func writeText(w io.Writer, fs []finding.Finding) error {
-	var b []byte
+func writeAgent(w io.Writer, mode config.Mode, fs []finding.Finding) error {
+	_, err := w.Write(appendAgentSummary(appendFindings(nil, fs, "\t"), mode, fs))
+	return err
+}
+
+func appendAgentSummary(b []byte, mode config.Mode, fs []finding.Finding) []byte {
+	rules := map[string]int{}
+	files := map[string]struct{}{}
 	for _, f := range fs {
-		b = fmt.Appendf(b, "%s:%d:%d: %s [%s]\n", f.Pos.Path, f.Pos.Line, max(f.Pos.Column, 1), f.Message, f.Token())
+		rules[f.Rule]++
+		files[f.Pos.Path] = struct{}{}
+	}
+	b = fmt.Appendf(b, "gglint: %d findings in %d files (mode %s)", len(fs), len(files), mode)
+	byCount := func(x, y string) int { return cmp.Or(cmp.Compare(rules[y], rules[x]), cmp.Compare(x, y)) }
+	for _, rule := range slices.SortedFunc(maps.Keys(rules), byCount) {
+		b = fmt.Appendf(b, " %s=%d", rule, rules[rule])
+	}
+	return append(b, '\n')
+}
+
+func writeText(w io.Writer, fs []finding.Finding) error {
+	_, err := w.Write(appendFindings(nil, fs, "\n\t"))
+	return err
+}
+
+func appendFindings(b []byte, fs []finding.Finding, detailSep string) []byte {
+	for _, f := range fs {
+		b = fmt.Appendf(b, "%s:%d:%d: %s [%s]", f.Pos.Path, f.Pos.Line, max(f.Pos.Column, 1), oneLine(f.Message), f.Token())
 		for _, r := range f.Related {
-			b = fmt.Appendf(b, "\trelated: %s:%d:%d: %s\n", r.Path, r.Line, max(r.Column, 1), r.Message)
+			b = fmt.Appendf(b, "%srelated: %s:%d:%d: %s", detailSep, r.Path, r.Line, max(r.Column, 1), oneLine(r.Message))
 		}
 		messages := fixMessages(f)
 		for _, message := range messages {
-			b = fmt.Appendf(b, "\tfix: %s\n", message)
+			b = fmt.Appendf(b, "%sfix: %s", detailSep, oneLine(message))
 		}
 		if len(messages) == 0 && f.Fixable {
-			b = append(b, "\tfix: available\n"...)
+			b = fmt.Appendf(b, "%sfix: available", detailSep)
 		}
+		b = append(b, '\n')
 	}
-	_, err := w.Write(b)
-	return err
+	return b
+}
+
+func oneLine(message string) string {
+	return strings.Join(strings.FieldsFunc(message, isLineBreak), " ")
+}
+
+func isLineBreak(r rune) bool {
+	return r == '\n' || r == '\r'
 }
 
 func fixMessages(f finding.Finding) []string {

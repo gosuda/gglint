@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/driver"
@@ -33,7 +34,7 @@ func parseRunFlags(args []string, stderr io.Writer) (runOptions, error) {
 	fs.SetOutput(stderr)
 	fs.StringVar(&opts.configPath, "config", "", "path of gglint.toml")
 	fs.StringVar(&opts.mode, "mode", "", "basic, standard, or strict")
-	fs.StringVar(&opts.format, "format", report.FormatText, "text or json")
+	fs.StringVar(&opts.format, "format", report.FormatAgent, "agent, text, or json")
 	fs.BoolVar(&opts.fix, "fix", false, "apply suggested fixes before reporting")
 	fs.StringVar(&opts.newFromRev, "new-from-rev", "", "report only findings in lines changed since REV")
 	if err := fs.Parse(args); err != nil {
@@ -43,8 +44,8 @@ func parseRunFlags(args []string, stderr io.Writer) (runOptions, error) {
 	if len(opts.patterns) == 0 {
 		opts.patterns = []string{"./..."}
 	}
-	if opts.format != report.FormatText && opts.format != report.FormatJSON {
-		return runOptions{}, fmt.Errorf("unknown format %q (want text or json)", opts.format)
+	if !slices.Contains([]string{report.FormatAgent, report.FormatText, report.FormatJSON}, opts.format) {
+		return runOptions{}, fmt.Errorf("unknown format %q (want agent, text, or json)", opts.format)
 	}
 	return opts, nil
 }

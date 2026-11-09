@@ -26,7 +26,7 @@ gglint needs Go 1.27 or later, as `go.mod` declares.
 |---|---|
 | `-config PATH` | Use this `gglint.toml` instead of searching for one. A relative path is resolved against the working directory. |
 | `-mode basic\|standard\|strict` | Override the `mode` in the config file. |
-| `-format text\|json` | Output format. The default is `text`. |
+| `-format agent\|text\|json` | Output format. The default is `agent`. |
 | `-fix` | Apply suggested fixes, then report what is left. gglint first runs `go vet -fix` through its vettool, which applies the first fix of every kept finding, and then runs the normal report. |
 | `-new-from-rev REV` | Report only findings on lines changed since `REV`. gglint compares each finding's printed path and line with `git diff REV` of the working tree. `typecheck` findings are always kept. |
 
@@ -60,7 +60,7 @@ Stderr carries only lines that start with `gglint: `:
 | Line | When |
 |---|---|
 | `gglint: config <path>` | A config file was loaded. |
-| `gglint: N findings (mode M)` | Text format with at least one finding. |
+| `gglint: N findings (mode M)` | `text` format with at least one finding. |
 | `gglint: <message>` | Usage or config error. |
 | `gglint: load: <error>` | `go vet` failed and printed no Go source position. |
 | `gglint: diff: <error>` | `-new-from-rev` could not run `git diff`. |
@@ -70,6 +70,15 @@ Stderr carries only lines that start with `gglint: `:
 Paths are slash-separated and relative to the working directory, so they can start with `../`. Columns start at 1; a missing column prints as 1.
 
 Each finding carries a token: the rule name, or `rule:check` when the rule runs more than one analyzer, for example `staticcheck:SA1015`, `modernize:forvar`, or `iface:identical`. The `check` part is the upstream analyzer name.
+
+Agent format, the default, prints one line per finding and then one summary line. Related positions and fixes stay on the finding line, separated by tabs, so `grep` returns whole findings and `tail -1` returns the totals:
+
+```text
+path:line:col: message [token]<TAB>related: path:line:col: message<TAB>fix: <message>
+gglint: N findings in F files (mode M) rule=count rule=count
+```
+
+The summary lists each rule with its count, highest count first, then by name. A clean run prints only `gglint: 0 findings in 0 files (mode M)`. In the agent and text formats, a line break inside a message prints as a space, so a finding never spans more lines than its format allows.
 
 Text format prints one line per finding, then one indented line per related position and per suggested fix:
 

@@ -99,6 +99,59 @@ func TestTextPrintsEachClauseOfTheDocumentedLineShape(t *testing.T) {
 	}
 }
 
+func TestAgentPrintsOneLinePerFindingAndATailSummary(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		fs   []finding.Finding
+		want string
+	}{
+		{"clean run prints only the summary", nil, "gglint: 0 findings in 0 files (mode standard)\n"},
+		{
+			"related and fixes stay on the finding line",
+			[]finding.Finding{{
+				Rule: "r", Message: "m", Pos: pos("a.go", 5, 0),
+				Related: []finding.Related{{Position: pos("b.go", 1, 0), Message: "here"}},
+				Fixes:   []string{"do it", ""}, Fixable: true,
+			}},
+			"a.go:5:1: m [r]\trelated: b.go:1:1: here\tfix: do it\ngglint: 1 findings in 1 files (mode standard) r=1\n",
+		},
+		{
+			"fixes with edits and no message print available",
+			[]finding.Finding{{Rule: "r", Message: "m", Pos: pos("a.go", 1, 1), Fixes: []string{""}, Fixable: true}},
+			"a.go:1:1: m [r]\tfix: available\ngglint: 1 findings in 1 files (mode standard) r=1\n",
+		},
+		{
+			"line breaks inside messages fold into spaces",
+			[]finding.Finding{{
+				Rule: "r", Message: "first\nsecond\r\n", Pos: pos("a.go", 1, 1),
+				Related: []finding.Related{{Position: pos("a.go", 2, 1), Message: "x\ny"}},
+				Fixes:   []string{"do\nit"},
+			}},
+			"a.go:1:1: first second [r]\trelated: a.go:2:1: x y\tfix: do it\ngglint: 1 findings in 1 files (mode standard) r=1\n",
+		},
+		{
+			"summary counts distinct files and rules by count then name",
+			[]finding.Finding{
+				{Rule: "zeta", Message: "z", Pos: pos("a.go", 1, 1)},
+				{Rule: "beta", Message: "b", Pos: pos("a.go", 2, 1)},
+				{Rule: "staticcheck", Check: "SA1", Message: "s", Pos: pos("b.go", 1, 1)},
+				{Rule: "staticcheck", Check: "SA2", Message: "t", Pos: pos("c.go", 1, 1)},
+			},
+			"a.go:1:1: z [zeta]\na.go:2:1: b [beta]\nb.go:1:1: s [staticcheck:SA1]\nc.go:1:1: t [staticcheck:SA2]\n" +
+				"gglint: 4 findings in 3 files (mode standard) staticcheck=2 beta=1 zeta=1\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := render(t, report.FormatAgent, config.Standard, "", c.fs); got != c.want {
+				t.Fatalf("agent output:\n%q\nwant:\n%q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestJSONMatchesTheReadmeExample(t *testing.T) {
 	t.Parallel()
 	const readme = `{"mode":"standard","config":"gglint.toml","findings":[{"rule":"staticcheck","check":"SA1015","path":"a/b.go","line":3,"column":2,"end_line":3,"end_column":9,"message":"...","related":[{"path":"a/b.go","line":1,"column":1,"message":"..."}],"fixes":["..."],"fixable":true}]}`
@@ -205,7 +258,7 @@ func TestJSONDocumentCarriesModeConfigAndEmptyFindingsArray(t *testing.T) {
 func TestWriteRejectsUnknownFormatsWithoutWriting(t *testing.T) {
 	t.Parallel()
 	fs := []finding.Finding{{Rule: "r", Message: "m", Pos: pos("a.go", 1, 1)}}
-	for _, format := range []string{"", "sarif", "TEXT", "Json", " text", "json "} {
+	for _, format := range []string{"", "sarif", "TEXT", "Json", " text", "json ", "Agent"} {
 		t.Run(format, func(t *testing.T) {
 			t.Parallel()
 			var out bytes.Buffer
@@ -229,6 +282,8 @@ func TestWritePropagatesTheWriterError(t *testing.T) {
 		format string
 		fs     []finding.Finding
 	}{
+		{report.FormatAgent, one},
+		{report.FormatAgent, nil},
 		{report.FormatText, one},
 		{report.FormatJSON, one},
 		{report.FormatJSON, nil},

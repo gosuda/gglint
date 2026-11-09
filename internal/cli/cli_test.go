@@ -192,18 +192,18 @@ func printfVerb(arg string) string {
 	return `%d\n", "` + arg + `")`
 }
 
-func summary(toml string, findings int) string {
-	var b strings.Builder
-	if toml != "" {
-		b.WriteString("gglint: config gglint.toml\n")
+func configLine(toml string) string {
+	if toml == "" {
+		return ""
 	}
-	if findings > 0 {
-		b.WriteString("gglint: " + strconv.Itoa(findings) + " findings (mode standard)\n")
-	}
-	return b.String()
+	return "gglint: config gglint.toml\n"
 }
 
-func TestRunTextReportsExactlyTheFindingsLeftAfterFiltering(t *testing.T) {
+func agentSummary(findings, files int, rules string) string {
+	return fmt.Sprintf("gglint: %d findings in %d files (mode standard)%s\n", findings, files, rules)
+}
+
+func TestRunReportsExactlyTheFindingsLeftAfterFiltering(t *testing.T) {
 	t.Parallel()
 	aFinding := expect{file: "a/a.go", needle: printfVerb("x"), message: printfMessage("a", "x"), token: "printf"}
 	cFinding := expect{file: "c/c.go", needle: printfVerb("y"), message: printfMessage("c", "y"), token: "printf"}
@@ -234,11 +234,12 @@ func TestRunTextReportsExactlyTheFindingsLeftAfterFiltering(t *testing.T) {
 			for _, e := range tc.want {
 				stdout.WriteString(e.text(t, dir))
 			}
-			code := 0
+			code, rules := 0, ""
 			if len(tc.want) > 0 {
-				code = 1
+				code, rules = 1, fmt.Sprintf(" printf=%d", len(tc.want))
 			}
-			assertResult(t, gglint(t, dir, tc.args...), result{code: code, stdout: stdout.String(), stderr: summary(tc.toml, len(tc.want))})
+			stdout.WriteString(agentSummary(len(tc.want), len(tc.want), rules))
+			assertResult(t, gglint(t, dir, tc.args...), result{code: code, stdout: stdout.String(), stderr: configLine(tc.toml)})
 		})
 	}
 }
@@ -249,7 +250,7 @@ func TestRunFromSubdirectoryPrintsCwdRelativePathsAndExcludesConfigRelative(t *t
 	sub := filepath.Join(dir, "a")
 	c := expect{file: "../c/c.go", needle: printfVerb("y"), message: printfMessage("c", "y"), token: "printf"}
 	want := result{code: 1, stdout: c.text(t, sub), stderr: "gglint: config ../gglint.toml\ngglint: 1 findings (mode standard)\n"}
-	assertResult(t, gglint(t, sub, "run", ".", "../c"), want)
+	assertResult(t, gglint(t, sub, "run", "-format", "text", ".", "../c"), want)
 }
 
 func TestConfigErrorExitsTwoWithEmptyStdoutDespiteFindings(t *testing.T) {
@@ -698,13 +699,14 @@ func TestVersionPrintsModuleVersionAndBuildGoVersion(t *testing.T) {
 func TestFixAppliesSuggestedEditsThenReportsClean(t *testing.T) {
 	t.Parallel()
 	dir := workspace(t, "")
-	unformatted := "i/i.go:1:1: file is not gofumpt-formatted [gofumpt]\n\tfix: format with gofumpt\n"
-	assertResult(t, gglint(t, dir, "run", "./i"), result{code: 1, stdout: unformatted, stderr: summary("", 1)})
-	assertResult(t, gglint(t, dir, "run", "-fix", "./i"), result{})
+	unformatted := "i/i.go:1:1: file is not gofumpt-formatted [gofumpt]\tfix: format with gofumpt\n"
+	clean := result{stdout: agentSummary(0, 0, "")}
+	assertResult(t, gglint(t, dir, "run", "./i"), result{code: 1, stdout: unformatted + agentSummary(1, 1, " gofumpt=1")})
+	assertResult(t, gglint(t, dir, "run", "-fix", "./i"), clean)
 	if got, want := readFile(t, filepath.Join(dir, "i", "i.go")), "package i\n\nfunc One() int {\n\treturn 1\n}\n"; got != want {
 		t.Errorf("fixed i/i.go = %q, want %q", got, want)
 	}
-	assertResult(t, gglint(t, dir, "run", "./i"), result{})
+	assertResult(t, gglint(t, dir, "run", "./i"), clean)
 }
 
 func gitWorkspace(t *testing.T, files map[string]string) string {
@@ -779,11 +781,11 @@ func TestFixWithTestsOffLeavesTestFilesByteIdentical(t *testing.T) {
 		return file + ":1:1: file is not gofumpt-formatted [gofumpt]\n\tfix: format with gofumpt\n"
 	}
 	both := unformatted("fixtests/f.go") + unformatted("fixtests/f_test.go")
-	assertResult(t, gglint(t, dir, "run", "./fixtests"), result{code: 1, stdout: both, stderr: summary("", 2)})
+	assertResult(t, gglint(t, dir, "run", "-format", "text", "./fixtests"), result{code: 1, stdout: both, stderr: "gglint: 2 findings (mode standard)\n"})
 	testFile := filepath.Join(dir, "fixtests", "f_test.go")
 	before := readFile(t, testFile)
 	writeFile(t, filepath.Join(dir, config.FileName), testsOff)
-	assertResult(t, gglint(t, dir, "run", "-fix", "./fixtests"), result{stderr: summary(testsOff, 0)})
+	assertResult(t, gglint(t, dir, "run", "-format", "text", "-fix", "./fixtests"), result{stderr: configLine(testsOff)})
 	if got, want := readFile(t, filepath.Join(dir, "fixtests", "f.go")), "package fixtests\n\nfunc Two() int {\n\treturn 2\n}\n"; got != want {
 		t.Errorf("fixed fixtests/f.go = %q, want %q", got, want)
 	}
