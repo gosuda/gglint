@@ -469,3 +469,24 @@ func localSiblingSliceReturned(other []byte) []byte {
 	h.c = other
 	return h.c
 }
+
+func localMapElemReturned() []byte {
+	b := make([]byte, 1<<20)
+	h := make(map[int][]byte)
+	h[0] = b[:1] // want `subslice keeps a 1048576-byte backing array alive`
+	return h[0]
+}
+
+func localArrayElemReturned() []byte {
+	var buf [1 << 20]byte
+	var a [2][]byte
+	a[0] = buf[:1] // want `subslice keeps a 1048576-byte backing array alive`
+	return a[0]
+}
+
+func localMapLenReturned() int {
+	b := make([]byte, 1<<20)
+	h := make(map[int][]byte)
+	h[0] = b[:1]
+	return len(h)
+}

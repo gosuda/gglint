@@ -52,12 +52,17 @@ type checker struct {
 	sizes  types.Sizes
 	values map[*types.Var]ast.Expr
 	uses   map[*types.Var][]inspector.Cursor
-	flows  map[varField]flow
+	flows  map[varPart]flow
 }
 
-type varField struct {
-	v     *types.Var
+type part struct {
 	field types.Object
+	elem  bool
+}
+
+type varPart struct {
+	v    *types.Var
+	part part
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -67,7 +72,7 @@ func run(pass *analysis.Pass) (any, error) {
 		sizes:  pass.TypesSizes,
 		values: staticValues(pass.TypesInfo, insp),
 		uses:   varUses(pass.TypesInfo, insp),
-		flows:  map[varField]flow{},
+		flows:  map[varPart]flow{},
 	}
 	for cur := range insp.Root().Preorder((*ast.SliceExpr)(nil)) {
 		s := inspection.As[*ast.SliceExpr](cur.Node())
@@ -378,7 +383,7 @@ func (c checker) fieldFlow(x *ast.SelectorExpr) flow {
 		return outlives
 	}
 	if id, ok := ast.Unparen(x.X).(*ast.Ident); ok {
-		return c.trackedFlow(c.info.ObjectOf(id), sel.Obj())
+		return c.trackedFlow(c.info.ObjectOf(id), part{field: sel.Obj()})
 	}
 	return c.storeFlow(x.X)
 }
@@ -386,11 +391,18 @@ func (c checker) fieldFlow(x *ast.SelectorExpr) flow {
 func (c checker) elemFlow(x *ast.IndexExpr) flow {
 	switch c.info.TypeOf(x.X).Underlying().(type) {
 	case *types.Array:
-		return c.storeFlow(x.X)
+		return c.arrayElemFlow(x.X)
 	case *types.Map, *types.Slice:
 		return c.containerFlow(x.X)
 	}
 	return outlives
+}
+
+func (c checker) arrayElemFlow(e ast.Expr) flow {
+	if id, ok := ast.Unparen(e).(*ast.Ident); ok {
+		return c.trackedFlow(c.info.ObjectOf(id), part{elem: true})
+	}
+	return c.storeFlow(e)
 }
 
 func (c checker) containerFlow(e ast.Expr) flow {
@@ -402,7 +414,7 @@ func (c checker) containerFlow(e ast.Expr) flow {
 	if !ok || !c.isFresh(c.values[v]) {
 		return outlives
 	}
-	return c.varFlow(v)
+	return c.trackedFlow(v, part{elem: true})
 }
 
 func (c checker) isFresh(e ast.Expr) bool {
@@ -416,10 +428,10 @@ func (c checker) isFresh(e ast.Expr) bool {
 }
 
 func (c checker) varFlow(obj types.Object) flow {
-	return c.trackedFlow(obj, nil)
+	return c.trackedFlow(obj, part{})
 }
 
-func (c checker) trackedFlow(obj, field types.Object) flow {
+func (c checker) trackedFlow(obj types.Object, p part) flow {
 	v, ok := obj.(*types.Var)
 	if !ok {
 		return stays
@@ -427,29 +439,36 @@ func (c checker) trackedFlow(obj, field types.Object) flow {
 	if isPackageVar(v) {
 		return outlives
 	}
-	key := varField{v: v, field: field}
+	key := varPart{v: v, part: p}
 	if f, done := c.flows[key]; done {
 		return f
 	}
 	c.flows[key] = stays
 	f := stays
 	for _, use := range c.uses[v] {
-		f = max(f, c.useFlow(use, field))
+		f = max(f, c.useFlow(unparenParent(use), p))
 	}
 	c.flows[key] = f
 	return f
 }
 
-func (c checker) useFlow(use inspector.Cursor, field types.Object) flow {
-	use = unparenParent(use)
-	if field == nil || use.ParentEdgeKind() != edge.SelectorExpr_X {
-		return c.flowOf(use)
+func (c checker) useFlow(use inspector.Cursor, p part) flow {
+	kind := use.ParentEdgeKind()
+	if p.elem && kind == edge.IndexExpr_X {
+		return c.flowOf(use.Parent())
 	}
-	sel := c.info.Selections[inspection.As[*ast.SelectorExpr](use.Parent().Node())]
+	if p.field != nil && kind == edge.SelectorExpr_X {
+		return c.fieldReadFlow(use.Parent(), p.field)
+	}
+	return c.flowOf(use)
+}
+
+func (c checker) fieldReadFlow(read inspector.Cursor, field types.Object) flow {
+	sel := c.info.Selections[inspection.As[*ast.SelectorExpr](read.Node())]
 	if sel == nil || sel.Obj() != field {
 		return stays
 	}
-	return c.flowOf(use.Parent())
+	return c.flowOf(read)
 }
 
 func varUses(info *types.Info, insp *inspector.Inspector) map[*types.Var][]inspector.Cursor {
