@@ -554,3 +554,35 @@ func substringMapKeyLookup() int {
 	m := map[string]int{s[:1]: 1}
 	return m["x"]
 }
+
+func literalFieldAliasReturned() []byte {
+	var buf [1 << 20]byte
+	h := struct{ b []byte }{buf[:1]} // want `subslice keeps a 1048576-byte backing array alive`
+	alias := h
+	return alias.b
+}
+
+func literalSiblingFieldAliasReturned() int {
+	var buf [1 << 20]byte
+	h := struct {
+		b []byte
+		n int
+	}{b: buf[:1], n: 1}
+	var alias = h
+	return alias.n
+}
+
+func literalElemAliasReturned() []byte {
+	var buf [1 << 20]byte
+	parts := [2][]byte{buf[:1], nil} // want `subslice keeps a 1048576-byte backing array alive`
+	var alias [2][]byte
+	alias = parts
+	return alias[0]
+}
+
+func literalOtherElemAliasReturned() []byte {
+	var buf [1 << 20]byte
+	parts := [2][]byte{buf[:1], nil}
+	alias := parts
+	return alias[1]
+}

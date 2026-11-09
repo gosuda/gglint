@@ -542,6 +542,9 @@ func (c checker) useFlow(use inspector.Cursor, p part) flow {
 	if p.field != nil && kind == edge.SelectorExpr_X {
 		return c.fieldReadFlow(use.Parent(), p.field)
 	}
+	if v := c.boundVar(use); v != nil {
+		return c.trackedFlow(v, p)
+	}
 	return c.flowOf(use)
 }
 
