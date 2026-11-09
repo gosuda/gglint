@@ -219,3 +219,31 @@ func bothArms(mu *sync.Mutex, cond bool) {
 	mu.Lock()
 	mu.Unlock()
 }
+
+func withDeferredAfterUnlock(mu *sync.Mutex, fn func()) {
+	mu.Lock()
+	defer fn()
+	defer mu.Unlock()
+}
+
+func withDeferredBeforeUnlock(mu *sync.Mutex, fn func()) {
+	mu.Lock()
+	defer mu.Unlock()
+	defer fn()
+}
+
+func deferredCallbackAfterUnlock() {
+	var mu sync.Mutex
+	withDeferredAfterUnlock(&mu, func() {
+		mu.Lock()
+		mu.Unlock()
+	})
+}
+
+func deferredCallbackBeforeUnlock() {
+	var mu sync.Mutex
+	withDeferredBeforeUnlock(&mu, func() {
+		mu.Lock() // want `mu is locked again while already held`
+		mu.Unlock()
+	})
+}

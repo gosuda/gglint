@@ -174,8 +174,8 @@ func (c *checker) findHeldCalls() map[*types.Func][]heldCall {
 	for _, fn := range c.order {
 		f := &flow{c: c}
 		f.onStmts = func(list []ast.Stmt) {
-			c.regions(list, func(key lockKey, region, _ []ast.Stmt) {
-				found[fn] = append(found[fn], c.regionHeldCalls(fn, key, region)...)
+			c.regions(list, func(key lockKey, region, tail []ast.Stmt) {
+				found[fn] = append(found[fn], c.regionHeldCalls(fn, key, region, tail)...)
 			})
 		}
 		f.walk(c.decls[fn].Body)
@@ -183,16 +183,22 @@ func (c *checker) findHeldCalls() map[*types.Func][]heldCall {
 	return found
 }
 
-func (c *checker) regionHeldCalls(fn *types.Func, key lockKey, region []ast.Stmt) []heldCall {
+func (c *checker) regionHeldCalls(fn *types.Func, key lockKey, region, tail []ast.Stmt) []heldCall {
 	var found []heldCall
 	sig := fn.Signature()
-	f := &flow{c: c, onCall: func(call *ast.CallExpr) {
+	f := &flow{c: c, deferHeld: c.deferHeldIn(key, region, tail), onCall: func(call *ast.CallExpr) {
 		if i := c.paramIndex(sig, call.Fun); i >= 0 {
 			found = append(found, heldCall{key: key, param: i})
 		}
 	}}
 	f.walkStmts(region)
 	return found
+}
+
+func (c *checker) deferHeldIn(key lockKey, region, tail []ast.Stmt) func(*ast.DeferStmt) bool {
+	return func(d *ast.DeferStmt) bool {
+		return len(tail) == 0 && !c.deferredUnlockAfter(region, key, d)
+	}
 }
 
 func (c *checker) summarize() {
@@ -332,9 +338,7 @@ func (c *checker) check(decl *ast.FuncDecl) {
 	f.onStmts = func(list []ast.Stmt) {
 		c.regions(list, func(key lockKey, region, tail []ast.Stmt) {
 			held := c.heldFlow(key, binding{})
-			held.deferHeld = func(d *ast.DeferStmt) bool {
-				return len(tail) == 0 && !c.deferredUnlockAfter(region, key, d)
-			}
+			held.deferHeld = c.deferHeldIn(key, region, tail)
 			held.walkStmts(region)
 		})
 	}
