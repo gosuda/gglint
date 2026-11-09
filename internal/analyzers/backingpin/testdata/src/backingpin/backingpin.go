@@ -622,3 +622,64 @@ func derefFieldReturned() []byte {
 	p := &h
 	return (*p).b
 }
+
+type innerBytes struct {
+	b []byte
+	n int
+}
+
+type outerBytes struct {
+	inner innerBytes
+	other innerBytes
+}
+
+func nestedLiteralFieldReturned() []byte {
+	var buf [1 << 20]byte
+	h := outerBytes{inner: innerBytes{b: buf[:1]}} // want `subslice keeps a 1048576-byte backing array alive`
+	return h.inner.b
+}
+
+func nestedLiteralMemberCopyReturned() []byte {
+	var buf [1 << 20]byte
+	h := outerBytes{inner: innerBytes{b: buf[:1]}} // want `subslice keeps a 1048576-byte backing array alive`
+	inner := h.inner
+	return inner.b
+}
+
+func nestedLiteralSiblingReturned() int {
+	var buf [1 << 20]byte
+	h := outerBytes{inner: innerBytes{b: buf[:1]}}
+	return h.inner.n
+}
+
+func nestedLiteralOtherMemberReturned() []byte {
+	var buf [1 << 20]byte
+	h := outerBytes{inner: innerBytes{b: buf[:1]}}
+	return h.other.b
+}
+
+func nestedFieldStoreReturned() []byte {
+	var buf [1 << 20]byte
+	var h outerBytes
+	h.inner.b = buf[:1] // want `subslice keeps a 1048576-byte backing array alive`
+	return h.inner.b
+}
+
+func nestedFieldStoreOtherMemberReturned() []byte {
+	var buf [1 << 20]byte
+	var h outerBytes
+	h.inner.b = buf[:1]
+	return h.other.b
+}
+
+func nestedElemLiteralReturned() []byte {
+	var buf [1 << 20]byte
+	rows := [2][2][]byte{{buf[:1], nil}, {nil, nil}} // want `subslice keeps a 1048576-byte backing array alive`
+	return rows[0][0]
+}
+
+func nestedElemLiteralOtherReturned() []byte {
+	var buf [1 << 20]byte
+	rows := [2][2][]byte{{buf[:1], nil}, {nil, nil}}
+	return rows[0][1]
+}

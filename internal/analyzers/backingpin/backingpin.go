@@ -55,6 +55,7 @@ type checker struct {
 	values map[*types.Var]ast.Expr
 	uses   map[*types.Var][]inspector.Cursor
 	flows  map[varPart]flow
+	paths  *pathTable
 }
 
 type part struct {
@@ -63,9 +64,56 @@ type part struct {
 	index string
 }
 
+type path int
+
+const emptyPath path = 0
+
+const pathDepth = 8
+
+type pathStep struct {
+	parent path
+	step   part
+}
+
+type pathNode struct {
+	pathStep
+	depth int
+}
+
+type pathTable struct {
+	nodes []pathNode
+	ids   map[pathStep]path
+}
+
+func newPathTable() *pathTable {
+	return &pathTable{nodes: make([]pathNode, 1), ids: map[pathStep]path{}}
+}
+
+func (t *pathTable) push(p path, step part) (path, bool) {
+	if t.nodes[p].depth == pathDepth {
+		return p, false
+	}
+	key := pathStep{parent: p, step: step}
+	if id, ok := t.ids[key]; ok {
+		return id, true
+	}
+	id := path(len(t.nodes))
+	t.nodes = append(t.nodes, pathNode{pathStep: key, depth: t.nodes[p].depth + 1})
+	t.ids[key] = id
+	return id, true
+}
+
+func (t *pathTable) pop(p path) (part, path, bool) {
+	if p == emptyPath {
+		return part{}, p, false
+	}
+	n := t.nodes[p]
+	return n.step, n.parent, true
+}
+
 type varPart struct {
 	v    *types.Var
-	part part
+	path path
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -76,11 +124,12 @@ func run(pass *analysis.Pass) (any, error) {
 		values: staticValues(pass.TypesInfo, insp),
 		uses:   varUses(pass.TypesInfo, insp),
 		flows:  map[varPart]flow{},
+		paths:  newPathTable(),
 	}
 	for cur := range insp.Root().Preorder((*ast.SliceExpr)(nil)) {
 		s := inspection.As[*ast.SliceExpr](cur.Node())
 		size := c.backingBytes(s)
-		if size > limitBytes && !c.coversBacking(s, size) && c.flowOf(cur) != stays {
+		if size > limitBytes && !c.coversBacking(s, size) && c.flowOf(cur, emptyPath) != stays {
 			pass.Reportf(s.Pos(), c.format(s), size)
 		}
 	}
@@ -290,7 +339,7 @@ func (c checker) makeLength(call *ast.CallExpr) (int64, bool) {
 	return c.constInt(call.Args[1])
 }
 
-func (c checker) flowOf(cur inspector.Cursor) flow {
+func (c checker) flowOf(cur inspector.Cursor, p path) flow {
 	cur = unparenParent(cur)
 	kind, index := cur.ParentEdge()
 	switch kind { //nolint:exhaustive // every other edge keeps the value inside the function
@@ -299,40 +348,36 @@ func (c checker) flowOf(cur inspector.Cursor) flow {
 	case edge.SendStmt_Value:
 		return outlives
 	case edge.AssignStmt_Rhs:
-		return c.assignFlow(inspection.As[*ast.AssignStmt](cur.Parent().Node()), index)
+		return c.assignFlow(inspection.As[*ast.AssignStmt](cur.Parent().Node()), index, p)
 	case edge.ValueSpec_Values:
-		return c.specFlow(inspection.As[*ast.ValueSpec](cur.Parent().Node()), index)
+		return c.trackedFlow(c.specVar(inspection.As[*ast.ValueSpec](cur.Parent().Node()), index), p)
 	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value:
-		return c.literalFlow(cur)
+		return c.literalFlow(cur, p)
 	case edge.KeyValueExpr_Key:
-		return c.flowOf(cur.Parent().Parent())
+		return c.flowOf(cur.Parent().Parent(), emptyPath)
 	case edge.UnaryExpr_X:
-		return c.addressFlow(cur.Parent())
+		return c.addressFlow(cur.Parent(), p)
 	case edge.CallExpr_Args:
-		return c.argFlow(cur.Parent(), index)
+		return c.argFlow(cur.Parent(), index, p)
 	}
 	return stays
 }
 
-func (c checker) addressFlow(cur inspector.Cursor) flow {
+func (c checker) addressFlow(cur inspector.Cursor, p path) flow {
 	if inspection.As[*ast.UnaryExpr](cur.Node()).Op != token.AND {
 		return stays
 	}
-	return c.flowOf(cur)
+	return c.flowOf(cur, p)
 }
 
-func (c checker) assignFlow(as *ast.AssignStmt, index int) flow {
+func (c checker) assignFlow(as *ast.AssignStmt, index int, p path) flow {
 	if len(as.Lhs) != len(as.Rhs) || as.Tok != token.ASSIGN && as.Tok != token.DEFINE {
 		return stays
 	}
-	return c.storeFlow(as.Lhs[index])
+	return c.storeFlow(as.Lhs[index], p)
 }
 
-func (c checker) specFlow(spec *ast.ValueSpec, index int) flow {
-	return c.varFlow(c.specVar(spec, index))
-}
-
-func (c checker) argFlow(cur inspector.Cursor, index int) flow {
+func (c checker) argFlow(cur inspector.Cursor, index int, p path) flow {
 	call := inspection.As[*ast.CallExpr](cur.Node())
 	fn := typeutil.StaticCallee(c.info, call)
 	if fn == nil || c.isMethodExpr(call.Fun) {
@@ -343,9 +388,9 @@ func (c checker) argFlow(cur inspector.Cursor, index int) flow {
 	if index >= params.Len() || sig.Variadic() && index >= params.Len()-1 {
 		return stays
 	}
-	f := c.varFlow(params.At(index))
+	f := c.trackedFlow(params.At(index), p)
 	if f == returned {
-		return c.flowOf(cur)
+		return c.flowOf(cur, emptyPath)
 	}
 	return f
 }
@@ -359,24 +404,24 @@ func (c checker) isMethodExpr(fun ast.Expr) bool {
 	return selection != nil && selection.Kind() == types.MethodExpr
 }
 
-func (c checker) storeFlow(lhs ast.Expr) flow {
+func (c checker) storeFlow(lhs ast.Expr, p path) flow {
 	switch x := ast.Unparen(lhs).(type) {
 	case *ast.Ident:
-		return c.varFlow(c.info.ObjectOf(x))
+		return c.trackedFlow(c.info.ObjectOf(x), p)
 	case *ast.SelectorExpr:
-		return c.fieldFlow(x)
+		return c.fieldFlow(x, p)
 	case *ast.IndexExpr:
-		return c.elemFlow(x)
+		return c.elemFlow(x, p)
 	case *ast.StarExpr:
 		return outlives
 	}
 	return stays
 }
 
-func (c checker) fieldFlow(x *ast.SelectorExpr) flow {
+func (c checker) fieldFlow(x *ast.SelectorExpr, p path) flow {
 	sel := c.info.Selections[x]
 	if sel == nil {
-		return c.varFlow(c.info.Uses[x.Sel])
+		return c.trackedFlow(c.info.Uses[x.Sel], p)
 	}
 	if sel.Kind() != types.FieldVal {
 		return stays
@@ -384,31 +429,38 @@ func (c checker) fieldFlow(x *ast.SelectorExpr) flow {
 	if sel.Indirect() {
 		return outlives
 	}
-	if id, ok := ast.Unparen(x.X).(*ast.Ident); ok {
-		return c.trackedFlow(c.info.ObjectOf(id), part{field: sel.Obj()})
+	q, ok := c.paths.push(p, part{field: sel.Obj()})
+	if !ok {
+		return stays
 	}
-	return c.storeFlow(x.X)
+	if id, ok := ast.Unparen(x.X).(*ast.Ident); ok {
+		return c.trackedFlow(c.info.ObjectOf(id), q)
+	}
+	return c.storeFlow(x.X, q)
 }
 
-func (c checker) elemFlow(x *ast.IndexExpr) flow {
-	p := part{elem: true, index: c.constText(x.Index)}
+func (c checker) elemFlow(x *ast.IndexExpr, p path) flow {
+	q, ok := c.paths.push(p, part{elem: true, index: c.constText(x.Index)})
+	if !ok {
+		return stays
+	}
 	switch c.info.TypeOf(x.X).Underlying().(type) {
 	case *types.Array:
-		return c.arrayElemFlow(x.X, p)
+		return c.arrayElemFlow(x.X, q)
 	case *types.Map, *types.Slice:
-		return c.containerFlow(x.X, p)
+		return c.containerFlow(x.X, q)
 	}
 	return outlives
 }
 
-func (c checker) arrayElemFlow(e ast.Expr, p part) flow {
+func (c checker) arrayElemFlow(e ast.Expr, p path) flow {
 	if id, ok := ast.Unparen(e).(*ast.Ident); ok {
 		return c.trackedFlow(c.info.ObjectOf(id), p)
 	}
-	return c.storeFlow(e)
+	return c.storeFlow(e, p)
 }
 
-func (c checker) containerFlow(e ast.Expr, p part) flow {
+func (c checker) containerFlow(e ast.Expr, p path) flow {
 	id, ok := ast.Unparen(e).(*ast.Ident)
 	if !ok {
 		return outlives
@@ -420,9 +472,13 @@ func (c checker) containerFlow(e ast.Expr, p part) flow {
 	return c.trackedFlow(v, p)
 }
 
-func (c checker) literalFlow(elem inspector.Cursor) flow {
-	lit, p := c.literalPart(elem)
-	return c.useFlow(unparenParent(lit), p)
+func (c checker) literalFlow(elem inspector.Cursor, p path) flow {
+	lit, step := c.literalPart(elem)
+	q, ok := c.paths.push(p, step)
+	if !ok {
+		return stays
+	}
+	return c.useFlow(unparenParent(lit), q)
 }
 
 func (c checker) literalPart(elem inspector.Cursor) (inspector.Cursor, part) {
@@ -460,33 +516,11 @@ func isKeyValue(e ast.Expr) bool {
 	return ok
 }
 
-func (c checker) boundVar(lit inspector.Cursor) types.Object {
-	lit = unparenParent(lit)
-	kind, index := lit.ParentEdge()
-	if kind == edge.ValueSpec_Values {
-		return c.specVar(inspection.As[*ast.ValueSpec](lit.Parent().Node()), index)
-	}
-	if kind == edge.AssignStmt_Rhs {
-		return c.assignedVar(inspection.As[*ast.AssignStmt](lit.Parent().Node()), index)
-	}
-	return nil
-}
-
 func (c checker) specVar(spec *ast.ValueSpec, index int) types.Object {
 	if len(spec.Names) != len(spec.Values) {
 		return nil
 	}
 	return c.info.Defs[spec.Names[index]]
-}
-
-func (c checker) assignedVar(as *ast.AssignStmt, index int) types.Object {
-	if len(as.Lhs) != len(as.Rhs) || as.Tok != token.ASSIGN && as.Tok != token.DEFINE {
-		return nil
-	}
-	if id, ok := ast.Unparen(as.Lhs[index]).(*ast.Ident); ok {
-		return c.info.ObjectOf(id)
-	}
-	return nil
 }
 
 func (c checker) constText(e ast.Expr) string {
@@ -506,11 +540,7 @@ func (c checker) isFresh(e ast.Expr) bool {
 	return false
 }
 
-func (c checker) varFlow(obj types.Object) flow {
-	return c.trackedFlow(obj, part{})
-}
-
-func (c checker) trackedFlow(obj types.Object, p part) flow {
+func (c checker) trackedFlow(obj types.Object, p path) flow {
 	v, ok := obj.(*types.Var)
 	if !ok {
 		return stays
@@ -518,7 +548,7 @@ func (c checker) trackedFlow(obj types.Object, p part) flow {
 	if isPackageVar(v) {
 		return outlives
 	}
-	key := varPart{v: v, part: p}
+	key := varPart{v: v, path: p}
 	if f, done := c.flows[key]; done {
 		return f
 	}
@@ -531,21 +561,22 @@ func (c checker) trackedFlow(obj types.Object, p part) flow {
 	return f
 }
 
-func (c checker) useFlow(use inspector.Cursor, p part) flow {
+func (c checker) useFlow(use inspector.Cursor, p path) flow {
 	if next, ok := pointerStep(use); ok {
 		return c.useFlow(unparenParent(next), p)
 	}
+	step, rest, ok := c.paths.pop(p)
+	if !ok {
+		return c.flowOf(use, p)
+	}
 	kind := use.ParentEdgeKind()
-	if p.elem && kind == edge.IndexExpr_X {
-		return c.elemReadFlow(use.Parent(), p.index)
+	if step.elem && kind == edge.IndexExpr_X {
+		return c.elemReadFlow(use.Parent(), step.index, rest)
 	}
-	if p.field != nil && kind == edge.SelectorExpr_X {
-		return c.fieldReadFlow(use.Parent(), p.field)
+	if step.field != nil && kind == edge.SelectorExpr_X {
+		return c.fieldReadFlow(use.Parent(), step.field, rest)
 	}
-	if v := c.boundVar(use); v != nil {
-		return c.trackedFlow(v, p)
-	}
-	return c.flowOf(use)
+	return c.flowOf(use, p)
 }
 
 func pointerStep(use inspector.Cursor) (inspector.Cursor, bool) {
@@ -559,20 +590,20 @@ func pointerStep(use inspector.Cursor) (inspector.Cursor, bool) {
 	return use, false
 }
 
-func (c checker) elemReadFlow(read inspector.Cursor, stored string) flow {
+func (c checker) elemReadFlow(read inspector.Cursor, stored string, rest path) flow {
 	got := c.constText(inspection.As[*ast.IndexExpr](read.Node()).Index)
 	if stored != "" && got != "" && got != stored {
 		return stays
 	}
-	return c.flowOf(read)
+	return c.useFlow(read, rest)
 }
 
-func (c checker) fieldReadFlow(read inspector.Cursor, field types.Object) flow {
+func (c checker) fieldReadFlow(read inspector.Cursor, field types.Object, rest path) flow {
 	sel := c.info.Selections[inspection.As[*ast.SelectorExpr](read.Node())]
 	if sel == nil || sel.Obj() != field {
 		return stays
 	}
-	return c.flowOf(read)
+	return c.useFlow(read, rest)
 }
 
 func varUses(info *types.Info, insp *inspector.Inspector) map[*types.Var][]inspector.Cursor {
