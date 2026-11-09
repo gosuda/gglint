@@ -52,7 +52,12 @@ type checker struct {
 	sizes  types.Sizes
 	values map[*types.Var]ast.Expr
 	uses   map[*types.Var][]inspector.Cursor
-	flows  map[*types.Var]flow
+	flows  map[varField]flow
+}
+
+type varField struct {
+	v     *types.Var
+	field types.Object
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -62,7 +67,7 @@ func run(pass *analysis.Pass) (any, error) {
 		sizes:  pass.TypesSizes,
 		values: staticValues(pass.TypesInfo, insp),
 		uses:   varUses(pass.TypesInfo, insp),
-		flows:  map[*types.Var]flow{},
+		flows:  map[varField]flow{},
 	}
 	for cur := range insp.Root().Preorder((*ast.SliceExpr)(nil)) {
 		s := inspection.As[*ast.SliceExpr](cur.Node())
@@ -289,7 +294,7 @@ func (c checker) flowOf(cur inspector.Cursor) flow {
 		return c.assignFlow(inspection.As[*ast.AssignStmt](cur.Parent().Node()), index)
 	case edge.ValueSpec_Values:
 		return c.specFlow(inspection.As[*ast.ValueSpec](cur.Parent().Node()), index)
-	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value, edge.SelectorExpr_X:
+	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value:
 		return c.flowOf(cur.Parent())
 	case edge.UnaryExpr_X:
 		return c.addressFlow(cur.Parent())
@@ -372,6 +377,9 @@ func (c checker) fieldFlow(x *ast.SelectorExpr) flow {
 	if sel.Indirect() {
 		return outlives
 	}
+	if id, ok := ast.Unparen(x.X).(*ast.Ident); ok {
+		return c.trackedFlow(c.info.ObjectOf(id), sel.Obj())
+	}
 	return c.storeFlow(x.X)
 }
 
@@ -408,6 +416,10 @@ func (c checker) isFresh(e ast.Expr) bool {
 }
 
 func (c checker) varFlow(obj types.Object) flow {
+	return c.trackedFlow(obj, nil)
+}
+
+func (c checker) trackedFlow(obj, field types.Object) flow {
 	v, ok := obj.(*types.Var)
 	if !ok {
 		return stays
@@ -415,16 +427,29 @@ func (c checker) varFlow(obj types.Object) flow {
 	if isPackageVar(v) {
 		return outlives
 	}
-	if f, done := c.flows[v]; done {
+	key := varField{v: v, field: field}
+	if f, done := c.flows[key]; done {
 		return f
 	}
-	c.flows[v] = stays
+	c.flows[key] = stays
 	f := stays
 	for _, use := range c.uses[v] {
-		f = max(f, c.flowOf(use))
+		f = max(f, c.useFlow(use, field))
 	}
-	c.flows[v] = f
+	c.flows[key] = f
 	return f
+}
+
+func (c checker) useFlow(use inspector.Cursor, field types.Object) flow {
+	use = unparenParent(use)
+	if field == nil || use.ParentEdgeKind() != edge.SelectorExpr_X {
+		return c.flowOf(use)
+	}
+	sel := c.info.Selections[inspection.As[*ast.SelectorExpr](use.Parent().Node())]
+	if sel == nil || sel.Obj() != field {
+		return stays
+	}
+	return c.flowOf(use.Parent())
 }
 
 func varUses(info *types.Info, insp *inspector.Inspector) map[*types.Var][]inspector.Cursor {

@@ -451,3 +451,21 @@ func localFieldReadReturned() []byte {
 	h.b = buf[:1] // want `subslice keeps a 1048576-byte backing array alive`
 	return h.b
 }
+
+func localSiblingIntReturned() int {
+	var buf [1 << 20]byte
+	var h struct {
+		b []byte
+		n int
+	}
+	h.b = buf[:1]
+	return h.n
+}
+
+func localSiblingSliceReturned(other []byte) []byte {
+	var buf [1 << 20]byte
+	var h struct{ b, c []byte }
+	h.b = buf[:1]
+	h.c = other
+	return h.c
+}
