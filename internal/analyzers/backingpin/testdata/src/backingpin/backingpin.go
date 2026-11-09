@@ -490,3 +490,50 @@ func localMapLenReturned() int {
 	h[0] = b[:1]
 	return len(h)
 }
+
+func localMapOtherKeyReturned() []byte {
+	b := make([]byte, 1<<20)
+	h := make(map[int][]byte)
+	h[0] = b[:1]
+	return h[1]
+}
+
+func localArrayUnknownIndexReturned(i int) []byte {
+	var buf [1 << 20]byte
+	var a [2][]byte
+	a[0] = buf[:1] // want `subslice keeps a 1048576-byte backing array alive`
+	return a[i]
+}
+
+func literalFieldReturned() []byte {
+	var buf [1 << 20]byte
+	h := struct{ b []byte }{buf[:1]} // want `subslice keeps a 1048576-byte backing array alive`
+	return h.b
+}
+
+func literalKeyedFieldReturned() []byte {
+	var buf [1 << 20]byte
+	h := holder{b: buf[:1]} // want `subslice keeps a 1048576-byte backing array alive`
+	return h.b
+}
+
+func literalSiblingFieldReturned() int {
+	var buf [1 << 20]byte
+	h := struct {
+		b []byte
+		n int
+	}{b: buf[:1], n: 1}
+	return h.n
+}
+
+func literalElemReturned() []byte {
+	var buf [1 << 20]byte
+	parts := [][]byte{buf[:1], nil} // want `subslice keeps a 1048576-byte backing array alive`
+	return parts[0]
+}
+
+func literalOtherElemReturned() []byte {
+	var buf [1 << 20]byte
+	parts := [][]byte{buf[:1], nil}
+	return parts[1]
+}

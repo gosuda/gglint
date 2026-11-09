@@ -7,6 +7,8 @@ import (
 	"go/types"
 	"maps"
 	"math"
+	"slices"
+	"strconv"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -58,6 +60,7 @@ type checker struct {
 type part struct {
 	field types.Object
 	elem  bool
+	index string
 }
 
 type varPart struct {
@@ -300,7 +303,7 @@ func (c checker) flowOf(cur inspector.Cursor) flow {
 	case edge.ValueSpec_Values:
 		return c.specFlow(inspection.As[*ast.ValueSpec](cur.Parent().Node()), index)
 	case edge.CompositeLit_Elts, edge.KeyValueExpr_Value:
-		return c.flowOf(cur.Parent())
+		return c.literalFlow(cur)
 	case edge.UnaryExpr_X:
 		return c.addressFlow(cur.Parent())
 	case edge.CallExpr_Args:
@@ -324,10 +327,7 @@ func (c checker) assignFlow(as *ast.AssignStmt, index int) flow {
 }
 
 func (c checker) specFlow(spec *ast.ValueSpec, index int) flow {
-	if len(spec.Names) != len(spec.Values) {
-		return stays
-	}
-	return c.varFlow(c.info.Defs[spec.Names[index]])
+	return c.varFlow(c.specVar(spec, index))
 }
 
 func (c checker) argFlow(cur inspector.Cursor, index int) flow {
@@ -389,23 +389,24 @@ func (c checker) fieldFlow(x *ast.SelectorExpr) flow {
 }
 
 func (c checker) elemFlow(x *ast.IndexExpr) flow {
+	p := part{elem: true, index: c.constText(x.Index)}
 	switch c.info.TypeOf(x.X).Underlying().(type) {
 	case *types.Array:
-		return c.arrayElemFlow(x.X)
+		return c.arrayElemFlow(x.X, p)
 	case *types.Map, *types.Slice:
-		return c.containerFlow(x.X)
+		return c.containerFlow(x.X, p)
 	}
 	return outlives
 }
 
-func (c checker) arrayElemFlow(e ast.Expr) flow {
+func (c checker) arrayElemFlow(e ast.Expr, p part) flow {
 	if id, ok := ast.Unparen(e).(*ast.Ident); ok {
-		return c.trackedFlow(c.info.ObjectOf(id), part{elem: true})
+		return c.trackedFlow(c.info.ObjectOf(id), p)
 	}
 	return c.storeFlow(e)
 }
 
-func (c checker) containerFlow(e ast.Expr) flow {
+func (c checker) containerFlow(e ast.Expr, p part) flow {
 	id, ok := ast.Unparen(e).(*ast.Ident)
 	if !ok {
 		return outlives
@@ -414,7 +415,86 @@ func (c checker) containerFlow(e ast.Expr) flow {
 	if !ok || !c.isFresh(c.values[v]) {
 		return outlives
 	}
-	return c.trackedFlow(v, part{elem: true})
+	return c.trackedFlow(v, p)
+}
+
+func (c checker) literalFlow(elem inspector.Cursor) flow {
+	lit, p := c.literalPart(elem)
+	if v := c.boundVar(lit); v != nil {
+		return c.trackedFlow(v, p)
+	}
+	return c.flowOf(lit)
+}
+
+func (c checker) literalPart(elem inspector.Cursor) (inspector.Cursor, part) {
+	if elem.ParentEdgeKind() == edge.KeyValueExpr_Value {
+		kv := inspection.As[*ast.KeyValueExpr](elem.Parent().Node())
+		lit := elem.Parent().Parent()
+		return lit, c.keyedPart(inspection.As[*ast.CompositeLit](lit.Node()), kv.Key)
+	}
+	_, pos := elem.ParentEdge()
+	lit := elem.Parent()
+	return lit, c.positionalPart(inspection.As[*ast.CompositeLit](lit.Node()), pos)
+}
+
+func (c checker) keyedPart(lit *ast.CompositeLit, key ast.Expr) part {
+	if _, ok := c.info.TypeOf(lit).Underlying().(*types.Struct); ok {
+		if id, ok := key.(*ast.Ident); ok {
+			return part{field: c.info.ObjectOf(id)}
+		}
+	}
+	return part{elem: true, index: c.constText(key)}
+}
+
+func (c checker) positionalPart(lit *ast.CompositeLit, pos int) part {
+	if st, ok := c.info.TypeOf(lit).Underlying().(*types.Struct); ok {
+		return part{field: st.Field(pos)}
+	}
+	if slices.ContainsFunc(lit.Elts, isKeyValue) {
+		return part{elem: true}
+	}
+	return part{elem: true, index: strconv.Itoa(pos)}
+}
+
+func isKeyValue(e ast.Expr) bool {
+	_, ok := e.(*ast.KeyValueExpr)
+	return ok
+}
+
+func (c checker) boundVar(lit inspector.Cursor) types.Object {
+	lit = unparenParent(lit)
+	kind, index := lit.ParentEdge()
+	if kind == edge.ValueSpec_Values {
+		return c.specVar(inspection.As[*ast.ValueSpec](lit.Parent().Node()), index)
+	}
+	if kind == edge.AssignStmt_Rhs {
+		return c.assignedVar(inspection.As[*ast.AssignStmt](lit.Parent().Node()), index)
+	}
+	return nil
+}
+
+func (c checker) specVar(spec *ast.ValueSpec, index int) types.Object {
+	if len(spec.Names) != len(spec.Values) {
+		return nil
+	}
+	return c.info.Defs[spec.Names[index]]
+}
+
+func (c checker) assignedVar(as *ast.AssignStmt, index int) types.Object {
+	if len(as.Lhs) != len(as.Rhs) || as.Tok != token.ASSIGN && as.Tok != token.DEFINE {
+		return nil
+	}
+	if id, ok := ast.Unparen(as.Lhs[index]).(*ast.Ident); ok {
+		return c.info.ObjectOf(id)
+	}
+	return nil
+}
+
+func (c checker) constText(e ast.Expr) string {
+	if v := c.info.Types[e].Value; v != nil {
+		return v.ExactString()
+	}
+	return ""
 }
 
 func (c checker) isFresh(e ast.Expr) bool {
@@ -455,12 +535,20 @@ func (c checker) trackedFlow(obj types.Object, p part) flow {
 func (c checker) useFlow(use inspector.Cursor, p part) flow {
 	kind := use.ParentEdgeKind()
 	if p.elem && kind == edge.IndexExpr_X {
-		return c.flowOf(use.Parent())
+		return c.elemReadFlow(use.Parent(), p.index)
 	}
 	if p.field != nil && kind == edge.SelectorExpr_X {
 		return c.fieldReadFlow(use.Parent(), p.field)
 	}
 	return c.flowOf(use)
+}
+
+func (c checker) elemReadFlow(read inspector.Cursor, stored string) flow {
+	got := c.constText(inspection.As[*ast.IndexExpr](read.Node()).Index)
+	if stored != "" && got != "" && got != stored {
+		return stays
+	}
+	return c.flowOf(read)
 }
 
 func (c checker) fieldReadFlow(read inspector.Cursor, field types.Object) flow {
