@@ -1,4 +1,3 @@
-// Package closer reports local closers that are neither closed nor handed on.
 package closer
 
 import (
@@ -10,6 +9,8 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 var Analyzer = &analysis.Analyzer{
@@ -29,32 +30,16 @@ assignment from a call.`,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	in := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
-	for fn := range in.Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		body := funcBody(fn.Node())
-		if body == nil {
-			continue
-		}
-		s := &scan{pass: pass, fn: fn, body: body, first: map[*types.Var]*ast.Ident{}, released: map[*types.Var]bool{}}
+	for fn := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		s := &scan{pass: pass, fn: fn, first: map[*types.Var]*ast.Ident{}, released: map[*types.Var]bool{}}
 		s.run()
 	}
 	return nil, nil
 }
 
-func funcBody(n ast.Node) *ast.BlockStmt {
-	switch n := n.(type) {
-	case *ast.FuncDecl:
-		return n.Body
-	case *ast.FuncLit:
-		return n.Body
-	}
-	return nil
-}
-
 type scan struct {
 	pass     *analysis.Pass
 	fn       inspector.Cursor
-	body     *ast.BlockStmt
 	first    map[*types.Var]*ast.Ident
 	order    []*types.Var
 	released map[*types.Var]bool
@@ -121,7 +106,7 @@ func (s *scan) holdTuple(targets []ast.Expr, value ast.Expr) {
 
 func (s *scan) hold(target, value ast.Expr, result types.Type) {
 	id, ok := ast.Unparen(target).(*ast.Ident)
-	if !ok || result == nil || !s.isCall(value) || !hasClose(result) {
+	if !ok || !s.isCall(value) || !hasClose(result) {
 		return
 	}
 	v, ok := s.pass.TypesInfo.ObjectOf(id).(*types.Var)
@@ -144,7 +129,8 @@ func (s *scan) isCall(e ast.Expr) bool {
 }
 
 func (s *scan) declaredHere(v *types.Var) bool {
-	return v.Kind() == types.LocalVar && s.body.Pos() <= v.Pos() && v.Pos() < s.body.End()
+	fn := s.fn.Node()
+	return v.Kind() == types.LocalVar && fn.Pos() <= v.Pos() && v.Pos() < fn.End()
 }
 
 func hasClose(t types.Type) bool {
@@ -197,36 +183,33 @@ func (s *scan) isPlain(cur inspector.Cursor) bool {
 	for cur.ParentEdgeKind() == edge.ParenExpr_X {
 		cur = cur.Parent()
 	}
-	switch cur.ParentEdgeKind() {
-	case edge.SelectorExpr_X:
+	kind := cur.ParentEdgeKind()
+	if kind == edge.SelectorExpr_X {
 		return s.isPlainSelection(cur.Parent())
-	case edge.BinaryExpr_X, edge.BinaryExpr_Y:
-		op := cur.Parent().Node().(*ast.BinaryExpr).Op
+	}
+	if kind == edge.BinaryExpr_X || kind == edge.BinaryExpr_Y {
+		op := inspection.As[*ast.BinaryExpr](cur.Parent().Node()).Op
 		return op == token.EQL || op == token.NEQ
-	case edge.AssignStmt_Lhs:
-		return true
-	case edge.AssignStmt_Rhs:
+	}
+	if kind == edge.AssignStmt_Rhs {
 		return isDiscarded(cur)
 	}
-	return false
+	return kind == edge.AssignStmt_Lhs
 }
 
 func (s *scan) isPlainSelection(cur inspector.Cursor) bool {
-	sel := s.pass.TypesInfo.Selections[cur.Node().(*ast.SelectorExpr)]
-	if sel == nil {
-		return false
-	}
-	switch sel.Kind() {
+	switch s.pass.TypesInfo.Selections[inspection.As[*ast.SelectorExpr](cur.Node())].Kind() {
 	case types.FieldVal:
 		return true
 	case types.MethodVal:
 		return cur.ParentEdgeKind() == edge.CallExpr_Fun
+	case types.MethodExpr:
 	}
 	return false
 }
 
 func isDiscarded(cur inspector.Cursor) bool {
-	assign := cur.Parent().Node().(*ast.AssignStmt)
+	assign := inspection.As[*ast.AssignStmt](cur.Parent().Node())
 	if len(assign.Lhs) != len(assign.Rhs) {
 		return false
 	}
@@ -235,11 +218,8 @@ func isDiscarded(cur inspector.Cursor) bool {
 }
 
 func owner(cur inspector.Cursor) inspector.Cursor {
-	for c := cur; c.Node() != nil; c = c.Parent() {
-		switch c.Node().(type) {
-		case *ast.FuncDecl, *ast.FuncLit:
-			return c
-		}
+	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		return fn
 	}
 	return inspector.Cursor{}
 }

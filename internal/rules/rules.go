@@ -16,6 +16,15 @@ const (
 	NolintName    = "nolint"
 )
 
+const (
+	originGoAnalysis  = "go/analysis"
+	originStaticcheck = "staticcheck"
+	originThirdParty  = "third-party"
+	originGVisor      = "gvisor"
+	originLogos       = "logos"
+	originGglint      = "gglint"
+)
+
 type Rule struct {
 	Name   string
 	Mode   config.Mode
@@ -25,48 +34,24 @@ type Rule struct {
 }
 
 func All() []Rule {
-	all := slices.Concat(
-		xtoolsRules(),
-		staticcheckRules(),
-		thirdPartyRules(),
-		gvisorRules(),
-		gglintRules(),
-		coreRules(),
-	)
+	all := slices.Concat(xtoolsRules(), staticcheckRules(), thirdPartyRules(), gvisorRules(), gglintRules())
 	slices.SortFunc(all, func(a, b Rule) int {
 		return cmp.Or(cmp.Compare(a.Mode, b.Mode), strings.Compare(a.Name, b.Name))
 	})
 	return all
 }
 
-func coreRules() []Rule {
-	return []Rule{
-		{
-			Name:   TypecheckName,
-			Mode:   config.Basic,
-			Origin: "gglint",
-			Doc:    "Reports package load and type errors; it cannot be disabled or suppressed.",
-		},
-		{
-			Name:   NolintName,
-			Mode:   config.Basic,
-			Origin: "gglint",
-			Doc:    "Checks //nolint directives for unknown rules, missing names or reasons, and unused suppressions.",
-		},
-	}
-}
-
 func Select(cfg config.Config) ([]Rule, error) {
 	all := All()
 	if err := validate(cfg, all); err != nil {
-		return nil, pathError(cfg, err)
+		if cfg.Path != "" {
+			err = fmt.Errorf("%s: %w", cfg.Path, err)
+		}
+		return nil, err
 	}
 	enabled := set(cfg.Enable)
 	disabled := set(cfg.Disable)
 	return slices.DeleteFunc(all, func(r Rule) bool {
-		if r.Name == TypecheckName {
-			return false
-		}
 		return disabled[r.Name] || (r.Mode > cfg.Mode && !enabled[r.Name])
 	}), nil
 }
@@ -102,19 +87,15 @@ func validateExcludeRules(excludes []config.Exclude, known map[string]bool) erro
 	for i, e := range excludes {
 		for _, token := range e.Rules {
 			rule, _, _ := strings.Cut(token, ":")
-			if !known[rule] {
+			switch {
+			case rule == TypecheckName:
+				return fmt.Errorf("exclude[%d].rules: typecheck findings cannot be excluded", i)
+			case !known[rule]:
 				return fmt.Errorf("exclude[%d].rules: unknown rule %q", i, rule)
 			}
 		}
 	}
 	return nil
-}
-
-func pathError(cfg config.Config, err error) error {
-	if cfg.Path == "" {
-		return err
-	}
-	return fmt.Errorf("%s: %w", cfg.Path, err)
 }
 
 func set(names []string) map[string]bool {

@@ -1,4 +1,3 @@
-// Package unparam reports unused parameters and constant results of unexported functions.
 package unparam
 
 import (
@@ -8,7 +7,6 @@ import (
 	"mvdan.cc/unparam/check"
 )
 
-// Analyzer reports the issues found by mvdan.cc/unparam in unexported functions.
 var Analyzer = &analysis.Analyzer{
 	Name:     "unparam",
 	Doc:      "Report unused parameters and always-constant parameters and results of unexported functions.",
@@ -17,9 +15,20 @@ var Analyzer = &analysis.Analyzer{
 }
 
 func run(pass *analysis.Pass) (any, error) {
+	result, ok := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
+	if !ok {
+		panic("unparam: missing buildssa result")
+	}
 	var checker check.Checker
-	checker.ProgramSSA(pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA).Pkg.Prog)
-	checker.Packages([]*packages.Package{passPackage(pass)})
+	checker.ProgramSSA(result.Pkg.Prog)
+	checker.Packages([]*packages.Package{{
+		Name:      pass.Pkg.Name(),
+		PkgPath:   pass.Pkg.Path(),
+		Fset:      pass.Fset,
+		Syntax:    pass.Files,
+		Types:     pass.Pkg,
+		TypesInfo: pass.TypesInfo,
+	}})
 	checker.CheckExportedFuncs(false)
 	issues, err := checker.Check()
 	if err != nil {
@@ -29,15 +38,4 @@ func run(pass *analysis.Pass) (any, error) {
 		pass.Report(analysis.Diagnostic{Pos: issue.Pos(), Message: issue.Message()})
 	}
 	return nil, nil
-}
-
-func passPackage(pass *analysis.Pass) *packages.Package {
-	return &packages.Package{
-		Name:      pass.Pkg.Name(),
-		PkgPath:   pass.Pkg.Path(),
-		Fset:      pass.Fset,
-		Syntax:    pass.Files,
-		Types:     pass.Pkg,
-		TypesInfo: pass.TypesInfo,
-	}
 }

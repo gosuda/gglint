@@ -8,7 +8,8 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
-	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 const (
@@ -32,46 +33,32 @@ its own, range over a channel, close, len, and cap are not reported.`,
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	ins := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	ins := inspection.Of(pass)
 	roots := []ast.Node{(*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)}
 	ins.Nodes(roots, func(n ast.Node, push bool) bool {
 		if push {
-			check(pass, funcBody(n))
+			check(pass, n)
 		}
 		return false
 	})
 	return nil, nil
 }
 
-func funcBody(n ast.Node) *ast.BlockStmt {
-	switch n := n.(type) {
-	case *ast.FuncDecl:
-		return n.Body
-	case *ast.FuncLit:
-		return n.Body
-	}
-	return nil
-}
-
-func check(pass *analysis.Pass, body *ast.BlockStmt) {
-	if body == nil {
-		return
-	}
+func check(pass *analysis.Pass, fn ast.Node) {
 	u := &unit{
 		info:   pass.TypesInfo,
 		sent:   make(map[*types.Var]int),
 		looped: make(map[*types.Var]bool),
 	}
-	u.walk(body)
+	u.walk(fn)
 	if len(u.ops) == 0 {
 		return
 	}
-	b := collectBounds(pass.TypesInfo, body)
+	b := collectBounds(pass.TypesInfo, fn)
 	for _, op := range u.ops {
-		if op.ch != nil && u.bounded(b, op.ch) {
-			continue
+		if !u.bounded(b, op.ch) {
+			pass.Report(analysis.Diagnostic{Pos: op.node.Pos(), End: op.node.End(), Message: op.message})
 		}
-		pass.Report(analysis.Diagnostic{Pos: op.node.Pos(), End: op.node.End(), Message: op.message})
 	}
 }
 
@@ -115,7 +102,9 @@ func (u *unit) visit(n ast.Node) bool {
 	case *ast.SendStmt:
 		u.send(n)
 	case *ast.UnaryExpr:
-		u.unary(n)
+		if n.Op == token.ARROW {
+			u.receive(n)
+		}
 	}
 	return true
 }
@@ -141,7 +130,7 @@ func (u *unit) rangeStmt(r *ast.RangeStmt) {
 func (u *unit) selectStmt(s *ast.SelectStmt) {
 	done := u.hasDoneCase(s)
 	for _, stmt := range s.Body.List {
-		cc := stmt.(*ast.CommClause)
+		cc := inspection.As[*ast.CommClause](stmt)
 		u.covered = done
 		operands := u.comm(cc.Comm)
 		u.covered = false
@@ -156,7 +145,7 @@ func (u *unit) selectStmt(s *ast.SelectStmt) {
 
 func (u *unit) hasDoneCase(s *ast.SelectStmt) bool {
 	for _, stmt := range s.Body.List {
-		r := commReceive(stmt.(*ast.CommClause).Comm)
+		r := commReceive(inspection.As[*ast.CommClause](stmt).Comm)
 		if r != nil && u.isDone(r.X) {
 			return true
 		}
@@ -188,24 +177,12 @@ func (u *unit) commOperands(x ast.Expr) []ast.Node {
 
 func (u *unit) send(s *ast.SendStmt) {
 	ch := u.local(s.Chan)
-	if ch != nil {
-		u.countSend(ch)
-	}
-	u.record(s, ch, sendMessage)
-}
-
-func (u *unit) countSend(ch *types.Var) {
 	if u.loops > 0 {
 		u.looped[ch] = true
-		return
+	} else {
+		u.sent[ch]++
 	}
-	u.sent[ch]++
-}
-
-func (u *unit) unary(x *ast.UnaryExpr) {
-	if x.Op == token.ARROW {
-		u.receive(x)
-	}
+	u.record(s, ch, sendMessage)
 }
 
 func (u *unit) receive(r *ast.UnaryExpr) {
@@ -243,9 +220,6 @@ func (u *unit) isDone(x ast.Expr) bool {
 }
 
 func isDoneChan(t types.Type) bool {
-	if t == nil {
-		return false
-	}
 	ch, ok := t.Underlying().(*types.Chan)
 	if !ok || ch.Dir() != types.RecvOnly {
 		return false
@@ -282,7 +256,7 @@ func nodes(xs []ast.Expr) []ast.Node {
 
 func localVar(info *types.Info, id *ast.Ident) *types.Var {
 	v, ok := info.ObjectOf(id).(*types.Var)
-	if !ok || v.IsField() || v.Pkg() == nil || v.Parent() == nil || v.Parent() == v.Pkg().Scope() {
+	if !ok || v.Pkg() == nil || v.Parent() == nil || v.Parent() == v.Pkg().Scope() {
 		return nil
 	}
 	return v
@@ -294,13 +268,13 @@ type bounds struct {
 	caps map[*types.Var]int64
 }
 
-func collectBounds(info *types.Info, body *ast.BlockStmt) bounds {
+func collectBounds(info *types.Info, fn ast.Node) bounds {
 	b := bounds{
 		info: info,
 		defs: make(map[*types.Var]int),
 		caps: make(map[*types.Var]int64),
 	}
-	ast.Inspect(body, b.visit)
+	ast.Inspect(fn, b.visit)
 	return b
 }
 
@@ -339,14 +313,10 @@ func (b bounds) note(lhs, rhs []ast.Expr) {
 		}
 		b.defs[v]++
 		if len(rhs) == len(lhs) {
-			b.noteCapacity(v, rhs[i])
+			if k, ok := capacity(b.info, rhs[i]); ok {
+				b.caps[v] = k
+			}
 		}
-	}
-}
-
-func (b bounds) noteCapacity(v *types.Var, x ast.Expr) {
-	if k, ok := capacity(b.info, x); ok {
-		b.caps[v] = k
 	}
 }
 
@@ -360,13 +330,9 @@ func capacity(info *types.Info, x ast.Expr) (int64, bool) {
 	}
 	value := info.Types[call.Args[1]].Value
 	if value == nil {
-		return -1, true
+		return 0, false
 	}
-	k, exact := constant.Int64Val(constant.ToInt(value))
-	if !exact {
-		return -1, true
-	}
-	return k, true
+	return constant.Int64Val(constant.ToInt(value))
 }
 
 func isMakeChan(info *types.Info, call *ast.CallExpr) bool {
@@ -378,10 +344,6 @@ func isMakeChan(info *types.Info, call *ast.CallExpr) bool {
 	if !ok || builtin.Name() != "make" {
 		return false
 	}
-	t := info.TypeOf(call)
-	if t == nil {
-		return false
-	}
-	_, ok = t.Underlying().(*types.Chan)
+	_, ok = info.TypeOf(call).Underlying().(*types.Chan)
 	return ok
 }

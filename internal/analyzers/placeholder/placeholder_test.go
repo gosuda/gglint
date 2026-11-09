@@ -10,9 +10,11 @@ import (
 )
 
 func TestStandard(t *testing.T) {
+	t.Parallel()
 	analysistest.Run(t, analysistest.TestData(), placeholder.New(config.Standard), "standard")
 }
 
 func TestStrict(t *testing.T) {
+	t.Parallel()
 	analysistest.Run(t, analysistest.TestData(), placeholder.New(config.Strict), "strict")
 }

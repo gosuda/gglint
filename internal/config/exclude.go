@@ -4,17 +4,20 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 )
 
 type Exclude struct {
-	Paths []string `json:"paths"`
-	Rules []string `json:"rules"`
-	Text  string   `json:"text"`
+	Paths []string `json:"paths" toml:"paths"`
+	Rules []string `json:"rules" toml:"rules"`
+	Tests *bool    `json:"tests,omitzero" toml:"tests"`
+	Text  string   `json:"text" toml:"text"`
 }
 
 type CompiledExclude struct {
 	paths []*regexp.Regexp
 	rules []string
+	tests *bool
 	text  *regexp.Regexp
 }
 
@@ -31,10 +34,10 @@ func CompileExcludes(excludes []Exclude) ([]CompiledExclude, error) {
 }
 
 func compileExclude(index int, e Exclude) (CompiledExclude, error) {
-	if len(e.Paths) == 0 && len(e.Rules) == 0 && e.Text == "" {
-		return CompiledExclude{}, fmt.Errorf("exclude[%d]: set at least one of paths, rules, text", index)
+	if len(e.Paths) == 0 && len(e.Rules) == 0 && e.Tests == nil && e.Text == "" {
+		return CompiledExclude{}, fmt.Errorf("exclude[%d]: set at least one of paths, rules, tests, text", index)
 	}
-	c := CompiledExclude{rules: slices.Clone(e.Rules)}
+	c := CompiledExclude{rules: e.Rules, tests: e.Tests}
 	for j, source := range e.Paths {
 		re, err := regexp.Compile(source)
 		if err != nil {
@@ -42,41 +45,21 @@ func compileExclude(index int, e Exclude) (CompiledExclude, error) {
 		}
 		c.paths = append(c.paths, re)
 	}
-	if e.Text != "" {
-		re, err := regexp.Compile(e.Text)
-		if err != nil {
-			return CompiledExclude{}, fmt.Errorf("exclude[%d].text: %w", index, err)
-		}
-		c.text = re
+	text, err := regexp.Compile(e.Text)
+	if err != nil {
+		return CompiledExclude{}, fmt.Errorf("exclude[%d].text: %w", index, err)
 	}
+	c.text = text
 	return c, nil
 }
 
 func (c CompiledExclude) Matches(path, rule, check, message string) bool {
-	return c.matchesPath(path) && c.matchesRule(rule, check) && c.matchesText(message)
-}
-
-func (c CompiledExclude) matchesPath(path string) bool {
-	if len(c.paths) == 0 {
-		return true
-	}
-	return slices.ContainsFunc(c.paths, func(re *regexp.Regexp) bool { return re.MatchString(path) })
-}
-
-func (c CompiledExclude) matchesRule(rule, check string) bool {
-	if len(c.rules) == 0 {
-		return true
-	}
-	return slices.ContainsFunc(c.rules, func(token string) bool { return MatchToken(token, rule, check) })
-}
-
-func (c CompiledExclude) matchesText(message string) bool {
-	return c.text == nil || c.text.MatchString(message)
+	return (len(c.paths) == 0 || slices.ContainsFunc(c.paths, func(re *regexp.Regexp) bool { return re.MatchString(path) })) &&
+		(len(c.rules) == 0 || slices.ContainsFunc(c.rules, func(token string) bool { return MatchToken(token, rule, check) })) &&
+		(c.tests == nil || *c.tests == strings.HasSuffix(path, "_test.go")) &&
+		c.text.MatchString(message)
 }
 
 func MatchToken(token, rule, check string) bool {
-	if token == rule {
-		return true
-	}
-	return check != "" && token == rule+":"+check
+	return token == rule || check != "" && token == rule+":"+check
 }

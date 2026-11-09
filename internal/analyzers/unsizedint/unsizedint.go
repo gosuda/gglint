@@ -1,4 +1,3 @@
-// Package unsizedint reports int and uint fields in structs serialized as JSON.
 package unsizedint
 
 import (
@@ -10,12 +9,12 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
-	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 const message = "field %s has platform-dependent type %s in a JSON struct: use int64 or int32"
 
-// Analyzer reports predeclared int and uint fields of JSON-tagged structs.
 var Analyzer = &analysis.Analyzer{
 	Name: "unsizedint",
 	Doc: "Report int and uint fields in structs serialized as JSON.\n\n" +
@@ -27,9 +26,9 @@ var Analyzer = &analysis.Analyzer{
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
+	insp := inspection.Of(pass)
 	for c := range insp.Root().Preorder((*ast.StructType)(nil)) {
-		fields := c.Node().(*ast.StructType).Fields.List
+		fields := inspection.As[*ast.StructType](c.Node()).Fields.List
 		if slices.ContainsFunc(fields, hasJSONTag) {
 			reportUnsized(pass, fields)
 		}
@@ -51,29 +50,15 @@ func hasJSONTag(f *ast.Field) bool {
 
 func reportUnsized(pass *analysis.Pass, fields []*ast.Field) {
 	for _, f := range fields {
-		if typeName := unsizedName(pass.TypesInfo.TypeOf(f.Type)); typeName != "" {
-			reportField(pass, f, typeName)
+		basic, ok := types.Unalias(pass.TypesInfo.TypeOf(f.Type)).(*types.Basic)
+		if !ok || (basic.Kind() != types.Int && basic.Kind() != types.Uint) {
+			continue
+		}
+		if len(f.Names) == 0 {
+			pass.Reportf(f.Type.Pos(), message, basic.Name(), basic.Name())
+		}
+		for _, name := range f.Names {
+			pass.Reportf(name.Pos(), message, name.Name, basic.Name())
 		}
 	}
-}
-
-func reportField(pass *analysis.Pass, f *ast.Field, typeName string) {
-	if len(f.Names) == 0 {
-		pass.Reportf(f.Type.Pos(), message, typeName, typeName)
-		return
-	}
-	for _, name := range f.Names {
-		pass.Reportf(name.Pos(), message, name.Name, typeName)
-	}
-}
-
-func unsizedName(t types.Type) string {
-	if t == nil {
-		return ""
-	}
-	basic, ok := types.Unalias(t).(*types.Basic)
-	if !ok || (basic.Kind() != types.Int && basic.Kind() != types.Uint) {
-		return ""
-	}
-	return basic.Name()
 }

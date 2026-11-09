@@ -7,5 +7,6 @@ import (
 )
 
 func TestCheckconst(t *testing.T) {
+	t.Parallel()
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "checkconst/layout", "checkconst/consts", "checkconst/asm")
 }

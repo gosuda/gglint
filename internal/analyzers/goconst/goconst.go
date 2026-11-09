@@ -1,4 +1,3 @@
-// Package goconst reports repeated string literals that should be a constant.
 package goconst
 
 import (
@@ -8,12 +7,6 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
-const (
-	minStringLength = 3
-	minOccurrences  = 3
-)
-
-// Analyzer reports string literals of at least 3 characters that occur at least 3 times.
 var Analyzer = &analysis.Analyzer{
 	Name: "goconst",
 	Doc:  "Report string literals of 3 or more characters repeated 3 or more times.",
@@ -21,25 +14,19 @@ var Analyzer = &analysis.Analyzer{
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	cfg := goconstlib.Config{MinStringLength: minStringLength, MinOccurrences: minOccurrences}
-	issues, err := goconstlib.Run(pass.Files, pass.Fset, pass.TypesInfo, &cfg)
+	issues, err := goconstlib.Run(pass.Files, pass.Fset, pass.TypesInfo, &goconstlib.Config{MinStringLength: 3, MinOccurrences: 3})
 	if err != nil {
 		return nil, err
 	}
-	files := tokenFiles(pass)
+	files := make(map[string]*token.File, len(pass.Files))
+	for _, f := range pass.Files {
+		tf := pass.Fset.File(f.FileStart)
+		files[tf.Name()] = tf
+	}
 	for _, issue := range issues {
 		if tf, ok := files[issue.Pos.Filename]; ok {
 			pass.Reportf(tf.Pos(issue.Pos.Offset), "string %q has %d occurrences, make it a constant", issue.Str, issue.OccurrencesCount)
 		}
 	}
 	return nil, nil
-}
-
-func tokenFiles(pass *analysis.Pass) map[string]*token.File {
-	files := make(map[string]*token.File, len(pass.Files))
-	for _, f := range pass.Files {
-		tf := pass.Fset.File(f.FileStart)
-		files[tf.Name()] = tf
-	}
-	return files
 }

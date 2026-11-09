@@ -9,6 +9,7 @@ import (
 )
 
 func TestFixtures(t *testing.T) {
+	t.Parallel()
 	deny := []config.Deny{
 		{Path: "archive/tar"},
 		{Path: "crypto"},

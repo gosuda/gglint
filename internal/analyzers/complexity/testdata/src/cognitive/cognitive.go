@@ -226,3 +226,62 @@ func outerOne(n int) func() int {
 	}
 	return nil
 }
+
+func elseIfNestedFive(n int) int {
+	for i := range n {
+		if i == 1 {
+			return 1
+		} else if i == 2 {
+			return 2
+		}
+	}
+	return 0
+}
+
+func elseIfNestedSeven(n int) int { // want `^function elseIfNestedSeven is too complex: cognitive score 7 exceeds 5$`
+	for i := range n {
+		if i == 1 {
+			return 1
+		} else if i == 2 {
+			return 2
+		} else if i == 3 {
+			return 3
+		}
+	}
+	return 0
+}
+
+func elseIfBodyFive(a, b, c, d bool) int {
+	n := 0
+	if a {
+		n++
+	} else if b {
+		if c {
+			n++
+		}
+	}
+	if d {
+		n++
+	}
+	return n
+}
+
+func chainInLoopFive(a, b, c bool, n int) int {
+	total := 0
+	for range n {
+		if a && b || c && a {
+			total++
+		}
+	}
+	return total
+}
+
+func chainInLoopSix(a, b, c bool, n int) int { // want `^function chainInLoopSix is too complex: cognitive score 6 exceeds 5$`
+	total := 0
+	for range n {
+		if a && b || c && a || b {
+			total++
+		}
+	}
+	return total
+}

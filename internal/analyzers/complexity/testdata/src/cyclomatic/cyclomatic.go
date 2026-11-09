@@ -88,3 +88,58 @@ func outerTwo(n int) func() bool {
 	}
 	return nil
 }
+
+func loopFormsFive(n int) int { // want `^function loopFormsFive is too complex: cyclomatic complexity 5 exceeds 4$`
+	total := 0
+	for {
+		break
+	}
+	for total < n {
+		total++
+	}
+	for i := 0; i < n; i++ {
+		total += i
+	}
+	for range n {
+		total++
+	}
+	return total
+}
+
+func typeSwitchFive(v any) int { // want `^function typeSwitchFive is too complex: cyclomatic complexity 5 exceeds 4$`
+	switch v.(type) {
+	case int:
+		return 1
+	case string:
+		return 2
+	case bool:
+		return 3
+	case float64:
+		return 4
+	default:
+		return 0
+	}
+}
+
+func parenthesizedOpsFive(a, b, c, d bool) int { // want `^function parenthesizedOpsFive is too complex: cyclomatic complexity 5 exceeds 4$`
+	if (a || b) && (c || d) {
+		return 1
+	}
+	return 0
+}
+
+func jumpsFour(n int) int {
+	total := 0
+outer:
+	for i := range n {
+		for range i {
+			continue outer
+		}
+		if i > 2 {
+			break outer
+		}
+	}
+	goto done
+done:
+	return total
+}

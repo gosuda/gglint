@@ -16,38 +16,21 @@ import (
 
 func staticcheckRules() []Rule {
 	return []Rule{
-		{
-			Name:   "staticcheck",
-			Mode:   config.Basic,
-			Origin: "staticcheck",
-			Doc:    "Staticcheck: SA bug checks; standard adds S and ST checks, strict adds QF quick fixes.",
-			Build:  buildStaticcheck,
-		},
-		{
-			Name:   "unused",
-			Mode:   config.Basic,
-			Origin: "staticcheck",
-			Doc:    "Reports unused constants, variables, functions, types, and fields (staticcheck U1000).",
-			Build:  single(unused.Analyzer.Analyzer),
-		},
+		{"staticcheck", config.Basic, originStaticcheck, "Staticcheck: SA bug checks; standard adds S and ST checks, strict adds QF quick fixes.", buildStaticcheck},
+		{"unused", config.Basic, originStaticcheck, "Reports unused constants, variables, functions, types, and fields (staticcheck U1000).", single(unused.Analyzer.Analyzer)},
 	}
 }
 
 func buildStaticcheck(cfg config.Config) []*analysis.Analyzer {
 	prefixes, excluded := staticcheckPolicy(cfg.Mode)
-	all := slices.Concat(staticcheck.Analyzers, simple.Analyzers, stylecheck.Analyzers, quickfix.Analyzers)
-	selected := make([]*analysis.Analyzer, 0, len(all))
-	for _, a := range all {
-		if staticcheckSelects(a.Analyzer.Name, prefixes, excluded) {
+	var selected []*analysis.Analyzer
+	for _, a := range slices.Concat(staticcheck.Analyzers, simple.Analyzers, stylecheck.Analyzers, quickfix.Analyzers) {
+		name := a.Analyzer.Name
+		if slices.Contains(prefixes, strings.TrimRight(name, "0123456789")) && !slices.Contains(excluded, name) {
 			selected = append(selected, a.Analyzer)
 		}
 	}
 	return selected
-}
-
-func staticcheckSelects(name string, prefixes, excluded []string) bool {
-	prefix := strings.TrimRight(name, "0123456789")
-	return slices.Contains(prefixes, prefix) && !slices.Contains(excluded, name)
 }
 
 func staticcheckPolicy(m config.Mode) (prefixes, excluded []string) {
@@ -56,7 +39,7 @@ func staticcheckPolicy(m config.Mode) (prefixes, excluded []string) {
 		return []string{"SA"}, nil
 	case config.Standard:
 		return []string{"SA", "S", "ST"}, strings.Fields("ST1000 ST1003 ST1016 ST1020 ST1021 ST1022")
-	default:
-		return []string{"SA", "S", "ST", "QF"}, strings.Fields("ST1000 ST1016 ST1020 ST1021 ST1022")
+	case config.Strict:
 	}
+	return []string{"SA", "S", "ST", "QF"}, strings.Fields("ST1000 ST1016 ST1020 ST1021 ST1022")
 }

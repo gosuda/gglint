@@ -17,23 +17,21 @@ func New(c config.Complexity) *analysis.Analyzer {
 		Doc:  "complexity reports functions, interfaces, and files that exceed the configured complexity limits.",
 		Run: func(pass *analysis.Pass) (any, error) {
 			for _, f := range pass.Files {
-				checkFile(pass, f, limitsFor(pass.Fset, f, c))
+				if !ast.IsGenerated(f) {
+					checkFile(pass, f, c)
+				}
 			}
 			return nil, nil
 		},
 	}
 }
 
-func limitsFor(fset *token.FileSet, f *ast.File, c config.Complexity) config.Complexity {
-	if strings.HasSuffix(fset.File(f.Package).Name(), "_test.go") {
-		c.MaxLines = 0
-		c.MaxFileLines = 0
-	}
-	return c
-}
-
 func checkFile(pass *analysis.Pass, f *ast.File, limits config.Complexity) {
-	if lines := fileLines(pass.Fset, f); over(lines, limits.MaxFileLines) {
+	file := pass.Fset.File(f.Package)
+	if strings.HasSuffix(file.Name(), "_test.go") {
+		limits.MaxLines, limits.MaxFileLines = 0, 0
+	}
+	if lines := file.LineCount(); over(lines, limits.MaxFileLines) {
 		pass.Reportf(f.Package, "file is too long: line count %d exceeds %d", lines, limits.MaxFileLines)
 	}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -50,7 +48,8 @@ func checkNode(pass *analysis.Pass, n ast.Node, limits config.Complexity) {
 			reportFunc(pass, n.Name.Pos(), n.Body.End(), "function "+n.Name.Name, exceeded(m, limits))
 		}
 	case *ast.FuncLit:
-		reportFunc(pass, n.Pos(), n.Body.End(), "function literal", exceeded(litMetrics(pass.Fset, n), limits))
+		m := bodyMetrics(pass.Fset, n.Pos(), n.Type.Params, n.Body)
+		reportFunc(pass, n.Pos(), n.Body.End(), "function literal", exceeded(m, limits))
 	case *ast.TypeSpec:
 		checkInterface(pass, n, limits.MaxInterfaceMethods)
 	}
@@ -72,7 +71,11 @@ func checkInterface(pass *analysis.Pass, spec *ast.TypeSpec, limit int) {
 	if !ok || spec.Assign.IsValid() {
 		return
 	}
-	if methods := interfaceMethods(iface); over(methods, limit) {
+	methods := 0
+	for _, f := range iface.Methods.List {
+		methods += len(f.Names)
+	}
+	if over(methods, limit) {
 		pass.Reportf(spec.Name.Pos(), "interface %s is too large: method count %d exceeds %d", spec.Name.Name, methods, limit)
 	}
 }

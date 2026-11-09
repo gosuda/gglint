@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 type Mode int
 
@@ -13,10 +16,8 @@ const (
 var modeNames = [...]string{Basic: "basic", Standard: "standard", Strict: "strict"}
 
 func ParseMode(s string) (Mode, error) {
-	for m, name := range modeNames {
-		if name == s {
-			return Mode(m), nil
-		}
+	if i := slices.Index(modeNames[:], s); i >= 0 {
+		return Mode(i), nil
 	}
 	return 0, fmt.Errorf("unknown mode %q (want basic, standard, or strict)", s)
 }
@@ -29,17 +30,10 @@ func (m Mode) String() string {
 }
 
 func (m Mode) MarshalText() ([]byte, error) {
-	if m < Basic || m > Strict {
-		return nil, fmt.Errorf("invalid mode %d", int(m))
-	}
-	return []byte(modeNames[m]), nil
+	return []byte(m.String()), nil
 }
 
-func (m *Mode) UnmarshalText(text []byte) error {
-	parsed, err := ParseMode(string(text))
-	if err != nil {
-		return err
-	}
-	*m = parsed
-	return nil
+func (m *Mode) UnmarshalText(text []byte) (err error) {
+	*m, err = ParseMode(string(text))
+	return err
 }

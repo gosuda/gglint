@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/gosuda/gglint/internal/config"
@@ -16,44 +17,44 @@ func rulesCommand(args []string, stdout, stderr io.Writer) int {
 	var mode, configPath string
 	var selected bool
 	fs := flag.NewFlagSet("rules", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs.SetOutput(stderr)
 	fs.StringVar(&mode, "mode", "", "list rules at or below this mode")
 	fs.StringVar(&configPath, "config", "", "path of gglint.toml (with -selected)")
 	fs.BoolVar(&selected, "selected", false, "list the rules a run would select")
 	if err := fs.Parse(args); err != nil {
-		return usage(stderr, err)
+		return fail(stderr, exitUsage, err)
 	}
 	if configPath != "" && !selected {
-		return usage(stderr, errors.New("-config requires -selected"))
+		return fail(stderr, exitUsage, errors.New("-config requires -selected"))
 	}
-	listed, err := listRules(mode, configPath, selected)
+	list := catalogRules
+	if selected {
+		list = selectedRules
+	}
+	listed, err := list(mode, configPath)
 	if err != nil {
-		return usage(stderr, err)
+		return configFailure(stderr, err)
 	}
+	var out []byte
 	for _, r := range listed {
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", r.Name, r.Mode, r.Origin, oneLine(r.Doc))
+		out = fmt.Appendf(out, "%s\t%s\t%s\t%s\n", r.Name, r.Mode, r.Origin, strings.Join(strings.Fields(r.Doc), " "))
+	}
+	if _, err := stdout.Write(out); err != nil {
+		return fail(stderr, exitFailure, fmt.Errorf("internal: %w", err))
 	}
 	return exitClean
 }
 
-func listRules(mode, configPath string, selected bool) ([]rules.Rule, error) {
-	if selected {
-		return selectedRules(mode, configPath)
-	}
+func catalogRules(mode, _ string) ([]rules.Rule, error) {
+	all := rules.All()
 	if mode == "" {
-		return rules.All(), nil
+		return all, nil
 	}
 	limit, err := config.ParseMode(mode)
 	if err != nil {
 		return nil, err
 	}
-	var out []rules.Rule
-	for _, r := range rules.All() {
-		if r.Mode <= limit {
-			out = append(out, r)
-		}
-	}
-	return out, nil
+	return slices.DeleteFunc(all, func(r rules.Rule) bool { return r.Mode > limit }), nil
 }
 
 func selectedRules(mode, configPath string) ([]rules.Rule, error) {
@@ -66,8 +67,4 @@ func selectedRules(mode, configPath string) ([]rules.Rule, error) {
 		return nil, err
 	}
 	return rules.Select(cfg)
-}
-
-func oneLine(doc string) string {
-	return strings.Join(strings.Fields(doc), " ")
 }

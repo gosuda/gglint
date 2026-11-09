@@ -1,4 +1,3 @@
-// Package dupl reports duplicated code fragments within a package.
 package dupl
 
 import (
@@ -11,7 +10,6 @@ import (
 
 const minTokens = 150
 
-// Analyzer reports each clone found by github.com/golangci/dupl at a threshold of 150 syntax tokens.
 var Analyzer = &analysis.Analyzer{
 	Name: "dupl",
 	Doc:  "Report duplicated code fragments of at least 150 syntax tokens within a package.",

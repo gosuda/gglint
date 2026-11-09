@@ -1,6 +1,7 @@
 package vettool
 
 import (
+	json "encoding/json/v2"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"golang.org/x/tools/go/analysis/unitchecker"
 
 	"github.com/gosuda/gglint/internal/config"
+	"github.com/gosuda/gglint/internal/rules"
 )
 
 const configFlag = "config"
@@ -21,7 +23,7 @@ func Main(args []string) int {
 		unitchecker.Main()
 		return 0
 	}
-	analyzers, err := build(path)
+	analyzers, err := build(path, args[len(args)-1])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gglint: internal: %v\n", err)
 		return 3
@@ -32,18 +34,37 @@ func Main(args []string) int {
 
 func configPath(args []string) (string, bool) {
 	for i, arg := range args {
-		name := strings.TrimLeft(arg, "-")
-		if name == configFlag && strings.HasPrefix(arg, "-") && i+1 < len(args) {
-			return args[i+1], true
+		if !strings.HasPrefix(arg, "-") {
+			continue
 		}
-		if value, ok := strings.CutPrefix(name, configFlag+"="); ok && strings.HasPrefix(arg, "-") {
+		name := strings.TrimLeft(arg, "-")
+		if value, ok := strings.CutPrefix(name, configFlag+"="); ok {
 			return value, true
+		}
+		if name == configFlag && i+1 < len(args) {
+			return args[i+1], true
 		}
 	}
 	return "", false
 }
 
-func build(path string) ([]*analysis.Analyzer, error) {
+func vetxOnly(unitConfig string) (bool, error) {
+	data, err := os.ReadFile(unitConfig)
+	if err != nil {
+		return false, err
+	}
+	var unit struct{ VetxOnly bool }
+	if err := json.Unmarshal(data, &unit); err != nil {
+		return false, fmt.Errorf("decode unit config: %w", err)
+	}
+	return unit.VetxOnly, nil
+}
+
+func build(path, unitConfig string) ([]*analysis.Analyzer, error) {
+	factsOnly, err := vetxOnly(unitConfig)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -56,5 +77,38 @@ func build(path string) ([]*analysis.Analyzer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return e.analyzers(selected), nil
+	if factsOnly {
+		return e.factsOnly(selected), nil
+	}
+	return e.reporting(selected), nil
+}
+
+func (e *engine) factsOnly(selected []rules.Rule) []*analysis.Analyzer {
+	seen := map[*analysis.Analyzer]bool{}
+	var out []*analysis.Analyzer
+	var visit func(*analysis.Analyzer)
+	visit = func(a *analysis.Analyzer) {
+		if seen[a] {
+			return
+		}
+		seen[a] = true
+		if len(a.FactTypes) > 0 {
+			out = append(out, a)
+		}
+		for _, req := range a.Requires {
+			visit(req)
+		}
+	}
+	for _, a := range e.analyzers(selected) {
+		visit(a)
+	}
+	return out
+}
+
+func (e *engine) reporting(selected []rules.Rule) []*analysis.Analyzer {
+	built := reportPanics(e.analyzers(selected))
+	if e.selected[rules.NolintName] {
+		built = append(built, e.nolintAnalyzer(built))
+	}
+	return built
 }

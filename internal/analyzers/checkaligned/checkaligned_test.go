@@ -7,5 +7,6 @@ import (
 )
 
 func TestFixtures(t *testing.T) {
+	t.Parallel()
 	analysistest.Run(t, analysistest.TestData(), Analyzer, "aligned", "dotimport", "ignored")
 }

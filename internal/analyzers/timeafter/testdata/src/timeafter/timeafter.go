@@ -39,6 +39,10 @@ func rangeLoop(d time.Duration, xs []int) {
 		_ = x
 		<-time.After(d) // want `time\.After in a loop allocates a timer per iteration: create one time\.Timer before the loop and Reset it`
 	}
+	for i := range 3 {
+		_ = i
+		<-time.After(d) // want `time\.After in a loop allocates a timer per iteration: create one time\.Timer before the loop and Reset it`
+	}
 }
 
 func nestedLoops(d time.Duration) {
@@ -47,6 +51,7 @@ func nestedLoops(d time.Duration) {
 			_ = i + j
 			<-time.After(d) // want `time\.After in a loop allocates a timer per iteration: create one time\.Timer before the loop and Reset it`
 		}
+		<-time.After(d) // want `time\.After in a loop allocates a timer per iteration: create one time\.Timer before the loop and Reset it`
 	}
 }
 
@@ -62,6 +67,14 @@ func twoCalls(d time.Duration) (<-chan time.Time, <-chan time.Time) {
 	}
 }
 
+func twoCallsOneBody(d time.Duration) {
+	for {
+		a := time.After(d) // want `time\.After in a loop allocates a timer per iteration: create one time\.Timer before the loop and Reset it`
+		b := time.After(d) // want `time\.After in a loop allocates a timer per iteration: create one time\.Timer before the loop and Reset it`
+		_, _ = a, b
+	}
+}
+
 func loopInLiteral(d time.Duration) func() {
 	return func() {
 		for {
@@ -73,8 +86,23 @@ func loopInLiteral(d time.Duration) func() {
 func literalInLoop(d time.Duration) {
 	for i := 0; i < 2; i++ {
 		func() {
-			<-time.After(d)
+			<-time.After(d) // want `time\.After in a loop allocates a timer per iteration: create one time\.Timer before the loop and Reset it`
 		}()
+	}
+}
+
+func literalInHeaderInLoop(d time.Duration) {
+	for range 2 {
+		for f := func() { <-time.After(d) }; ; { // want `time\.After in a loop allocates a timer per iteration: create one time\.Timer before the loop and Reset it`
+			f()
+			break
+		}
+	}
+}
+
+func literalOutsideLoop(d time.Duration) func() {
+	return func() {
+		<-time.After(d)
 	}
 }
 
@@ -85,6 +113,7 @@ func outsideLoop(d time.Duration) {
 		t.Reset(d)
 		<-t.C
 	}
+	_ = time.AfterFunc(d, func() {})
 }
 
 func headerRunsOnce(d time.Duration) {
@@ -102,7 +131,9 @@ func headerRunsOnce(d time.Duration) {
 
 func notTimeAfter(d time.Duration) {
 	var c clock
+	now := time.Now()
 	for i := 0; i < 2; i++ {
+		_ = now.After(now)
 		_ = c.After(d)
 		_ = After(d)
 		_ = time.Tick(d)

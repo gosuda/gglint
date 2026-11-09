@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -21,17 +20,11 @@ type Invocation struct {
 	Patterns   []string
 }
 
-type LoadError struct{ Message string }
-
-func (e *LoadError) Error() string { return "load: " + e.Message }
-
-type InternalError struct{ Package, Analyzer, Message string }
-
-func (e *InternalError) Error() string {
-	return fmt.Sprintf("internal: %s: %s: %s", e.Package, e.Analyzer, e.Message)
-}
-
 var typecheckLine = regexp.MustCompile(`^(?:vet: )?(.+\.go):(\d+)(?::(\d+))?: (.+)$`)
+
+func loadError(message string) error {
+	return errors.New("load: " + message)
+}
 
 func Vet(ctx context.Context, inv Invocation) ([]finding.Finding, error) {
 	out, err := execute(ctx, inv, "-json")
@@ -44,7 +37,7 @@ func Vet(ctx context.Context, inv Invocation) ([]finding.Finding, error) {
 	}
 	typecheck := typecheckFindings(out.stderr, inv.WorkDir)
 	if out.failed && len(typecheck) == 0 {
-		return nil, &LoadError{Message: strings.TrimSpace(string(out.stderr))}
+		return nil, loadError(strings.TrimSpace(string(out.stderr)))
 	}
 	return append(typecheck, findings...), nil
 }
@@ -55,7 +48,7 @@ func Fix(ctx context.Context, inv Invocation) error {
 		return err
 	}
 	if out.failed && len(typecheckFindings(out.stderr, inv.WorkDir)) == 0 {
-		return &LoadError{Message: strings.TrimSpace(string(out.stderr))}
+		return loadError(strings.TrimSpace(string(out.stderr)))
 	}
 	return nil
 }
@@ -80,7 +73,7 @@ func execute(ctx context.Context, inv Invocation, modeFlag string) (output, erro
 		return output{}, ctx.Err()
 	}
 	if _, isExit := errors.AsType[*exec.ExitError](err); err != nil && !isExit {
-		return output{}, &LoadError{Message: err.Error()}
+		return output{}, loadError(err.Error())
 	}
 	return output{stdout: stdout.Bytes(), stderr: stderr.Bytes(), failed: err != nil}, nil
 }

@@ -2,13 +2,16 @@ package driver
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/gosuda/gglint/internal/finding"
 )
@@ -25,10 +28,6 @@ type jsonDiagnostic struct {
 		Posn    string `json:"posn"`
 		Message string `json:"message"`
 	} `json:"related"`
-}
-
-type jsonFailure struct {
-	Error string `json:"error"`
 }
 
 type entry struct {
@@ -64,7 +63,7 @@ func readEntries(stdout []byte) ([]entry, error) {
 			break
 		}
 		if err != nil {
-			return nil, &LoadError{Message: "decode go vet output: " + err.Error()}
+			return nil, decodeError(err)
 		}
 		for pkg, analyzers := range tree {
 			for analyzer, raw := range analyzers {
@@ -73,36 +72,28 @@ func readEntries(stdout []byte) ([]entry, error) {
 		}
 	}
 	slices.SortFunc(out, func(a, b entry) int {
-		if a.pkg != b.pkg {
-			return compareStrings(a.pkg, b.pkg)
-		}
-		return compareStrings(a.analyzer, b.analyzer)
+		return cmp.Or(strings.Compare(a.pkg, b.pkg), strings.Compare(a.analyzer, b.analyzer))
 	})
 	return out, nil
 }
 
-func compareStrings(a, b string) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
-	}
+func decodeError(err error) error {
+	return fmt.Errorf("load: decode go vet output: %w", err)
 }
 
 func decodeEntry(e entry) ([]finding.Finding, error) {
 	if e.raw.Kind() == '{' {
-		var failure jsonFailure
-		if err := json.Unmarshal(e.raw, &failure); err != nil {
-			return nil, &LoadError{Message: "decode go vet output: " + err.Error()}
+		var failure struct {
+			Error string `json:"error"`
 		}
-		return nil, &InternalError{Package: e.pkg, Analyzer: e.analyzer, Message: failure.Error}
+		if err := json.Unmarshal(e.raw, &failure); err != nil {
+			return nil, decodeError(err)
+		}
+		return nil, fmt.Errorf("internal: %s: %s: %s", e.pkg, e.analyzer, failure.Error)
 	}
 	var diagnostics []jsonDiagnostic
 	if err := json.Unmarshal(e.raw, &diagnostics); err != nil {
-		return nil, &LoadError{Message: "decode go vet output: " + err.Error()}
+		return nil, decodeError(err)
 	}
 	out := make([]finding.Finding, 0, len(diagnostics))
 	for _, d := range diagnostics {

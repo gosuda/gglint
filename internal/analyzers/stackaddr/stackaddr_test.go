@@ -9,5 +9,6 @@ import (
 )
 
 func TestAnalyzer(t *testing.T) {
+	t.Parallel()
 	analysistest.Run(t, analysistest.TestData(), stackaddr.Analyzer, "stackaddr")
 }

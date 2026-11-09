@@ -528,7 +528,7 @@ func run(pass *analysis.Pass) (any, error) {
 	localPos := make(map[string]token.Pos)
 	remotePos := make(map[symbolKey]token.Pos)
 	ur := make(UnresolvedLinknames)
-	for _, f := range pass.Files {
+	for _, f := range linknameFiles(pass) {
 		for _, sym := range findLinknames(pass, f) {
 			localSig, ok := localSymbols[sym.local]
 			if !ok {
