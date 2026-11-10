@@ -31,7 +31,7 @@ func (e *engine) nolintAnalyzer(requires []*analysis.Analyzer) *analysis.Analyze
 
 func (e *engine) report(pass *analysis.Pass, d *directive, message string) {
 	diagnostic := analysis.Diagnostic{Pos: d.slash, End: d.end, Message: message}
-	if e.keep(pass, rules.NolintName, "", diagnostic) {
+	if e.keep(pass, rules.Rule{Name: rules.NolintName}, "", diagnostic) {
 		pass.Report(diagnostic)
 	}
 }

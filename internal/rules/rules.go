@@ -25,12 +25,21 @@ const (
 	originGglint      = "gglint"
 )
 
+type Reports int
+
+const (
+	ReportEverywhere Reports = iota
+	ReportOutsideTests
+	ReportWithFix
+)
+
 type Rule struct {
-	Name   string
-	Mode   config.Mode
-	Origin string
-	Doc    string
-	Build  func(config.Config) []*analysis.Analyzer
+	Name    string
+	Mode    config.Mode
+	Origin  string
+	Doc     string
+	Reports Reports
+	Build   func(config.Config) []*analysis.Analyzer
 }
 
 func All() []Rule {

@@ -198,3 +198,113 @@ func TestConcurrentBuildsKeepSharedAnalyzersIsolated(t *testing.T) {
 		}
 	}
 }
+
+func TestReportOutsideTestsSkipsTestFiles(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		file string
+		want int
+	}{
+		{name: "non-test file kept", file: "/work/p/a.go", want: 1},
+		{name: "test file dropped", file: "/work/p/a_test.go", want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newTestEngine(t, config.Config{Mode: config.Standard, Tests: true})
+			var got []analysis.Diagnostic
+			pass := newPass(t, tc.file, "package p\n\nvar X = 1\n", func(d analysis.Diagnostic) { got = append(got, d) })
+			r := probeRule()
+			r.Reports = rules.ReportOutsideTests
+			for _, a := range e.analyzers([]rules.Rule{r}) {
+				if _, err := a.Run(pass); err != nil {
+					t.Fatalf("run %s: %v", a.Name, err)
+				}
+			}
+			if len(got) != tc.want {
+				t.Fatalf("kept %d findings, want %d", len(got), tc.want)
+			}
+		})
+	}
+}
+
+func TestReportWithFixKeepsOnlyFindingsWithEdits(t *testing.T) {
+	t.Parallel()
+	e := newTestEngine(t, config.Config{Mode: config.Standard})
+	pass := newPass(t, "/work/p/a.go", "package p\n\nvar X = 1\n", nil)
+	pos := pass.Files[0].Decls[0].Pos()
+	r := probeRule()
+	r.Reports = rules.ReportWithFix
+	cases := []struct {
+		name string
+		d    analysis.Diagnostic
+		want bool
+	}{
+		{
+			name: "no fix dropped",
+			d:    analysis.Diagnostic{Pos: pos, Message: "probe finding"},
+			want: false,
+		},
+		{
+			name: "fix without edits dropped",
+			d:    analysis.Diagnostic{Pos: pos, Message: "probe finding", SuggestedFixes: []analysis.SuggestedFix{{Message: "fix it"}}},
+			want: false,
+		},
+		{
+			name: "fix with edits kept",
+			d:    analysis.Diagnostic{Pos: pos, Message: "probe finding", SuggestedFixes: []analysis.SuggestedFix{{Message: "fix it", TextEdits: []analysis.TextEdit{{Pos: pos, End: pos, NewText: []byte("var Y = 1")}}}}},
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		if got := e.keep(pass, r, "", tc.d); got != tc.want {
+			t.Errorf("%s: keep = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestInvalidPositionDroppedForEveryFilter(t *testing.T) {
+	t.Parallel()
+	for _, reports := range []rules.Reports{rules.ReportEverywhere, rules.ReportOutsideTests, rules.ReportWithFix} {
+		e := newTestEngine(t, config.Config{Mode: config.Standard})
+		pass := newPass(t, "/work/p/a.go", "package p\n\nvar X = 1\n", nil)
+		pos := pass.Files[0].Decls[0].Pos()
+		r := probeRule()
+		r.Reports = reports
+		d := analysis.Diagnostic{Pos: token.NoPos, Message: "probe finding"}
+		if reports == rules.ReportWithFix {
+			d.SuggestedFixes = []analysis.SuggestedFix{{Message: "fix it", TextEdits: []analysis.TextEdit{{Pos: pos, End: pos, NewText: []byte("var Y = 1")}}}}
+		}
+		if e.keep(pass, r, "", d) {
+			t.Errorf("reports %v: keep with no position = true, want false", reports)
+		}
+	}
+}
+
+func TestFilteredFindingLeavesNolintDirectiveUnused(t *testing.T) {
+	t.Parallel()
+	e := newTestEngine(t, config.Config{Mode: config.Standard, Tests: true})
+	e.known["probe"], e.selected["probe"] = true, true
+	src := "package p\n\nvar X = 1 //nolint:probe // reason\n"
+	var kept []analysis.Diagnostic
+	pass := newPass(t, "/work/p/a.go", src, func(d analysis.Diagnostic) { kept = append(kept, d) })
+	r := probeRule()
+	r.Reports = rules.ReportWithFix
+	for _, a := range e.analyzers([]rules.Rule{r}) {
+		if _, err := a.Run(pass); err != nil {
+			t.Fatalf("run %s: %v", a.Name, err)
+		}
+	}
+	if len(kept) != 0 {
+		t.Fatalf("kept %d findings, want 0", len(kept))
+	}
+	var messages []string
+	nolintPass := newPass(t, "/work/p/a.go", src, func(d analysis.Diagnostic) { messages = append(messages, d.Message) })
+	if _, err := e.nolintAnalyzer(nil).Run(nolintPass); err != nil {
+		t.Fatalf("run nolint: %v", err)
+	}
+	if len(messages) != 1 || messages[0] != "unused nolint directive for probe" {
+		t.Fatalf("nolint reported %q, want %q", messages, []string{"unused nolint directive for probe"})
+	}
+}

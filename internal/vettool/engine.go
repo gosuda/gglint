@@ -85,7 +85,7 @@ func (e *engine) adopt(r rules.Rule, a *analysis.Analyzer, siblings int) *analys
 		filtered := *pass
 		filtered.ReadFile = func(name string) ([]byte, error) { return e.source(pass, name) }
 		filtered.Report = func(d analysis.Diagnostic) {
-			if e.keep(pass, r.Name, check, d) {
+			if e.keep(pass, r, check, d) {
 				pass.Report(d)
 			}
 		}
@@ -112,9 +112,18 @@ func reportPanics(analyzers []*analysis.Analyzer) []*analysis.Analyzer {
 	return out
 }
 
-func (e *engine) keep(pass *analysis.Pass, rule, check string, d analysis.Diagnostic) bool {
+func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysis.Diagnostic) bool {
+	if !d.Pos.IsValid() {
+		return false
+	}
 	filename := realName(pass.Fset, d.Pos)
-	if !e.cfg.Tests && strings.HasSuffix(filename, "_test.go") || e.excluded(filename, rule, check, d.Message) {
+	if r.Reports == rules.ReportOutsideTests && strings.HasSuffix(filename, "_test.go") {
+		return false
+	}
+	if r.Reports == rules.ReportWithFix && !hasEdits(d) {
+		return false
+	}
+	if !e.cfg.Tests && strings.HasSuffix(filename, "_test.go") || e.excluded(filename, r.Name, check, d.Message) {
 		return false
 	}
 	file := fileAt(pass.Files, d.Pos)
@@ -122,7 +131,16 @@ func (e *engine) keep(pass *analysis.Pass, rule, check string, d analysis.Diagno
 		return true
 	}
 	state := e.stateOf(pass, file)
-	return !state.generated && (rule == rules.NolintName || !e.suppressed(state, pass.Fset.Position(d.Pos).Line, rule, check))
+	return !state.generated && (r.Name == rules.NolintName || !e.suppressed(state, pass.Fset.Position(d.Pos).Line, r.Name, check))
+}
+
+func hasEdits(d analysis.Diagnostic) bool {
+	for _, fix := range d.SuggestedFixes {
+		if len(fix.TextEdits) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func realName(fset *token.FileSet, pos token.Pos) string {

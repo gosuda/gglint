@@ -16,8 +16,8 @@ import (
 
 func staticcheckRules() []Rule {
 	return []Rule{
-		{"staticcheck", config.Basic, originStaticcheck, "Staticcheck: SA bug checks; standard adds S and ST checks, strict adds QF quick fixes.", buildStaticcheck},
-		{"unused", config.Basic, originStaticcheck, "Reports unused constants, variables, functions, types, and fields (staticcheck U1000).", single(unused.Analyzer.Analyzer)},
+		{"staticcheck", config.Basic, originStaticcheck, "Staticcheck: SA bug checks; standard adds S and ST checks, strict adds QF quick fixes.", ReportEverywhere, buildStaticcheck},
+		{"unused", config.Basic, originStaticcheck, "Reports unused constants, variables, functions, types, and fields (staticcheck U1000).", ReportEverywhere, single(unused.Analyzer.Analyzer)},
 	}
 }
 
