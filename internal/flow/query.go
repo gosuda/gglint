@@ -160,6 +160,10 @@ func findLocalDef(info *types.Info, fn ast.Node, body *ast.BlockStmt, v *types.V
 		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
 			return false
 		}
+		if cc, ok := n.(*ast.CaseClause); ok && info.Implicits[cc] == v {
+			found = true
+			return false
+		}
 		id, ok := n.(*ast.Ident)
 		if !ok || info.Defs[id] != v {
 			return true
@@ -264,19 +268,37 @@ func assignedLater(info *types.Info, fn ast.Node, v *types.Var, after token.Pos)
 		if found {
 			return false
 		}
-		switch n := n.(type) {
-		case *ast.AssignStmt:
-			if n.Pos() > after && assigns(info, n.Lhs, v) {
-				found = true
-			}
-		case *ast.IncDecStmt:
-			if n.Pos() > after && targetIs(info, n.X, v) {
-				found = true
-			}
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
+		if laterAt(info, n, v, after) {
+			found = true
 		}
 		return !found
 	})
 	return found
+}
+
+func laterAt(info *types.Info, n ast.Node, v *types.Var, after token.Pos) bool {
+	switch n := n.(type) {
+	case *ast.AssignStmt:
+		return n.Pos() > after && assigns(info, n.Lhs, v)
+	case *ast.IncDecStmt:
+		return n.Pos() > after && targetIs(info, n.X, v)
+	case *ast.RangeStmt:
+		return n.Pos() > after && rangeAssigns(info, n, v)
+	}
+	return false
+}
+
+func rangeAssigns(info *types.Info, n *ast.RangeStmt, v *types.Var) bool {
+	if n.Tok != token.ASSIGN && n.Tok != token.DEFINE {
+		return false
+	}
+	if n.Key != nil && targetIs(info, n.Key, v) {
+		return true
+	}
+	return n.Value != nil && targetIs(info, n.Value, v)
 }
 
 func assigns(info *types.Info, lhs []ast.Expr, v *types.Var) bool {
@@ -343,7 +365,6 @@ func derefType(t types.Type) types.Type {
 	return t
 }
 
-// Escapes reports whether v may still be reachable after fn returns.
 func Escapes(info *types.Info, fn ast.Node, v *types.Var) bool {
 	if info == nil || fn == nil || v == nil {
 		return false
@@ -353,13 +374,145 @@ func Escapes(info *types.Info, fn ast.Node, v *types.Var) bool {
 		return false
 	}
 	e := escaper{info: info, target: v, fn: fn}
+	e.alias = collectAliases(info, body, v)
+	if hasBareEscape(info, fn, body, e.alias) {
+		return true
+	}
 	return e.list(body.List, false)
 }
 
 type escaper struct {
-	info   *types.Info
-	target *types.Var
-	fn     ast.Node
+	info     *types.Info
+	target   *types.Var
+	fn       ast.Node
+	captured bool
+	alias    map[*types.Var]bool
+}
+
+func collectAliases(info *types.Info, body *ast.BlockStmt, v *types.Var) map[*types.Var]bool {
+	out := map[*types.Var]bool{v: true}
+	if !isRef(v.Type()) {
+		return out
+	}
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(body, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.FuncLit); ok && lit.Body != body {
+				return false
+			}
+			switch n := n.(type) {
+			case *ast.AssignStmt:
+				changed = aliasAssign(info, n, out) || changed
+			case *ast.ValueSpec:
+				changed = aliasSpec(info, n, out) || changed
+			}
+			return true
+		})
+	}
+	return out
+}
+
+func aliasAssign(info *types.Info, s *ast.AssignStmt, out map[*types.Var]bool) bool {
+	if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
+		return false
+	}
+	if !resolvesTo(info, s.Rhs[0], out) {
+		return false
+	}
+	return aliasLHS(info, s.Lhs[0], out)
+}
+
+func aliasSpec(info *types.Info, s *ast.ValueSpec, out map[*types.Var]bool) bool {
+	if len(s.Names) != 1 || len(s.Values) != 1 {
+		return false
+	}
+	if !resolvesTo(info, s.Values[0], out) {
+		return false
+	}
+	if vv, ok := info.Defs[s.Names[0]].(*types.Var); ok && !out[vv] {
+		out[vv] = true
+		return true
+	}
+	return false
+}
+
+func aliasLHS(info *types.Info, lhs ast.Expr, out map[*types.Var]bool) bool {
+	id, ok := ast.Unparen(lhs).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if vv, ok := info.Defs[id].(*types.Var); ok && !out[vv] {
+		out[vv] = true
+		return true
+	}
+	return false
+}
+
+func resolvesTo(info *types.Info, e ast.Expr, out map[*types.Var]bool) bool {
+	e = ast.Unparen(e)
+	if id, ok := e.(*ast.Ident); ok {
+		if vv, ok := info.Uses[id].(*types.Var); ok && out[vv] {
+			return true
+		}
+		if vv, ok := info.Defs[id].(*types.Var); ok && out[vv] {
+			return true
+		}
+		return false
+	}
+	if sel, ok := e.(*ast.SelectorExpr); ok {
+		return resolvesTo(info, sel.X, out)
+	}
+	return false
+}
+
+func isRef(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch t.Underlying().(type) {
+	case *types.Pointer, *types.Map, *types.Slice, *types.Signature, *types.Chan, *types.Interface:
+		return true
+	}
+	if b, ok := t.Underlying().(*types.Basic); ok && b.Kind() == types.UnsafePointer {
+		return true
+	}
+	return false
+}
+
+func hasBareEscape(info *types.Info, fn ast.Node, body *ast.BlockStmt, alias map[*types.Var]bool) bool {
+	if !hasBareReturn(body) {
+		return false
+	}
+	ft, _ := funcSig(fn)
+	if ft == nil || ft.Results == nil {
+		return false
+	}
+	for _, f := range ft.Results.List {
+		for _, id := range f.Names {
+			if vv, ok := info.Defs[id].(*types.Var); ok && alias[vv] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasBareReturn(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && lit.Body != body {
+			return false
+		}
+		if r, ok := n.(*ast.ReturnStmt); ok && len(r.Results) == 0 {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func (e *escaper) list(l []ast.Stmt, esc bool) bool {
@@ -395,7 +548,7 @@ func (e *escaper) stmt(s ast.Stmt, esc bool) bool {
 	case *ast.ReturnStmt:
 		return e.exprs(s.Results, true)
 	case *ast.GoStmt:
-		return e.expr(s.Call, true)
+		return e.goCall(s.Call)
 	case *ast.DeferStmt:
 		return e.expr(s.Call, true)
 	case *ast.SendStmt:
@@ -407,6 +560,15 @@ func (e *escaper) stmt(s ast.Stmt, esc bool) bool {
 	default:
 		return e.structured(s, esc)
 	}
+}
+
+func (e *escaper) goCall(c *ast.CallExpr) bool {
+	if sel, ok := ast.Unparen(c.Fun).(*ast.SelectorExpr); ok {
+		if e.expr(sel.X, true) {
+			return true
+		}
+	}
+	return e.expr(c, true)
 }
 
 func (e *escaper) send(s *ast.SendStmt, esc bool) bool {
@@ -478,7 +640,7 @@ func (e *escaper) assign(s *ast.AssignStmt, esc bool) bool {
 func (e *escaper) store(lhs []ast.Expr) bool {
 	for _, l := range lhs {
 		switch l := ast.Unparen(l).(type) {
-		case *ast.SelectorExpr, *ast.IndexExpr:
+		case *ast.SelectorExpr, *ast.IndexExpr, *ast.StarExpr:
 			return true
 		case *ast.Ident:
 			if vv, ok := e.defOrUse(l).(*types.Var); ok && e.global(vv) {
@@ -523,14 +685,14 @@ func (e *escaper) expr(x ast.Expr, esc bool) bool {
 		return false
 	}
 	if id, ok := x.(*ast.Ident); ok {
-		return esc && e.info.Uses[id] == e.target
+		return esc && e.aliased(id)
 	}
 	if c := singleChild(x); c != nil {
 		return e.expr(c, esc)
 	}
 	switch x := x.(type) {
 	case *ast.FuncLit:
-		return e.list(x.Body.List, true)
+		return e.capturedList(x.Body.List)
 	case *ast.CallExpr:
 		return e.call(x, esc)
 	case *ast.UnaryExpr:
@@ -538,6 +700,21 @@ func (e *escaper) expr(x ast.Expr, esc bool) bool {
 	default:
 		return e.compound(x, esc)
 	}
+}
+
+func (e *escaper) aliased(id *ast.Ident) bool {
+	if vv, ok := e.info.Uses[id].(*types.Var); ok && e.alias[vv] {
+		return true
+	}
+	return false
+}
+
+func (e *escaper) capturedList(l []ast.Stmt) bool {
+	prev := e.captured
+	e.captured = true
+	found := e.list(l, true)
+	e.captured = prev
+	return found
 }
 
 func (e *escaper) unary(x *ast.UnaryExpr, esc bool) bool {
@@ -587,16 +764,34 @@ func (e *escaper) indexRest(x ast.Expr, esc bool) bool {
 }
 
 func (e *escaper) call(c *ast.CallExpr, esc bool) bool {
-	plain := e.plain(c)
-	args := !plain
-	if lit, ok := ast.Unparen(c.Fun).(*ast.FuncLit); ok && !plain {
-		if e.list(lit.Body.List, esc) {
-			return true
-		}
-	} else if e.expr(c.Fun, false) {
+	if lit, ok := ast.Unparen(c.Fun).(*ast.FuncLit); ok {
+		return e.litCall(lit, c, esc)
+	}
+	if e.recv(c) {
 		return true
 	}
-	return e.exprs(c.Args, args)
+	if e.expr(c.Fun, false) {
+		return true
+	}
+	return e.exprs(c.Args, !e.plain(c))
+}
+
+func (e *escaper) litCall(lit *ast.FuncLit, c *ast.CallExpr, esc bool) bool {
+	if esc && e.capturedList(lit.Body.List) {
+		return true
+	}
+	if !esc && e.list(lit.Body.List, esc) {
+		return true
+	}
+	return e.exprs(c.Args, true)
+}
+
+func (e *escaper) recv(c *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(c.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	return e.expr(sel.X, e.captured)
 }
 
 func (e *escaper) plain(c *ast.CallExpr) bool {
@@ -604,9 +799,16 @@ func (e *escaper) plain(c *ast.CallExpr) bool {
 		return true
 	}
 	id, ok := ast.Unparen(c.Fun).(*ast.Ident)
-	if !ok || !isLenCapName(id.Name) {
+	if !ok {
 		return false
 	}
 	b, ok := e.info.Uses[id].(*types.Builtin)
-	return ok && isLenCapName(b.Name())
+	if !ok {
+		return false
+	}
+	switch b.Name() {
+	case "len", "cap", closeFun, "delete", "copy", "clear":
+		return true
+	}
+	return false
 }

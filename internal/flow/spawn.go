@@ -43,13 +43,16 @@ func (w *spawnWalker) stmt(s ast.Stmt, inLoop bool) {
 		w.list(s.List, inLoop)
 	case *ast.IfStmt:
 		w.optStmt(s.Init, inLoop)
+		w.scan(s.Cond, inLoop)
 		w.stmt(s.Body, inLoop)
 		w.optStmt(s.Else, inLoop)
 	case *ast.ForStmt:
 		w.optStmt(s.Init, inLoop)
+		w.scan(s.Cond, inLoop)
 		w.optStmt(s.Post, true)
 		w.stmt(s.Body, true)
 	case *ast.RangeStmt:
+		w.scan(s.X, inLoop)
 		w.stmt(s.Body, true)
 	case *ast.LabeledStmt:
 		w.stmt(s.Stmt, inLoop)
@@ -67,26 +70,56 @@ func (w *spawnWalker) list(l []ast.Stmt, inLoop bool) {
 }
 
 func (w *spawnWalker) rest(s ast.Stmt, inLoop bool) {
+	if w.restClause(s, inLoop) {
+		return
+	}
+	w.restExpr(s, inLoop)
+}
+
+func (w *spawnWalker) restClause(s ast.Stmt, inLoop bool) bool {
 	switch s := s.(type) {
 	case *ast.SwitchStmt:
 		w.optStmt(s.Init, inLoop)
+		w.scan(s.Tag, inLoop)
 		w.stmt(s.Body, inLoop)
 	case *ast.TypeSwitchStmt:
 		w.optStmt(s.Init, inLoop)
 		w.stmt(s.Assign, inLoop)
 		w.stmt(s.Body, inLoop)
 	case *ast.CaseClause:
+		w.scanList(s.List, inLoop)
 		for _, c := range s.Body {
 			w.stmt(c, inLoop)
 		}
 	case *ast.CommClause:
+		w.optStmt(s.Comm, inLoop)
 		for _, c := range s.Body {
 			w.stmt(c, inLoop)
 		}
+	default:
+		return false
+	}
+	return true
+}
+
+func (w *spawnWalker) restExpr(s ast.Stmt, inLoop bool) {
+	switch s := s.(type) {
 	case *ast.ExprStmt:
-		w.method(s.X, inLoop)
+		w.scan(s.X, inLoop)
 	case *ast.DeferStmt:
-		w.method(s.Call, inLoop)
+		w.scan(s.Call, inLoop)
+	case *ast.AssignStmt:
+		w.scanList(s.Lhs, inLoop)
+		w.scanList(s.Rhs, inLoop)
+	case *ast.ReturnStmt:
+		w.scanList(s.Results, inLoop)
+	case *ast.SendStmt:
+		w.scan(s.Chan, inLoop)
+		w.scan(s.Value, inLoop)
+	case *ast.DeclStmt:
+		w.scanDecl(s, inLoop)
+	case *ast.IncDecStmt:
+		w.scan(s.X, inLoop)
 	}
 }
 
@@ -96,11 +129,40 @@ func (w *spawnWalker) optStmt(s ast.Stmt, inLoop bool) {
 	}
 }
 
-func (w *spawnWalker) method(e ast.Expr, inLoop bool) {
-	call, ok := e.(*ast.CallExpr)
+func (w *spawnWalker) scan(e ast.Expr, inLoop bool) {
+	if e == nil {
+		return
+	}
+	ast.Inspect(e, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			w.check(call, inLoop)
+		}
+		return true
+	})
+}
+
+func (w *spawnWalker) scanList(l []ast.Expr, inLoop bool) {
+	for _, e := range l {
+		w.scan(e, inLoop)
+	}
+}
+
+func (w *spawnWalker) scanDecl(s *ast.DeclStmt, inLoop bool) {
+	d, ok := s.Decl.(*ast.GenDecl)
 	if !ok {
 		return
 	}
+	for _, spec := range d.Specs {
+		if vs, ok := spec.(*ast.ValueSpec); ok {
+			w.scanList(vs.Values, inLoop)
+		}
+	}
+}
+
+func (w *spawnWalker) check(call *ast.CallExpr, inLoop bool) {
 	callee := typeutil.StaticCallee(w.info, call)
 	if callee == nil {
 		return
@@ -127,6 +189,7 @@ func (w *spawnWalker) addGo(s *ast.GoStmt, inLoop bool) {
 		body = lit
 	}
 	w.out = append(w.out, Spawn{Site: s, Body: body, InLoop: inLoop, Group: w.goGroup(s, body)})
+	w.scanList(s.Call.Args, inLoop)
 }
 
 func (w *spawnWalker) goGroup(s *ast.GoStmt, body *ast.FuncLit) Key {
@@ -159,10 +222,26 @@ func (w *spawnWalker) goGroup(s *ast.GoStmt, body *ast.FuncLit) Key {
 }
 
 func (w *spawnWalker) literalCall(s *ast.GoStmt, body *ast.FuncLit, n ast.Node, add func(Key, bool)) bool {
+	if id, ok := n.(*ast.Ident); ok {
+		w.literalIdent(s, body, id, add)
+		return true
+	}
 	call, ok := n.(*ast.CallExpr)
 	if !ok {
 		return true
 	}
+	return w.literalCallExpr(s, body, call, add)
+}
+
+func (w *spawnWalker) literalIdent(s *ast.GoStmt, body *ast.FuncLit, id *ast.Ident, add func(Key, bool)) {
+	if !isWaitGroup(w.info, id) {
+		return
+	}
+	k, ok := KeyOf(w.info, id)
+	add(w.subst(body, s.Call, k, ok))
+}
+
+func (w *spawnWalker) literalCallExpr(s *ast.GoStmt, body *ast.FuncLit, call *ast.CallExpr, add func(Key, bool)) bool {
 	callee := typeutil.StaticCallee(w.info, call)
 	if callee == nil {
 		return true
@@ -172,12 +251,28 @@ func (w *spawnWalker) literalCall(s *ast.GoStmt, body *ast.FuncLit, n ast.Node, 
 		add(w.subst(body, s.Call, k, ok))
 		return true
 	}
+	if k, ok := MethodKey(w.info, call); ok && w.recvIsGroup(call) {
+		add(w.subst(body, s.Call, k, ok))
+		return true
+	}
 	for _, a := range call.Args {
 		if isWaitGroup(w.info, a) {
-			add(KeyOf(w.info, a))
+			k, ok := KeyOf(w.info, a)
+			add(w.subst(body, s.Call, k, ok))
 		}
 	}
 	return true
+}
+
+func (w *spawnWalker) recvIsGroup(call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if len(call.Args) > 0 && w.info.Selections[sel] != nil && w.info.Selections[sel].Kind() == types.MethodExpr {
+		return isWaitGroup(w.info, call.Args[0])
+	}
+	return isWaitGroup(w.info, sel.X)
 }
 
 func (w *spawnWalker) subst(body *ast.FuncLit, call *ast.CallExpr, k Key, ok bool) (Key, bool) {
@@ -221,6 +316,9 @@ func Joined(pass *analysis.Pass, g *Graph, s Spawn, at ast.Node) bool {
 	if pass == nil || pass.TypesInfo == nil || g == nil || s.Site == nil || at == nil {
 		return false
 	}
+	if at.End() <= s.Site.Pos() {
+		return false
+	}
 	f, t, ok := g.endpoints(s.Site, at)
 	if !ok {
 		return false
@@ -235,7 +333,7 @@ func Joined(pass *analysis.Pass, g *Graph, s Spawn, at ast.Node) bool {
 func (g *Graph) endpoints(from, to ast.Node) (start, end ast.Node, ok bool) {
 	f := g.locate(from)
 	t := g.locate(to)
-	if f == nil || t == nil || f == t || !g.reach(f, t, nil) {
+	if f == nil || t == nil || f == t {
 		return nil, nil, false
 	}
 	return f, t, true
@@ -271,8 +369,20 @@ func (g *Graph) markSignals(pass *analysis.Pass, body *ast.FuncLit, out map[ast.
 }
 
 func hasWait(info *types.Info, n ast.Node, group Key) bool {
+	called := map[*ast.FuncLit]bool{}
+	ast.Inspect(n, func(x ast.Node) bool {
+		if call, ok := x.(*ast.CallExpr); ok {
+			if lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit); ok {
+				called[lit] = true
+			}
+		}
+		return true
+	})
 	found := false
 	ast.Inspect(n, func(x ast.Node) bool {
+		if lit, ok := x.(*ast.FuncLit); ok {
+			return called[lit]
+		}
 		if pruned(x) {
 			return false
 		}
@@ -320,30 +430,55 @@ func signaled(pass *analysis.Pass, body *ast.FuncLit) []Key {
 			out = append(out, k)
 		}
 	}
+	deferredCloses(info, body, add)
+	lastClose(info, body, add)
+	return out
+}
+
+func deferredCloses(info *types.Info, body *ast.FuncLit, add func(Key, bool)) {
 	for _, s := range body.Body.List {
-		if d, ok := s.(*ast.DeferStmt); ok {
-			add(closeChan(info, d.Call))
+		d, ok := s.(*ast.DeferStmt)
+		if !ok {
+			continue
 		}
-	}
-	if n := len(body.Body.List); n > 0 {
-		switch s := body.Body.List[n-1].(type) {
-		case *ast.ExprStmt:
-			if call, ok := ast.Unparen(s.X).(*ast.CallExpr); ok {
+		add(closeChan(info, d.Call))
+		lit, ok := ast.Unparen(d.Call.Fun).(*ast.FuncLit)
+		if !ok {
+			continue
+		}
+		ast.Inspect(lit.Body, func(x ast.Node) bool {
+			if _, ok := x.(*ast.FuncLit); ok {
+				return false
+			}
+			if call, ok := x.(*ast.CallExpr); ok {
 				add(closeChan(info, call))
 			}
-		case *ast.SendStmt:
-			add(KeyOf(info, s.Chan))
-		}
+			return true
+		})
 	}
-	return out
+}
+
+func lastClose(info *types.Info, body *ast.FuncLit, add func(Key, bool)) {
+	n := len(body.Body.List)
+	if n == 0 {
+		return
+	}
+	switch s := body.Body.List[n-1].(type) {
+	case *ast.ExprStmt:
+		if call, ok := ast.Unparen(s.X).(*ast.CallExpr); ok {
+			add(closeChan(info, call))
+		}
+	case *ast.SendStmt:
+		add(KeyOf(info, s.Chan))
+	}
 }
 
 func closeChan(info *types.Info, call *ast.CallExpr) (Key, bool) {
 	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
-	if !ok || id.Name != "close" || len(call.Args) != 1 {
+	if !ok || id.Name != closeFun || len(call.Args) != 1 {
 		return Key{}, false
 	}
-	if b, ok := info.Uses[id].(*types.Builtin); !ok || b.Name() != "close" {
+	if b, ok := info.Uses[id].(*types.Builtin); !ok || b.Name() != closeFun {
 		return Key{}, false
 	}
 	return KeyOf(info, call.Args[0])
@@ -354,7 +489,7 @@ func (g *Graph) receives(info *types.Info, fn ast.Node, k Key) []ast.Node {
 	var refined []ast.Node
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
-			return false
+			return n == fn
 		}
 		sel, ok := n.(*ast.SelectStmt)
 		if !ok {
@@ -377,7 +512,9 @@ func (g *Graph) receives(info *types.Info, fn ast.Node, k Key) []ast.Node {
 	}
 	ast.Inspect(fn, func(n ast.Node) bool {
 		switch n.(type) {
-		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+		case *ast.FuncLit:
+			return n == fn
+		case *ast.GoStmt, *ast.DeferStmt:
 			return false
 		}
 		g.markRecv(info, n, k, skip, &out)

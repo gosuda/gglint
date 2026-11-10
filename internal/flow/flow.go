@@ -21,6 +21,8 @@ func (k Key) zero() bool {
 	return k.Root == nil
 }
 
+const closeFun = "close"
+
 // KeyOf resolves e to the variable or field path it denotes.
 func KeyOf(info *types.Info, e ast.Expr) (Key, bool) {
 	if info == nil {
@@ -34,6 +36,9 @@ func KeyOf(info *types.Info, e ast.Expr) (Key, bool) {
 			}
 			return Key{}, false
 		}
+		if sel, ok := e.(*ast.SelectorExpr); ok && info.Selections[sel] == nil {
+			return packageRoot(info, sel, path)
+		}
 		inner, field, ok := keyStep(info, e)
 		if !ok {
 			return Key{}, false
@@ -44,6 +49,21 @@ func KeyOf(info *types.Info, e ast.Expr) (Key, bool) {
 		e = inner
 	}
 	return Key{}, false
+}
+
+func packageRoot(info *types.Info, sel *ast.SelectorExpr, path string) (Key, bool) {
+	xid, isIdent := sel.X.(*ast.Ident)
+	if !isIdent {
+		return Key{}, false
+	}
+	if _, isPkg := info.Uses[xid].(*types.PkgName); !isPkg {
+		return Key{}, false
+	}
+	v, isVar := info.Uses[sel.Sel].(*types.Var)
+	if !isVar {
+		return Key{}, false
+	}
+	return Key{Root: v, Path: path}, true
 }
 
 func keyStep(info *types.Info, e ast.Expr) (ast.Expr, string, bool) {
@@ -58,10 +78,31 @@ func keyStep(info *types.Info, e ast.Expr) (ast.Expr, string, bool) {
 		}
 	case *ast.SelectorExpr:
 		if sel := info.Selections[x]; sel != nil && sel.Kind() == types.FieldVal {
-			return x.X, x.Sel.Name, true
+			return x.X, promotionNames(sel, x.Sel.Name), true
 		}
 	}
 	return nil, "", false
+}
+
+func promotionNames(sel *types.Selection, fallback string) string {
+	idx := sel.Index()
+	if len(idx) <= 1 {
+		return fallback
+	}
+	out := ""
+	t := sel.Recv()
+	for _, i := range idx {
+		st, ok := derefType(t).Underlying().(*types.Struct)
+		if !ok || i < 0 || i >= st.NumFields() {
+			return fallback
+		}
+		if out != "" {
+			out += "."
+		}
+		out += st.Field(i).Name()
+		t = st.Field(i).Type()
+	}
+	return out
 }
 
 // Graph is the control-flow graph of one function with a node index.
@@ -256,7 +297,7 @@ func NewGraph(pass *analysis.Pass, fn ast.Node) *Graph {
 }
 
 func (g *Graph) locate(n ast.Node) ast.Node {
-	if n == nil {
+	if n == nil || g.nested(n) {
 		return nil
 	}
 	if r, ok := g.rep[n]; ok {
@@ -269,6 +310,24 @@ func (g *Graph) locate(n ast.Node) ast.Node {
 		return n
 	}
 	return g.container(n)
+}
+
+func (g *Graph) nested(n ast.Node) bool {
+	found := false
+	ast.Inspect(g.fn, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		if lit, ok := x.(*ast.FuncLit); ok && lit != g.fn {
+			if n != lit && within(lit, n) {
+				found = true
+				return false
+			}
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func (g *Graph) container(n ast.Node) ast.Node {
@@ -375,7 +434,6 @@ func (g *Graph) predecessors() map[*cfg.Block][]*cfg.Block {
 	return out
 }
 
-// Forward runs a forward data-flow to a fixed point, then calls visit once per node in block order with the state before it.
 func Forward[S comparable](g *Graph, entry S, transfer func(ast.Node, S) S, join func(S, S) S, visit func(ast.Node, S)) {
 	if g == nil || transfer == nil {
 		return
@@ -385,14 +443,19 @@ func Forward[S comparable](g *Graph, entry S, transfer func(ast.Node, S) S, join
 		return
 	}
 	in := make(map[*cfg.Block]S, len(blocks))
+	reached := make(map[*cfg.Block]bool, len(blocks))
 	in[blocks[0]] = entry
+	reached[blocks[0]] = true
 	preds := g.predecessors()
-	for propagate(blocks, preds, in, transfer, join) {
+	for propagate(blocks, preds, in, reached, transfer, join) {
 	}
 	if visit == nil {
 		return
 	}
 	for _, b := range blocks {
+		if !reached[b] {
+			continue
+		}
 		s := in[b]
 		for _, n := range b.Nodes {
 			visit(n, s)
@@ -401,22 +464,41 @@ func Forward[S comparable](g *Graph, entry S, transfer func(ast.Node, S) S, join
 	}
 }
 
-func propagate[S comparable](blocks []*cfg.Block, preds map[*cfg.Block][]*cfg.Block, in map[*cfg.Block]S, transfer func(ast.Node, S) S, join func(S, S) S) bool {
+func propagate[S comparable](blocks []*cfg.Block, preds map[*cfg.Block][]*cfg.Block, in map[*cfg.Block]S, reached map[*cfg.Block]bool, transfer func(ast.Node, S) S, join func(S, S) S) bool {
 	changed := false
 	for _, b := range blocks {
-		if b == blocks[0] || len(preds[b]) == 0 {
+		if b == blocks[0] {
 			continue
 		}
-		s := applyBlock(preds[b][0], in[preds[b][0]], transfer)
-		for _, p := range preds[b][1:] {
-			s = join(s, applyBlock(p, in[p], transfer))
+		s, ok := joinReached(preds[b], in, reached, transfer, join)
+		if !ok {
+			continue
 		}
-		if s != in[b] {
+		if !reached[b] || s != in[b] {
 			in[b] = s
+			reached[b] = true
 			changed = true
 		}
 	}
 	return changed
+}
+
+func joinReached[S comparable](ps []*cfg.Block, in map[*cfg.Block]S, reached map[*cfg.Block]bool, transfer func(ast.Node, S) S, join func(S, S) S) (S, bool) {
+	var s S
+	first := true
+	for _, p := range ps {
+		if !reached[p] {
+			continue
+		}
+		out := applyBlock(p, in[p], transfer)
+		if first {
+			s = out
+			first = false
+			continue
+		}
+		s = join(s, out)
+	}
+	return s, !first
 }
 
 func applyBlock[S comparable](b *cfg.Block, s S, transfer func(ast.Node, S) S) S {

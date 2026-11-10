@@ -3,11 +3,64 @@ package flow
 import (
 	"go/ast"
 	"go/types"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/cfg"
+	"golang.org/x/tools/go/packages"
 )
+
+func mkDir(full, content string) error {
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(full, []byte(content), 0o600)
+}
+
+func loadPackageDir(t *testing.T, dir string) *packages.Package {
+	t.Helper()
+	pkgs, err := packages.Load(&packages.Config{
+		Context: t.Context(),
+		Dir:     dir,
+		Mode:    packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes,
+		Env:     append(os.Environ(), "GO111MODULE=on", "GOFLAGS=-mod=mod", "GOWORK=off", "GOPROXY=off", "GOTOOLCHAIN=local"),
+	}, ".")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(pkgs) != 1 {
+		t.Fatalf("load: got %d packages", len(pkgs))
+	}
+	return pkgs[0]
+}
+
+func testFuncDeclAt(t *testing.T, decls []ast.Decl, i int) *ast.FuncDecl {
+	t.Helper()
+	fd, ok := decls[i].(*ast.FuncDecl)
+	if !ok {
+		t.Fatalf("decl %d not func", i)
+	}
+	return fd
+}
+
+func testLocalVar(t *testing.T, info *types.Info, decl *ast.FuncDecl) *types.Var {
+	t.Helper()
+	as, ok := decl.Body.List[0].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("stmt not assign")
+	}
+	id, ok := as.Lhs[0].(*ast.Ident)
+	if !ok {
+		t.Fatalf("lhs not ident")
+	}
+	v, ok := info.Defs[id].(*types.Var)
+	if !ok {
+		t.Fatalf("not var")
+	}
+	return v
+}
 
 const extraSpawnSource = `package p
 import "sync"
@@ -441,5 +494,300 @@ func f(c bool) int {
 	}
 	if !StraightLine(decl, ib[1], ib[0]) {
 		t.Fatalf("reversed missed")
+	}
+}
+
+func TestHeldAtLoop(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nvar mu sync.Mutex\nfunc f(xs []int) {\nmu.Lock()\nfor range xs {\ng()\n}\nmu.Unlock()\n}\nfunc g() {}\n")
+	pass := ctrlPass(t, pkg)
+	fd, ok := pkg.Syntax[0].Decls[2].(*ast.FuncDecl)
+	if !ok {
+		t.Fatalf("decl not func")
+	}
+	held := HeldAt(pass, NewGraph(pass, fd))
+	rg, ok := fd.Body.List[1].(*ast.RangeStmt)
+	if !ok {
+		t.Fatalf("second stmt not range")
+	}
+	body := rg.Body.List[0]
+	got := held(body)
+	if len(got) != 1 || got[0].Root.Name() != "mu" {
+		t.Fatalf("held in loop = %v, want [mu]", got)
+	}
+}
+
+func TestForwardDeadBlock(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nvar mu sync.Mutex\nfunc f() {\nmu.Lock()\nreturn\nmu.Unlock()\n}\n")
+	pass := ctrlPass(t, pkg)
+	fd, ok := pkg.Syntax[0].Decls[2].(*ast.FuncDecl)
+	if !ok {
+		t.Fatalf("decl not func")
+	}
+	name := func(n ast.Node) string {
+		es, ok := n.(*ast.ExprStmt)
+		if !ok {
+			return ""
+		}
+		c, ok := es.X.(*ast.CallExpr)
+		if !ok {
+			return ""
+		}
+		s, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return ""
+		}
+		return s.Sel.Name
+	}
+	var atUnlock []int
+	Forward(NewGraph(pass, fd), 1,
+		func(n ast.Node, s int) int {
+			switch name(n) {
+			case "Lock":
+				return 1
+			case "Unlock":
+				return 0
+			}
+			return s
+		},
+		func(a, b int) int {
+			if a == b {
+				return a
+			}
+			return 0
+		},
+		func(n ast.Node, s int) {
+			if name(n) == "Unlock" {
+				atUnlock = append(atUnlock, s)
+			}
+		})
+	if len(atUnlock) != 0 {
+		t.Fatalf("dead unlock visited with %v, want no visit", atUnlock)
+	}
+}
+
+func TestJoinedInLiteral(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f() int {\nrun := func() int {\ndone := make(chan struct{})\ngo func() { defer close(done) }()\n<-done\nreturn 1\n}\nreturn run()\n}")
+	pass := ctrlPass(t, pkg)
+	fd0 := testFuncDeclAt(t, pkg.Syntax[0].Decls, 0)
+	as0, ok := fd0.Body.List[0].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("first stmt not assign")
+	}
+	lit, ok := as0.Rhs[0].(*ast.FuncLit)
+	if !ok {
+		t.Fatalf("rhs not literal")
+	}
+	g := NewGraph(pass, lit)
+	s := Spawns(pass, lit)[0]
+	if !Joined(pass, g, s, lit.Body.List[3]) {
+		t.Fatalf("not joined at receive in literal")
+	}
+}
+
+func TestEscapesClose(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\nfunc f() {\nch := make(chan int)\nclose(ch)\n_ = 1\nclose(ch)\n}")
+	decl, ok := f.Decls[0].(*ast.FuncDecl)
+	if !ok {
+		t.Fatalf("decl not func")
+	}
+	as, ok := decl.Body.List[0].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("first stmt not assign")
+	}
+	id, ok := as.Lhs[0].(*ast.Ident)
+	if !ok {
+		t.Fatalf("lhs not ident")
+	}
+	ch, ok := info.Defs[id].(*types.Var)
+	if !ok {
+		t.Fatalf("ch not var")
+	}
+	if Escapes(info, decl, ch) {
+		t.Fatalf("close escapes")
+	}
+}
+
+func TestEscapesGoReceiver(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\ntype T struct{ n int }\nfunc (t *T) run() {}\nfunc f() {\nt := &T{}\ngo t.run()\n}")
+	decl := testFuncDeclAt(t, f.Decls, 2)
+	v := testLocalVar(t, info, decl)
+	if !Escapes(info, decl, v) {
+		t.Fatalf("go receiver does not escape")
+	}
+}
+
+func TestEscapesMethodValue(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\ntype T struct{ n int }\nfunc (t *T) run() {}\nvar registry []func()\nfunc f() {\nt := &T{}\ng := t.run\nregistry = append(registry, g)\n}")
+	decl := testFuncDeclAt(t, f.Decls, 3)
+	v := testLocalVar(t, info, decl)
+	if !Escapes(info, decl, v) {
+		t.Fatalf("method value does not escape")
+	}
+}
+
+func TestEscapesCapturedReceiver(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\ntype R struct{ n int }\nfunc (r *R) Close() error { return nil }\nvar keep func() error\nfunc f() {\nr := &R{}\nkeep = func() error { return r.Close() }\n}")
+	decl := testFuncDeclAt(t, f.Decls, 3)
+	v := testLocalVar(t, info, decl)
+	if !Escapes(info, decl, v) {
+		t.Fatalf("captured receiver does not escape")
+	}
+}
+
+func TestEscapesDerefStore(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\ntype T struct{ n int }\nfunc f(p **T) {\nt := &T{}\n*p = t\n}")
+	decl := testFuncDeclAt(t, f.Decls, 1)
+	v := testLocalVar(t, info, decl)
+	if !Escapes(info, decl, v) {
+		t.Fatalf("deref store does not escape")
+	}
+}
+
+func TestEscapesAlias(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\ntype T struct{ n int }\nfunc f() *T {\nt := &T{}\np := t\nreturn p\n}")
+	decl := testFuncDeclAt(t, f.Decls, 1)
+	v := testLocalVar(t, info, decl)
+	if !Escapes(info, decl, v) {
+		t.Fatalf("alias return does not escape")
+	}
+}
+
+func TestDefinedByRange(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\nfunc f(xs []int) int {\nv := 1\nfor v = range xs {\n}\nreturn v\n}")
+	decl := testFuncDeclAt(t, f.Decls, 0)
+	v := testLocalVar(t, info, decl)
+	if _, ok := DefinedBy(info, decl, v); ok {
+		t.Fatalf("range assignment still defined")
+	}
+}
+
+func TestIsLocalTypeSwitch(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f(x any) int {\nswitch v := x.(type) {\ncase int:\nreturn v\n}\nreturn 0\n}")
+	decl := testFuncDeclAt(t, pkg.Syntax[0].Decls, 0)
+	info := pkg.TypesInfo
+	var v *types.Var
+	for _, obj := range info.Implicits {
+		if vv, ok := obj.(*types.Var); ok && vv.Name() == "v" {
+			v = vv
+		}
+	}
+	if v == nil {
+		t.Fatalf("type switch var missing")
+	}
+	if !IsLocal(info, decl, v) {
+		t.Fatalf("type switch var not local")
+	}
+}
+
+func TestKeyOfQualified(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"os\"\nfunc f() { _ = os.Args }")
+	pass := ctrlPass(t, pkg)
+	fdq := testFuncDeclAt(t, pkg.Syntax[0].Decls, 1)
+	asq, ok := fdq.Body.List[0].(*ast.AssignStmt)
+	if !ok {
+		t.Fatalf("first stmt not assign")
+	}
+	rhs := asq.Rhs[0]
+	k, ok := KeyOf(pass.TypesInfo, rhs)
+	if !ok || k.Root == nil {
+		t.Fatalf("qualified key failed: %v %v", k, ok)
+	}
+}
+
+func TestPromotedLock(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\ntype Inner struct{ mu sync.Mutex }\ntype S struct{ *Inner }\nfunc f(s *S) int {\ns.mu.Lock()\ns.Inner.mu.Unlock()\nreturn 0\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 3)
+	held := HeldAt(pass, NewGraph(pass, fd))
+	if got := held(fd.Body.List[2]); len(got) != 0 {
+		t.Fatalf("promoted held = %v, want []", got)
+	}
+}
+
+func TestSpawnsTryGoCond(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile := func(name, content string) {
+		t.Helper()
+		full := dir + "/" + name
+		if err := mkDir(full, content); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	writeFile("go.mod", "module golang.org/x/sync\n\ngo 1.27\n")
+	writeFile("p.go", "package p\nimport \"golang.org/x/sync/errgroup\"\nfunc f(g *errgroup.Group) bool {\nif !g.TryGo(func() error { return nil }) {\nreturn false\n}\nreturn true\n}\n")
+	writeFile("errgroup/errgroup.go", "package errgroup\ntype Group struct{}\nfunc (g *Group) Go(f func() error) {}\nfunc (g *Group) TryGo(f func() error) bool { return true }\n")
+	pkg := loadPackageDir(t, dir)
+	pass := ctrlPass(t, pkg)
+	fd := findDecl(pkg.Syntax[0], "f")
+	if fd == nil {
+		t.Fatalf("func f missing")
+	}
+	if len(Spawns(pass, fd)) != 1 {
+		t.Fatalf("trygo in cond: got %d spawns, want 1", len(Spawns(pass, fd)))
+	}
+}
+
+func TestGoGroupHelper(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc helper(w *sync.WaitGroup) { w.Done() }\nfunc f() {\nvar wg sync.WaitGroup\nwg.Add(1)\ngo func(w *sync.WaitGroup) { helper(w) }(&wg)\nwg.Wait()\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 2)
+	s := Spawns(pass, fd)[0]
+	if s.Group.Root == nil || s.Group.Root.Name() != "wg" {
+		t.Fatalf("group root = %v, want wg", s.Group.Root)
+	}
+}
+
+func TestJoinedInPlaceWait(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc f() int {\nvar wg sync.WaitGroup\nwg.Add(1)\ngo func() { defer wg.Done() }()\nfunc() { wg.Wait() }()\nreturn 0\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 1)
+	if !Joined(pass, NewGraph(pass, fd), Spawns(pass, fd)[0], fd.Body.List[4]) {
+		t.Fatalf("not joined at in-place wait")
+	}
+}
+
+func TestJoinedUnreachable(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f() int {\ngo func() {}()\nreturn 0\nreturn 1\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 0)
+	if !Joined(pass, NewGraph(pass, fd), Spawns(pass, fd)[0], fd.Body.List[2]) {
+		t.Fatalf("not joined at unreachable")
+	}
+}
+
+func TestReachesNestedLiteral(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f(c chan int) {\ngo func() {\nc <- 1\n}()\n<-c\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 0)
+	g := NewGraph(pass, fd)
+	gs, ok := fd.Body.List[0].(*ast.GoStmt)
+	if !ok {
+		t.Fatalf("first stmt not go")
+	}
+	lit, ok := gs.Call.Fun.(*ast.FuncLit)
+	if !ok {
+		t.Fatalf("go fun not literal")
+	}
+	inner := lit.Body.List[0]
+	if g.Reaches(inner, fd.Body.List[1], nil) {
+		t.Fatalf("nested literal reaches")
 	}
 }
