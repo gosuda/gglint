@@ -1,6 +1,7 @@
 package lockstate
 
 import (
+	"cmp"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -113,12 +114,268 @@ func recvText(info *types.Info, call *ast.CallExpr) string {
 	return types.ExprString(e)
 }
 
-func entryState(info *types.Info, fn ast.Node, key flow.Key) state {
+type fnFacts struct {
+	info    *types.Info
+	fn      ast.Node
+	byPos   map[token.Pos][]types.Object
+	defines map[types.Object]ast.Expr
+	vars    map[types.Object]ast.Expr
+	stored  map[types.Object][]flow.Key
+	exposed map[types.Object][]exposure
+	funs    map[flow.Key]map[ast.Expr]bool
+}
+
+type exposure struct {
+	key     flow.Key
+	sel     *ast.SelectorExpr
+	excl    flow.Key
+	hasExcl bool
+}
+
+func collectFacts(info *types.Info, fn ast.Node) *fnFacts {
+	f := &fnFacts{
+		info:    info,
+		fn:      fn,
+		byPos:   map[token.Pos][]types.Object{},
+		defines: map[types.Object]ast.Expr{},
+		vars:    map[types.Object]ast.Expr{},
+		stored:  map[types.Object][]flow.Key{},
+		exposed: map[types.Object][]exposure{},
+		funs:    map[flow.Key]map[ast.Expr]bool{},
+	}
+	f.collectLockCalls()
+	f.collectDeclValues()
+	f.collectStoredAddresses()
+	f.collectExposures()
+	f.collectMentions()
+	return f
+}
+
+func (f *fnFacts) collectLockCalls() {
+	ast.Inspect(f.fn, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		k, _, ok := mutexKey(f.info, call)
+		if !ok {
+			return true
+		}
+		if f.funs[k] == nil {
+			f.funs[k] = map[ast.Expr]bool{}
+		}
+		f.funs[k][ast.Unparen(call.Fun)] = true
+		return true
+	})
+}
+
+func (f *fnFacts) collectDeclValues() {
+	fnLit := fnLitOf(f.fn)
+	seen := map[types.Object]bool{}
+	ast.Inspect(f.fn, func(n ast.Node) bool {
+		if l, ok := n.(*ast.FuncLit); ok && l != fnLit {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			f.collectDefine(n)
+		case *ast.ValueSpec:
+			f.collectVarValue(n, seen)
+		}
+		return true
+	})
+}
+
+func (f *fnFacts) collectDefine(as *ast.AssignStmt) {
+	if as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		return
+	}
+	id, ok := as.Lhs[0].(*ast.Ident)
+	if !ok || id.Name == "_" {
+		return
+	}
+	v := f.info.Defs[id]
+	if v == nil {
+		return
+	}
+	if _, ok := f.defines[v]; !ok {
+		f.defines[v] = as.Rhs[0]
+	}
+}
+
+func (f *fnFacts) collectVarValue(vs *ast.ValueSpec, seen map[types.Object]bool) {
+	for i, name := range vs.Names {
+		if name.Name == "_" {
+			continue
+		}
+		v := f.info.Defs[name]
+		if v == nil || seen[v] {
+			continue
+		}
+		seen[v] = true
+		if len(vs.Values) == 1 {
+			f.vars[v] = vs.Values[0]
+		} else if i < len(vs.Values) {
+			f.vars[v] = vs.Values[i]
+		}
+	}
+}
+
+func (f *fnFacts) collectStoredAddresses() {
+	fnLit := fnLitOf(f.fn)
+	ast.Inspect(f.fn, func(n ast.Node) bool {
+		if l, ok := n.(*ast.FuncLit); ok && l != fnLit {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			for _, rhs := range n.Rhs {
+				f.markAddrKeys(rhs)
+			}
+		case *ast.ValueSpec:
+			for _, value := range n.Values {
+				f.markAddrKeys(value)
+			}
+		}
+		return true
+	})
+}
+
+func (f *fnFacts) markAddrKeys(e ast.Expr) {
+	ast.Inspect(e, func(x ast.Node) bool {
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		u, ok := x.(*ast.UnaryExpr)
+		if !ok || u.Op != token.AND {
+			return true
+		}
+		if k, ok := flow.KeyOf(f.info, u.X); ok {
+			f.stored[k.Root] = append(f.stored[k.Root], k)
+		}
+		return true
+	})
+}
+
+func (f *fnFacts) collectExposures() {
+	ast.Inspect(f.fn, func(n ast.Node) bool {
+		f.exposeNode(n)
+		return true
+	})
+}
+
+func (f *fnFacts) exposeNode(n ast.Node) {
+	switch n := n.(type) {
+	case *ast.UnaryExpr:
+		f.exposeUnary(n)
+	case *ast.SelectorExpr:
+		f.markExposedSelector(n)
+	case *ast.CallExpr:
+		f.markExposedCall(n)
+	case *ast.ReturnStmt:
+		f.exposeResults(n.Results)
+	case *ast.SendStmt:
+		f.markExposed(n.Value, exposure{})
+	case *ast.GoStmt:
+		f.markExposedCallKeys(n.Call, exposure{})
+	case *ast.FuncLit:
+		f.exposeLiteral(n)
+	case *ast.AssignStmt:
+		f.exposeStored(n)
+	}
+}
+
+func (f *fnFacts) exposeUnary(n *ast.UnaryExpr) {
+	if n.Op == token.AND {
+		f.markExposed(n.X, exposure{})
+	}
+}
+
+func (f *fnFacts) exposeResults(results []ast.Expr) {
+	for _, r := range results {
+		f.markExposed(r, exposure{})
+	}
+}
+
+func (f *fnFacts) exposeLiteral(lit *ast.FuncLit) {
+	if lit != f.fn {
+		f.markLitKeys(lit)
+	}
+}
+
+func (f *fnFacts) exposeStored(as *ast.AssignStmt) {
+	if !storedLHS(f.info, f.fn, as.Lhs) {
+		return
+	}
+	for _, rhs := range as.Rhs {
+		f.markExposed(rhs, exposure{})
+	}
+}
+
+func (f *fnFacts) markExposed(e ast.Expr, base exposure) {
+	k, ok := flow.KeyOf(f.info, e)
+	if !ok {
+		return
+	}
+	c := base
+	c.key = k
+	f.exposed[k.Root] = append(f.exposed[k.Root], c)
+}
+
+func (f *fnFacts) markExposedSelector(sel *ast.SelectorExpr) {
+	s := f.info.Selections[sel]
+	if s == nil || s.Kind() != types.MethodVal || !isLockMethodName(s.Obj().Name()) {
+		return
+	}
+	k, ok := flow.KeyOf(f.info, sel.X)
+	if !ok {
+		return
+	}
+	f.exposed[k.Root] = append(f.exposed[k.Root], exposure{key: k, sel: sel})
+}
+
+func (f *fnFacts) markExposedCall(call *ast.CallExpr) {
+	k, _, isLock := mutexKey(f.info, call)
+	if isLock {
+		f.markExposedCallKeys(call, exposure{excl: k, hasExcl: true})
+		return
+	}
+	f.markExposedCallKeys(call, exposure{})
+}
+
+func (f *fnFacts) markExposedCallKeys(call *ast.CallExpr, base exposure) {
+	mark := func(e ast.Expr) {
+		f.markExposed(e, base)
+	}
+	for _, arg := range call.Args {
+		mark(arg)
+	}
+	if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
+		mark(sel.X)
+	}
+}
+
+func (f *fnFacts) markLitKeys(lit *ast.FuncLit) {
+	ast.Inspect(lit.Body, func(x ast.Node) bool {
+		e, ok := x.(ast.Expr)
+		if !ok {
+			return true
+		}
+		k, ok := flow.KeyOf(f.info, e)
+		if !ok {
+			return true
+		}
+		f.exposed[k.Root] = append(f.exposed[k.Root], exposure{key: k})
+		return false
+	})
+}
+
+func (f *fnFacts) entryState(fn ast.Node, key flow.Key) state {
 	v, ok := key.Root.(*types.Var)
 	if !ok {
 		return unknownState
 	}
-	if !flow.IsLocal(info, fn, v) {
+	if !flow.IsLocal(f.info, fn, v) {
 		return unknownState
 	}
 	if _, ok := v.Type().Underlying().(*types.Pointer); ok {
@@ -127,121 +384,79 @@ func entryState(info *types.Info, fn ast.Node, key flow.Key) state {
 	if pathHasPointer(v.Type(), key.Path) {
 		return unknownState
 	}
-	if def, ok := declValue(info, fn, v); ok && !emptyLiteral(def) {
+	if def, ok := f.declValue(v); ok && !emptyLiteral(def) {
 		return unknownState
 	}
-	if lockExposed(info, fn, key) {
+	if f.lockExposed(key) {
 		return unknownState
 	}
 	return freeState
 }
 
-func declValue(info *types.Info, fn ast.Node, v *types.Var) (ast.Expr, bool) {
-	body := flow.Body(fn)
-	if info == nil || body == nil || v == nil {
-		return nil, false
-	}
-	if e, ok := defineIn(info, fn, body, v); ok {
+func (f *fnFacts) declValue(v *types.Var) (ast.Expr, bool) {
+	if e, ok := f.defines[v]; ok {
 		return e, true
 	}
-	return varIn(info, fn, body, v)
+	e, ok := f.vars[v]
+	return e, ok
 }
 
-func defineIn(info *types.Info, fn ast.Node, body *ast.BlockStmt, v *types.Var) (ast.Expr, bool) {
-	var out ast.Expr
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
-			return false
-		}
-		as, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		e, ok := defineValue(info, as, v)
-		if !ok {
-			return true
-		}
-		out = e
-		found = true
-		return false
-	})
-	return out, found
-}
-
-func varIn(info *types.Info, fn ast.Node, body *ast.BlockStmt, v *types.Var) (ast.Expr, bool) {
-	var out ast.Expr
-	matched := false
-	seen := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if seen {
-			return false
-		}
-		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
-			return false
-		}
-		vs, ok := n.(*ast.ValueSpec)
-		if !ok {
-			return true
-		}
-		if !declaresVar(info, vs, v) {
-			return true
-		}
-		seen = true
-		e, ok := varValueFor(vs, info, v)
-		if !ok {
-			return false
-		}
-		out = e
-		matched = true
-		return false
-	})
-	return out, matched
-}
-
-func defineValue(info *types.Info, as *ast.AssignStmt, v *types.Var) (ast.Expr, bool) {
-	if as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
-		return nil, false
-	}
-	id, ok := as.Lhs[0].(*ast.Ident)
-	if !ok || id.Name == "_" || info.Defs[id] != v {
-		return nil, false
-	}
-	return as.Rhs[0], true
-}
-
-func declaresVar(info *types.Info, vs *ast.ValueSpec, v *types.Var) bool {
-	for _, name := range vs.Names {
-		if name.Name != "_" && info.Defs[name] == v {
+func (f *fnFacts) storedAddress(key flow.Key) bool {
+	for _, k := range f.stored[key.Root] {
+		if keyEnclosesKey(k, key) {
 			return true
 		}
 	}
 	return false
 }
 
-func varValueFor(vs *ast.ValueSpec, info *types.Info, v *types.Var) (ast.Expr, bool) {
-	if len(vs.Values) == 0 {
-		return nil, false
-	}
-	for i, name := range vs.Names {
-		if name.Name == "_" {
+func (f *fnFacts) lockExposed(key flow.Key) bool {
+	for _, c := range f.exposed[key.Root] {
+		if !keyEnclosesKey(c.key, key) {
 			continue
 		}
-		if info.Defs[name] != v {
+		if c.hasExcl && c.excl == key {
 			continue
 		}
-		if len(vs.Values) == 1 {
-			return vs.Values[0], true
+		if c.sel != nil && f.funs[key][c.sel] {
+			continue
 		}
-		if i < len(vs.Values) {
-			return vs.Values[i], true
-		}
-		return nil, false
+		return true
 	}
-	return nil, false
+	return false
+}
+
+func (f *fnFacts) collectMentions() {
+	var stack []token.Pos
+	ast.Inspect(f.fn, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		pos := n.Pos()
+		stack = append(stack, pos)
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		obj := cmp.Or(f.info.Uses[id], f.info.Defs[id])
+		if obj == nil {
+			return true
+		}
+		for _, p := range stack {
+			f.byPos[p] = append(f.byPos[p], obj)
+		}
+		return true
+	})
+}
+
+func (f *fnFacts) mentions(n ast.Node, root types.Object) bool {
+	for _, obj := range f.byPos[n.Pos()] {
+		if obj == root {
+			return true
+		}
+	}
+	return false
 }
 
 func reassignsRoot(info *types.Info, n ast.Node, key flow.Key) bool {
@@ -329,66 +544,6 @@ func emptyLiteral(e ast.Expr) bool {
 	return ok && len(lit.Elts) == 0
 }
 
-func lockExposed(info *types.Info, fn ast.Node, key flow.Key) bool {
-	funs := mutexFunSet(info, fn, key)
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if exposesAt(info, fn, n, key, funs) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func exposesAt(info *types.Info, fn, n ast.Node, key flow.Key, funs map[ast.Expr]bool) bool {
-	switch n := n.(type) {
-	case *ast.UnaryExpr:
-		return n.Op == token.AND && encloses(info, n.X, key)
-	case *ast.SelectorExpr:
-		return exposesMethodValue(info, n, key, funs)
-	case *ast.CallExpr:
-		return exposesCall(info, n, key)
-	}
-	return exposesStmtAt(info, fn, n, key)
-}
-
-func exposesStmtAt(info *types.Info, fn, n ast.Node, key flow.Key) bool {
-	switch n := n.(type) {
-	case *ast.ReturnStmt:
-		return exposesResults(info, n.Results, key)
-	case *ast.SendStmt:
-		return encloses(info, n.Value, key)
-	case *ast.GoStmt:
-		return takesKey(info, n.Call, key)
-	case *ast.FuncLit:
-		return n != fn && mentionsKey(info, n, key)
-	case *ast.AssignStmt:
-		return storedEscape(info, fn, n, key)
-	}
-	return false
-}
-
-func exposesCall(info *types.Info, call *ast.CallExpr, key flow.Key) bool {
-	if k, _, ok := mutexKey(info, call); ok && k == key {
-		return false
-	}
-	return takesKey(info, call, key)
-}
-
-func exposesResults(info *types.Info, results []ast.Expr, key flow.Key) bool {
-	for _, r := range results {
-		if encloses(info, r, key) {
-			return true
-		}
-	}
-	return false
-}
-
 func exposesMethodValue(info *types.Info, sel *ast.SelectorExpr, key flow.Key, funs map[ast.Expr]bool) bool {
 	if funs[sel] {
 		return false
@@ -404,18 +559,6 @@ func isLockMethodName(m string) bool {
 	switch m {
 	case methodLock, methodRLock, methodUnlock, methodRUnlock, methodTryLock, methodTryRLock:
 		return true
-	}
-	return false
-}
-
-func storedEscape(info *types.Info, fn ast.Node, s *ast.AssignStmt, key flow.Key) bool {
-	if !storedLHS(info, fn, s.Lhs) {
-		return false
-	}
-	for _, rhs := range s.Rhs {
-		if encloses(info, rhs, key) {
-			return true
-		}
 	}
 	return false
 }
@@ -451,67 +594,6 @@ func mutexFunSet(info *types.Info, fn ast.Node, key flow.Key) map[ast.Expr]bool 
 		return true
 	})
 	return funs
-}
-
-func storedAddress(info *types.Info, fn ast.Node, key flow.Key) bool {
-	var fnLit *ast.FuncLit
-	if l, ok := fn.(*ast.FuncLit); ok {
-		fnLit = l
-	}
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if l, ok := n.(*ast.FuncLit); ok && l != fnLit {
-			return false
-		}
-		switch n := n.(type) {
-		case *ast.AssignStmt:
-			if rhsStoresAddress(info, n.Rhs, key) {
-				found = true
-				return false
-			}
-		case *ast.ValueSpec:
-			if rhsStoresAddress(info, n.Values, key) {
-				found = true
-				return false
-			}
-		}
-		return true
-	})
-	return found
-}
-
-func rhsStoresAddress(info *types.Info, rhs []ast.Expr, key flow.Key) bool {
-	for _, e := range rhs {
-		if storesAddrInExpr(info, e, key) {
-			return true
-		}
-	}
-	return false
-}
-
-func storesAddrInExpr(info *types.Info, e ast.Expr, key flow.Key) bool {
-	stored := false
-	ast.Inspect(e, func(n ast.Node) bool {
-		if stored {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		u, ok := n.(*ast.UnaryExpr)
-		if !ok {
-			return true
-		}
-		if u.Op == token.AND && encloses(info, u.X, key) {
-			stored = true
-			return false
-		}
-		return true
-	})
-	return stored
 }
 
 func collectKeys(info *types.Info, fn ast.Node) []flow.Key {
@@ -625,7 +707,14 @@ func takesKey(info *types.Info, call *ast.CallExpr, key flow.Key) bool {
 
 func encloses(info *types.Info, e ast.Expr, key flow.Key) bool {
 	k, ok := flow.KeyOf(info, e)
-	if !ok || k.Root != key.Root {
+	if !ok {
+		return false
+	}
+	return keyEnclosesKey(k, key)
+}
+
+func keyEnclosesKey(k, key flow.Key) bool {
+	if k.Root != key.Root {
 		return false
 	}
 	if k == key {

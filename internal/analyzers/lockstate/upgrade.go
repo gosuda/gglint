@@ -21,22 +21,29 @@ func checkUpgrade(pass *analysis.Pass, fn ast.Node) {
 	if g == nil {
 		return
 	}
+	facts := collectFacts(pass.TypesInfo, fn)
 	for _, key := range collectKeys(pass.TypesInfo, fn) {
-		checkUpgradeKey(pass, g, fn, key)
+		checkUpgradeKey(pass, g, fn, key, facts)
 	}
 }
 
-func checkUpgradeKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key) {
+func checkUpgradeKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key, facts *fnFacts) {
 	info := pass.TypesInfo
-	if storedAddress(info, fn, key) {
+	if facts.storedAddress(key) {
 		return
 	}
-	entry := entryState(info, fn, key)
+	entry := facts.entryState(fn, key)
 	tr := func(n ast.Node, s state) state {
+		if !facts.mentions(n, key.Root) {
+			return s
+		}
 		return applyNode(info, key, n, s)
 	}
 	pre, order := collectPre(g, entry, tr)
 	for _, n := range order {
+		if !facts.mentions(n, key.Root) {
+			continue
+		}
 		reportUpgradeOps(pass, n, key, pre[n])
 	}
 }

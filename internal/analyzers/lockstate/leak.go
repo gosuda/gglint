@@ -11,15 +11,16 @@ import (
 )
 
 type leakCtx struct {
-	pass    *analysis.Pass
-	graph   *flow.Graph
-	before  map[ast.Node]state
-	returns []*ast.ReturnStmt
-	holders []ast.Node
-	endFree bool
-	recv    string
-	info    *types.Info
-	key     flow.Key
+	pass        *analysis.Pass
+	graph       *flow.Graph
+	before      map[ast.Node]state
+	returns     []*ast.ReturnStmt
+	holders     []ast.Node
+	reachedMemo map[ast.Node]bool
+	endFree     bool
+	recv        string
+	info        *types.Info
+	key         flow.Key
 }
 
 func runLeak(pass *analysis.Pass) (any, error) {
@@ -34,24 +35,29 @@ func checkLeak(pass *analysis.Pass, fn ast.Node) {
 	if g == nil {
 		return
 	}
+	facts := collectFacts(pass.TypesInfo, fn)
+	deferred := deferredKeys(pass.TypesInfo, fn)
 	for _, key := range collectKeys(pass.TypesInfo, fn) {
-		checkLeakKey(pass, g, fn, key)
+		checkLeakKey(pass, g, fn, key, facts, deferred)
 	}
 }
 
-func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key) {
+func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key, facts *fnFacts, deferred map[flow.Key]bool) {
 	info := pass.TypesInfo
-	if storedAddress(info, fn, key) {
+	if facts.storedAddress(key) {
 		return
 	}
-	if hasDeferred(info, fn, key) {
+	if deferred[key] {
 		return
 	}
 	if localNeverShared(info, fn, key) {
 		return
 	}
-	entry := entryState(info, fn, key)
+	entry := facts.entryState(fn, key)
 	tr := func(n ast.Node, s state) state {
+		if !facts.mentions(n, key.Root) {
+			return s
+		}
 		return applyNode(info, key, n, s)
 	}
 	pre, order := collectPre(g, entry, tr)
@@ -59,20 +65,21 @@ func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key)
 	if len(rets) == 0 {
 		return
 	}
-	holders := unlockHolders(order, info, key)
+	holders := unlockHolders(order, info, key, facts)
 	if len(holders) == 0 {
 		return
 	}
 	c := &leakCtx{
-		pass:    pass,
-		graph:   g,
-		before:  pre,
-		returns: rets,
-		holders: holders,
-		endFree: leakEndFree(info, fn, key, pre),
-		recv:    lockRecv(info, fn, key),
-		info:    info,
-		key:     key,
+		pass:        pass,
+		graph:       g,
+		before:      pre,
+		returns:     rets,
+		holders:     holders,
+		reachedMemo: map[ast.Node]bool{},
+		endFree:     leakEndFree(info, fn, key, pre),
+		recv:        lockRecv(info, fn, key),
+		info:        info,
+		key:         key,
 	}
 	c.report()
 }
@@ -124,31 +131,56 @@ func (c *leakCtx) good(skip *ast.ReturnStmt) bool {
 }
 
 func (c *leakCtx) reached(to ast.Node) bool {
+	if hit, ok := c.reachedMemo[to]; ok {
+		return hit
+	}
+	reached := false
 	for _, u := range c.holders {
 		if c.graph.Reaches(u, to, nil) {
-			return true
+			reached = true
+			break
 		}
 	}
-	return false
+	c.reachedMemo[to] = reached
+	return reached
 }
 
-func hasDeferred(info *types.Info, fn ast.Node, key flow.Key) bool {
+func deferredKeys(info *types.Info, fn ast.Node) map[flow.Key]bool {
+	keys := map[flow.Key]bool{}
 	fnLit := fnLitOf(fn)
-	found := false
 	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
 		if skipNestedLit(n, fnLit) {
 			return false
 		}
-		if deferredUnlocks(info, n, key) {
-			found = true
-			return false
+		ds, ok := n.(*ast.DeferStmt)
+		if !ok {
+			return true
+		}
+		deferUnlockKeys(info, ds, keys)
+		return true
+	})
+	return keys
+}
+
+func deferUnlockKeys(info *types.Info, ds *ast.DeferStmt, keys map[flow.Key]bool) {
+	if k, m, matched := mutexKey(info, ds.Call); matched && isUnlockMethod(m) {
+		keys[k] = true
+		return
+	}
+	lit, ok := ast.Unparen(ds.Call.Fun).(*ast.FuncLit)
+	if !ok || lit.Body == nil {
+		return
+	}
+	ast.Inspect(lit.Body, func(x ast.Node) bool {
+		call, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if k, m, matched := mutexKey(info, call); matched && isUnlockMethod(m) {
+			keys[k] = true
 		}
 		return true
 	})
-	return found
 }
 
 func fnLitOf(fn ast.Node) *ast.FuncLit {
@@ -163,48 +195,17 @@ func skipNestedLit(n ast.Node, fnLit *ast.FuncLit) bool {
 	return ok && l != fnLit
 }
 
-func deferredUnlocks(info *types.Info, n ast.Node, key flow.Key) bool {
-	ds, ok := n.(*ast.DeferStmt)
-	if !ok {
-		return false
-	}
-	if k, m, matched := mutexKey(info, ds.Call); matched && k == key && isUnlockMethod(m) {
-		return true
-	}
-	lit, ok := ast.Unparen(ds.Call.Fun).(*ast.FuncLit)
-	if !ok || lit.Body == nil {
-		return false
-	}
-	return litReleases(info, lit, key)
-}
-
-func litReleases(info *types.Info, lit *ast.FuncLit, key flow.Key) bool {
-	found := false
-	ast.Inspect(lit.Body, func(x ast.Node) bool {
-		if found {
-			return false
-		}
-		call, ok := x.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if k, m, matched := mutexKey(info, call); matched && k == key && isUnlockMethod(m) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
 func isUnlockMethod(m string) bool {
 	return m == methodUnlock || m == methodRUnlock
 }
 
-func unlockHolders(order []ast.Node, info *types.Info, key flow.Key) []ast.Node {
+func unlockHolders(order []ast.Node, info *types.Info, key flow.Key, facts *fnFacts) []ast.Node {
 	var out []ast.Node
 	for _, n := range order {
 		if _, ok := n.(*ast.DeferStmt); ok {
+			continue
+		}
+		if !facts.mentions(n, key.Root) {
 			continue
 		}
 		for _, op := range opsInNode(info, n, key) {
