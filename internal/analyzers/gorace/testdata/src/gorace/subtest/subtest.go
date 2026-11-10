@@ -34,7 +34,7 @@ func subtestIndexSilent(t *testing.T) {
 	})
 	t.Run("b", func(t *testing.T) {
 		t.Parallel()
-		arr[0] = 2
+		arr[1] = 2
 	})
 	_ = arr
 }
@@ -77,10 +77,12 @@ func subtestFieldReported(t *testing.T) {
 	})
 	t.Run("b", func(t *testing.T) { // want `parallel subtests write st.n without ordering, so the test result depends on scheduling: give each subtest its own variable`
 		t.Parallel()
-		_ = st
+		use(st)
 	})
 	_ = st
 }
+
+func use(any) {}
 
 func subtestAssignedReported(t *testing.T) {
 	var got int

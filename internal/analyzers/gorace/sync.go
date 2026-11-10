@@ -37,36 +37,34 @@ func checkDoublecheck(pass *analysis.Pass, fn ast.Node) {
 			return false
 		}
 		if outer, ok := n.(*ast.IfStmt); ok {
-			reportDoublecheck(pass, held, outer)
+			reportDoublecheck(pass, fn, held, outer)
 		}
 		return true
 	})
 }
 
-func reportDoublecheck(pass *analysis.Pass, held func(ast.Node) []flow.Key, outer *ast.IfStmt) {
+func reportDoublecheck(pass *analysis.Pass, fn ast.Node, held func(ast.Node) []flow.Key, outer *ast.IfStmt) {
 	v, ok := nilKey(pass.TypesInfo, outer.Cond)
-	if !ok || !doublecheckVar(v, varType(pass.TypesInfo, outer.Cond)) {
+	if !ok || !sharedVar(pass, fn, v) {
 		return
 	}
-	if !innerAssign(pass.TypesInfo, outer.Body, v) {
+	innerPos, ok := innerAssignPos(pass.TypesInfo, outer.Body, v)
+	if !ok {
 		return
 	}
-	k, ok := lockInBody(pass.TypesInfo, outer.Body)
+	k, ok := lockBeforePos(pass.TypesInfo, outer.Body, innerPos)
 	if !ok || hasKey(held(outer), k) {
 		return
 	}
 	pass.Reportf(outer.Cond.Pos(), "%s is read outside the lock and assigned inside it, so a reader can see a half-built value: read it under the lock, or use sync.Once", keyText(pass, v))
 }
 
-func doublecheckVar(v flow.Key, typ types.Type) bool {
+func sharedVar(pass *analysis.Pass, fn ast.Node, v flow.Key) bool {
 	if v.Root == nil {
 		return false
 	}
-	if isAtomicType(typ) {
-		return false
-	}
 	if v.Path != "" {
-		return true
+		return !localRoot(pass, fn, v)
 	}
 	if vv, ok := v.Root.(*types.Var); ok && vv.Pkg() != nil && vv.Pkg().Scope() != nil {
 		return vv.Pkg().Scope().Lookup(vv.Name()) == vv
@@ -74,42 +72,12 @@ func doublecheckVar(v flow.Key, typ types.Type) bool {
 	return false
 }
 
-func varType(info *types.Info, cond ast.Expr) types.Type {
-	bin, ok := ast.Unparen(cond).(*ast.BinaryExpr)
-	if !ok || bin.Op != token.EQL {
-		return nil
-	}
-	if isNilExpr(info, bin.X) {
-		if tv, ok := info.Types[ast.Unparen(bin.Y)]; ok {
-			return tv.Type
-		}
-		return nil
-	}
-	if isNilExpr(info, bin.Y) {
-		if tv, ok := info.Types[ast.Unparen(bin.X)]; ok {
-			return tv.Type
-		}
-		return nil
-	}
-	return nil
-}
-
-func isAtomicType(t types.Type) bool {
-	if t == nil {
+func localRoot(pass *analysis.Pass, fn ast.Node, v flow.Key) bool {
+	vv, ok := v.Root.(*types.Var)
+	if !ok {
 		return false
 	}
-	for {
-		p, ok := t.(*types.Pointer)
-		if !ok {
-			break
-		}
-		t = p.Elem()
-	}
-	n, ok := t.(*types.Named)
-	if !ok || n.Obj() == nil || n.Obj().Pkg() == nil {
-		return false
-	}
-	return n.Obj().Pkg().Path() == "sync/atomic"
+	return flow.IsLocal(pass.TypesInfo, fn, vv)
 }
 
 func hasKey(keys []flow.Key, k flow.Key) bool {
@@ -138,10 +106,11 @@ func isNilExpr(info *types.Info, e ast.Expr) bool {
 	return info.Types[e].IsNil()
 }
 
-func innerAssign(info *types.Info, body *ast.BlockStmt, v flow.Key) bool {
+func innerAssignPos(info *types.Info, body *ast.BlockStmt, v flow.Key) (token.Pos, bool) {
 	if body == nil {
-		return false
+		return token.NoPos, false
 	}
+	var pos token.Pos
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
@@ -158,10 +127,13 @@ func innerAssign(info *types.Info, body *ast.BlockStmt, v flow.Key) bool {
 		if !ok || k != v {
 			return true
 		}
-		found = assignsPlain(info, inner.Body, v)
-		return !found
+		if assignsPlain(info, inner.Body, v) {
+			pos, found = inner.Pos(), true
+			return false
+		}
+		return true
 	})
-	return found
+	return pos, found
 }
 
 func assignsPlain(info *types.Info, body *ast.BlockStmt, v flow.Key) bool {
@@ -191,7 +163,7 @@ func assignsPlain(info *types.Info, body *ast.BlockStmt, v flow.Key) bool {
 	return found
 }
 
-func lockInBody(info *types.Info, body *ast.BlockStmt) (flow.Key, bool) {
+func lockBeforePos(info *types.Info, body *ast.BlockStmt, before token.Pos) (flow.Key, bool) {
 	if body == nil {
 		return flow.Key{}, false
 	}
@@ -209,7 +181,7 @@ func lockInBody(info *types.Info, body *ast.BlockStmt) (flow.Key, bool) {
 			return true
 		}
 		k, ok := flow.MethodKey(info, call)
-		if !ok {
+		if !ok || call.Pos() >= before {
 			return true
 		}
 		out, found = k, true

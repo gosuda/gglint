@@ -15,38 +15,40 @@ import (
 
 var mapAnalyzer = &analysis.Analyzer{
 	Name:     "map",
-	Doc:      "reports maps written by a goroutine and accessed concurrently",
+	Doc:      "reports a map a goroutine writes that the function or another goroutine uses without ordering; a loop that waits per iteration is still reported; only index, range, delete, and clear accesses count; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runMap,
 }
 
 var fanoutAnalyzer = &analysis.Analyzer{
 	Name:     "fanout",
-	Doc:      "reports loop variables written by every goroutine a loop starts",
+	Doc:      "reports variables declared outside a loop that every goroutine the loop starts writes; indexed writes, guarded writes, and single-goroutine loops are not reported; a loop that waits per iteration or runs once is still reported; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runFanout,
 }
 
 var sharedAnalyzer = &analysis.Analyzer{
 	Name:     "shared",
-	Doc:      "reports variables a goroutine accesses without ordering",
+	Doc:      "reports a local variable that a goroutine outside a loop writes or reads without ordering, unless a join, channel handoff, or common lock orders it; sibling goroutines and package or parameter variables are not compared; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runShared,
 }
 
 var doublecheckAnalyzer = &analysis.Analyzer{
 	Name:     "doublecheck",
-	Doc:      "reports double-checked locking that reads outside the lock",
+	Doc:      "reports a shared variable or field checked for nil outside a Lock taken before the inner check and assigned under it; locals and RLock are not checked; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runDoublecheck,
 }
 
 var subtestAnalyzer = &analysis.Analyzer{
 	Name:     "subtest",
-	Doc:      "reports parallel subtests sharing a variable",
+	Doc:      "reports sibling t.Run calls in one block whose parallel subtests write a variable the other also uses; loops and indexed writes are not checked; t.Parallel anywhere in the literal counts as parallel",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runSubtest,
 }
+
+const atomicPkgPath = "sync/atomic"
 
 // Analyzers returns the five gorace analyzers.
 func Analyzers() []*analysis.Analyzer {
@@ -72,17 +74,18 @@ func deref(t types.Type) types.Type {
 	if t == nil {
 		return nil
 	}
+	t = types.Unalias(t)
 	seen := map[types.Type]bool{}
 	for {
 		if seen[t] {
 			return t
 		}
 		seen[t] = true
-		p, ok := t.Underlying().(*types.Pointer)
+		p, ok := types.Unalias(t).Underlying().(*types.Pointer)
 		if !ok {
-			return t
+			return types.Unalias(t)
 		}
-		t = p.Elem()
+		t = types.Unalias(p.Elem())
 	}
 }
 
@@ -90,12 +93,12 @@ func isSyncType(t types.Type) bool {
 	if t == nil {
 		return false
 	}
-	n, ok := deref(t).(*types.Named)
+	n, ok := types.Unalias(deref(t)).(*types.Named)
 	if !ok || n.Obj().Pkg() == nil {
 		return false
 	}
 	p := n.Obj().Pkg().Path()
-	return p == "sync" || p == "sync/atomic"
+	return p == "sync" || p == atomicPkgPath
 }
 
 func isMapType(t types.Type) bool {
@@ -107,7 +110,7 @@ func isMapType(t types.Type) bool {
 }
 
 func isMutexNamed(t types.Type) bool {
-	n, ok := deref(t).(*types.Named)
+	n, ok := types.Unalias(deref(t)).(*types.Named)
 	if !ok || n.Obj().Pkg() == nil {
 		return false
 	}
@@ -345,10 +348,10 @@ func exitsListAfter(fn, site ast.Node) bool {
 	if outer == nil || outerBody == nil {
 		return false
 	}
-	if owner == outerBody {
+	if owner == ast.Node(outerBody) {
 		return exitsDirect(list, fn, site.Pos(), outer)
 	}
-	return exitsNested(list, fn, site.Pos(), outer)
+	return exitsNested(list, fn, site.Pos(), outer, owner, outerBody)
 }
 
 func outermostLoop(fn ast.Node, pos token.Pos) (ast.Node, *ast.BlockStmt) {
@@ -390,18 +393,73 @@ func exitsDirect(list []ast.Stmt, fn ast.Node, pos token.Pos, outer ast.Node) bo
 	return false
 }
 
-func exitsNested(list []ast.Stmt, fn ast.Node, pos token.Pos, outer ast.Node) bool {
-	for _, st := range list {
-		if isReturnStmt(st) {
-			return true
-		}
-		br, ok := st.(*ast.BranchStmt)
-		if !ok || br.Tok != token.BREAK || br.Label == nil {
-			continue
-		}
-		if breakTargets(br.Label.Name, fn, pos, outer) {
-			return true
-		}
+func exitsNested(list []ast.Stmt, fn ast.Node, pos token.Pos, outer, owner ast.Node, outerBody *ast.BlockStmt) bool {
+	return exitsScope{fn: fn, pos: pos, outer: outer, owner: owner, outerBody: outerBody}.exits(list)
+}
+
+type exitsScope struct {
+	fn        ast.Node
+	pos       token.Pos
+	outer     ast.Node
+	owner     ast.Node
+	outerBody *ast.BlockStmt
+}
+
+func (s exitsScope) exits(list []ast.Stmt) bool {
+	return slices.ContainsFunc(list, s.stmtExits)
+}
+
+func (s exitsScope) stmtExits(st ast.Stmt) bool {
+	if isReturnStmt(st) {
+		return true
+	}
+	br, ok := st.(*ast.BranchStmt)
+	if !ok || br.Tok != token.BREAK {
+		return false
+	}
+	if br.Label == nil {
+		return newBreakScope(br, s.owner, s.outerBody).exits()
+	}
+	return breakTargets(br.Label.Name, s.fn, s.pos, s.outer)
+}
+
+type breakScope struct {
+	br        *ast.BranchStmt
+	owner     ast.Node
+	outerBody *ast.BlockStmt
+	blocked   bool
+}
+
+func newBreakScope(br *ast.BranchStmt, owner ast.Node, outerBody *ast.BlockStmt) *breakScope {
+	return &breakScope{br: br, owner: owner, outerBody: outerBody}
+}
+
+func (s *breakScope) exits() bool {
+	ast.Inspect(s.outerBody, s.visit)
+	return !s.blocked
+}
+
+func (s *breakScope) visit(n ast.Node) bool {
+	if s.blocked {
+		return false
+	}
+	if _, ok := n.(*ast.FuncLit); ok {
+		return false
+	}
+	if n == ast.Node(s.outerBody) || n == s.owner {
+		return true
+	}
+	if isBreakable(n) && n.Pos() <= s.br.Pos() && s.br.Pos() < n.End() {
+		s.blocked = true
+		return false
+	}
+	return true
+}
+
+func isBreakable(n ast.Node) bool {
+	switch n.(type) {
+	case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+		return true
 	}
 	return false
 }
@@ -436,6 +494,13 @@ func bestLabelTarget(name string, fn ast.Node, pos token.Pos) ast.Node {
 }
 
 func stmtListAfter(fn, site ast.Node) ([]ast.Stmt, ast.Node) {
+	if st, ok := site.(ast.Stmt); ok {
+		return directStmtListAfter(fn, st)
+	}
+	return containingStmtListAfter(fn, site)
+}
+
+func directStmtListAfter(fn ast.Node, site ast.Stmt) ([]ast.Stmt, ast.Node) {
 	var out []ast.Stmt
 	var owner ast.Node
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
@@ -444,7 +509,7 @@ func stmtListAfter(fn, site ast.Node) ([]ast.Stmt, ast.Node) {
 		}
 		list := stmtListOf(n)
 		for i, stmt := range list {
-			if stmt == site {
+			if stmt == ast.Node(site) {
 				out = list[i+1:]
 				owner = n
 				return false
@@ -453,6 +518,25 @@ func stmtListAfter(fn, site ast.Node) ([]ast.Stmt, ast.Node) {
 		return true
 	})
 	return out, owner
+}
+
+func containingStmtListAfter(fn, site ast.Node) ([]ast.Stmt, ast.Node) {
+	var best []ast.Stmt
+	var owner ast.Node
+	bestSize := token.Pos(1 << 30)
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		list := stmtListOf(n)
+		for i, stmt := range list {
+			size := stmt.End() - stmt.Pos()
+			if site.Pos() >= stmt.Pos() && site.Pos() < stmt.End() && size < bestSize {
+				best = list[i+1:]
+				owner = n
+				bestSize = size
+			}
+		}
+		return true
+	})
+	return best, owner
 }
 
 func stmtListOf(n ast.Node) []ast.Stmt {

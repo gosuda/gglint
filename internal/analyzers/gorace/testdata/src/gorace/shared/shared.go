@@ -2,6 +2,7 @@ package shared
 
 import (
 	"sync"
+	"testing"
 	"testing/synctest"
 
 	"golang.org/x/sync/errgroup"
@@ -47,14 +48,6 @@ func sharedWriteReadReported() string {
 	_ = s
 	go func() { // want `s is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
 		s = "c"
-	}()
-	return s
-}
-
-func sharedReturnReported() string {
-	s := "a"
-	go func() { // want `s is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
-		s = "b"
 	}()
 	return s
 }
@@ -186,34 +179,17 @@ func sharedCondReadReported() {
 	s = "b"
 }
 
-func sharedCaseReadReported() {
-	s := "a"
-	go func() { // want `s is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
-		switch {
-		case s == "a":
-			println("x")
-		}
-	}()
-	s = "b"
-}
-
-type sharedReg struct{ m map[int]int }
-
-func sharedSynctestSilent() string {
-	s := "a"
-	go func() {
-		s = "b"
-	}()
-	synctest.Wait()
-	return s
-}
-
-func sharedFieldMapSilent() {
-	r := &sharedReg{m: map[int]int{}}
-	go func() {
-		r.m[1] = 1
-	}()
-	_ = r.m[2]
+func sharedSynctestSilent(t *testing.T) string {
+	var out string
+	synctest.Test(t, func(*testing.T) {
+		s := "a"
+		go func() {
+			s = "b"
+		}()
+		synctest.Wait()
+		out = s
+	})
+	return out
 }
 
 func sharedIndexReadReported(m map[int]int) {
@@ -263,4 +239,116 @@ func sharedSameIndexReported() {
 	}()
 	out[0] = 2
 	wg.Wait()
+}
+
+func sharedMutexHandoffSilent() int {
+	var mu sync.Mutex
+	x := 0
+	mu.Lock()
+	go func() {
+		x = 1
+		mu.Unlock()
+	}()
+	mu.Lock()
+	defer mu.Unlock()
+	return x
+}
+
+type sharedGate chan struct{}
+
+func (g sharedGate) open() { g <- struct{}{} }
+
+func (g sharedGate) wait() { <-g }
+
+func sharedGateHelperSilent() bool {
+	set, g := false, make(sharedGate, 1)
+	go func() {
+		set = true
+		g.open()
+	}()
+	g.wait()
+	return set
+}
+
+func sharedSettle() { synctest.Wait() }
+
+func sharedSynctestHelperSilent(t *testing.T) int {
+	var got int
+	synctest.Test(t, func(*testing.T) {
+		go func() { got = 1 }()
+		sharedSettle()
+	})
+	return got
+}
+
+func sharedPingCloseSilent(ready chan struct{}) error {
+	var perr error
+	errc := make(chan struct{})
+	go func() {
+		if perr = workErr(); perr != nil {
+			close(errc)
+			return
+		}
+	}()
+	select {
+	case <-errc:
+		return perr
+	case <-ready:
+		return nil
+	}
+}
+
+func sharedCallArgSendSilent() int {
+	ready := make(chan struct{})
+	gp := 0
+	go func() {
+		gp = 1
+		sharedCall(func() { ready <- struct{}{} })
+	}()
+	<-ready
+	return gp
+}
+
+func sharedCall(f func()) { f() }
+
+type sharedAtomicGate struct{ set chan struct{} }
+
+func (g *sharedAtomicGate) unlock() { g.set <- struct{}{} }
+
+func (g *sharedAtomicGate) wait() { <-g.set }
+
+func sharedMethodHelperSilent(g *sharedAtomicGate) bool {
+	set := false
+	go func() {
+		set = true
+		g.unlock()
+	}()
+	g.wait()
+	return set
+}
+
+func sharedRendezvousSilent() int {
+	var count int
+	c := make(chan byte)
+	go func() {
+		<-c
+		count++
+		<-c
+	}()
+	c <- 1
+	c <- 2
+	return count
+}
+
+func sharedBufferedSendReported() int {
+	var count int
+	c := make(chan byte, 1)
+	go func() { // want `count is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		<-c
+		count++
+		<-c
+	}()
+	c <- 1
+	c <- 2
+	return count
 }

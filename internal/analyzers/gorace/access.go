@@ -6,7 +6,6 @@ import (
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/flow"
 )
@@ -33,9 +32,16 @@ type mapScope struct {
 }
 type sharedScope struct {
 	*guardScope
-	graph  *flow.Graph
-	fn     ast.Node
-	parent []varAccess
+	graph       *flow.Graph
+	fn          ast.Node
+	parent      []varAccess
+	hasWaitCall bool
+}
+
+type pairOrder struct {
+	avoid    func(ast.Node) bool
+	buffered map[flow.Key]bool
+	order    litOrder
 }
 
 func writesInStmt(info *types.Info, stmt ast.Stmt) []varAccess {
@@ -512,23 +518,23 @@ func checkMap(pass *analysis.Pass, fn ast.Node) {
 		if s.Body == nil {
 			continue
 		}
-		scope.checkSpawn(s)
+		scope.checkSpawn(s, spawns)
 	}
 }
 
-func (m *mapScope) checkSpawn(s flow.Spawn) {
+func (m *mapScope) checkSpawn(s flow.Spawn, spawns []flow.Spawn) {
 	if passesMutex(m.pass.TypesInfo, s.Body) {
 		return
 	}
 	for _, a := range m.lits[s.Body] {
-		if m.reportableMapWrite(s, a) {
-			m.pass.Reportf(s.Site.Pos(), "%s is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex", keyText(m.pass, a.key))
+		if m.reportableMapWrite(s, a, spawns) {
+			m.pass.Reportf(s.Site.Pos(), "%s is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex", keyText(m.pass, a.key))
 			return
 		}
 	}
 }
 
-func (m *mapScope) reportableMapWrite(s flow.Spawn, a varAccess) bool {
+func (m *mapScope) reportableMapWrite(s flow.Spawn, a varAccess, spawns []flow.Spawn) bool {
 	if !mapReportable(s, a) {
 		return false
 	}
@@ -537,7 +543,7 @@ func (m *mapScope) reportableMapWrite(s flow.Spawn, a varAccess) bool {
 		return false
 	}
 	litOpen := len(m.litHeld(s.Body, a.stmt)) == 0
-	return (outside && s.InLoop && litOpen) || m.hasOther(s, a)
+	return (outside && s.InLoop && litOpen) || m.hasOther(s, a, spawns)
 }
 
 func (m *mapScope) parentMapOp(a varAccess) bool {
@@ -564,28 +570,28 @@ func mapReportable(s flow.Spawn, a varAccess) bool {
 	return true
 }
 
-func (m *mapScope) hasOther(s flow.Spawn, a varAccess) bool {
+func (m *mapScope) hasOther(s flow.Spawn, a varAccess, spawns []flow.Spawn) bool {
+	avoid := declAvoid(m.pass.TypesInfo, m.fn, a.key.Root, s.Site)
 	for _, p := range m.parent {
-		if m.parentConflicts(s, a, p) {
+		if m.parentConflicts(s, a, p, avoid) {
 			return true
 		}
 	}
-	return m.otherSpawnWrites(s, a)
+	return m.otherSpawnWrites(s, a, spawns)
 }
 
-func (m *mapScope) parentConflicts(s flow.Spawn, a, p varAccess) bool {
+func (m *mapScope) parentConflicts(s flow.Spawn, a, p varAccess, avoid func(ast.Node) bool) bool {
 	if p.key != a.key || !mapOpAccess(p) {
 		return false
 	}
-	avoid := declAvoid(m.pass.TypesInfo, m.fn, a.key.Root, s.Site)
 	if !m.graph.Reaches(s.Site, p.stmt, avoid) || flow.Joined(m.pass, m.graph, s, p.stmt) {
 		return false
 	}
 	return !commonKey(m.litHeld(s.Body, a.stmt), m.parentHeld(p.stmt))
 }
 
-func (m *mapScope) otherSpawnWrites(s flow.Spawn, a varAccess) bool {
-	for _, o := range flow.Spawns(m.pass, m.fn) {
+func (m *mapScope) otherSpawnWrites(s flow.Spawn, a varAccess, spawns []flow.Spawn) bool {
+	for _, o := range spawns {
 		if o.Body == nil || o.Body == s.Body || passesMutex(m.pass.TypesInfo, o.Body) {
 			continue
 		}
@@ -635,7 +641,7 @@ func reportFanoutWrite(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAcce
 	if !fanoutReportable(pass, fn, s, a) {
 		return
 	}
-	pass.Reportf(a.stmt.Pos(), "%s is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex", keyText(pass, a.key))
+	pass.Reportf(a.stmt.Pos(), "%s is written by every goroutine this loop starts, so the writes race when two of them overlap: collect results through a channel, or guard the write with a mutex", keyText(pass, a.key))
 }
 
 func fanoutReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAccess) bool {
@@ -653,7 +659,10 @@ func fanoutVarReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, v *type
 	if !outsideLit(v, s.Body) || isSyncType(v.Type()) || !declaredOutsideLoop(pass.TypesInfo, fn, v, s.Site) {
 		return false
 	}
-	return len(heldOutside(pass, s.Body, lockNodeFor(a))) == 0
+	if len(heldOutside(pass, s.Body, lockNodeFor(a))) != 0 {
+		return false
+	}
+	return !fanoutOrdered(pass, fn, s, a.stmt.Pos())
 }
 
 func runShared(pass *analysis.Pass) (any, error) {
@@ -677,7 +686,7 @@ func checkShared(pass *analysis.Pass, fn ast.Node) {
 	for _, s := range spawns {
 		sites[s.Site] = true
 	}
-	scope := &sharedScope{guardScope: newGuardScope(pass, fn), graph: g, fn: fn, parent: collectParent(info, fn, sites)}
+	scope := &sharedScope{guardScope: newGuardScope(pass, fn), graph: g, fn: fn, parent: collectParent(info, fn, sites), hasWaitCall: isSynctestWait(pass, flow.Body(fn))}
 	for _, s := range spawns {
 		if s.InLoop || s.Body == nil {
 			continue
@@ -688,8 +697,9 @@ func checkShared(pass *analysis.Pass, fn ast.Node) {
 
 func (m *sharedScope) checkSpawn(s flow.Spawn) {
 	lit := collectLit(m.pass.TypesInfo, s.Body)
+	buffered := bufferedChanKeys(m.pass, m.fn)
 	for _, k := range sharedKeys(m.pass, m.fn, s, lit) {
-		if m.conflict(s, k, lit) {
+		if m.conflict(s, k, lit, buffered) {
 			return
 		}
 	}
@@ -711,16 +721,18 @@ func sharedKeys(pass *analysis.Pass, fn ast.Node, s flow.Spawn, lit []varAccess)
 	return order
 }
 
-func (m *sharedScope) conflict(s flow.Spawn, k flow.Key, lit []varAccess) bool {
+func (m *sharedScope) conflict(s flow.Spawn, k flow.Key, lit []varAccess, buffered map[flow.Key]bool) bool {
 	if passesMutex(m.pass.TypesInfo, s.Body) {
 		return false
 	}
+	avoid := declAvoid(m.pass.TypesInfo, m.fn, k.Root, s.Site)
 	for _, a := range lit {
 		if a.key != k {
 			continue
 		}
+		po := pairOrder{avoid: avoid, buffered: buffered, order: scanLitOrder(m.pass, s.Body, lockNodeFor(a).Pos())}
 		for _, p := range m.parent {
-			if m.pairVoid(s, a, p) {
+			if m.pairVoid(s, a, p, po) {
 				continue
 			}
 			line := m.pass.Fset.Position(p.stmt.Pos()).Line
@@ -735,7 +747,7 @@ func disjointIndex(a, p varAccess) bool {
 	return a.idxConst && p.idxConst && a.idxVal != p.idxVal
 }
 
-func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess) bool {
+func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess, po pairOrder) bool {
 	if p.key != a.key {
 		return true
 	}
@@ -745,8 +757,7 @@ func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess) bool {
 	if disjointIndex(a, p) {
 		return true
 	}
-	avoid := declAvoid(m.pass.TypesInfo, m.fn, a.key.Root, s.Site)
-	if !m.graph.Reaches(s.Site, p.stmt, avoid) {
+	if !m.graph.Reaches(s.Site, p.stmt, po.avoid) {
 		return true
 	}
 	if flow.Joined(m.pass, m.graph, s, p.stmt) {
@@ -755,17 +766,20 @@ func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess) bool {
 	if m.bubbleJoined(s, p.stmt) {
 		return true
 	}
+	if m.handoff(s, p, po) {
+		return true
+	}
 	return commonKey(m.litHeld(s.Body, lockNodeFor(a)), m.parentHeld(lockNodeFor(p)))
 }
 
 func (m *sharedScope) bubbleJoined(s flow.Spawn, at ast.Node) bool {
-	if s.Body == nil || bodyParks(s.Body) {
+	if !m.hasWaitCall || s.Body == nil || bodyParks(s.Body) {
 		return false
 	}
-	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool { return isSynctestWait(m.pass.TypesInfo, n) })
+	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool { return isSynctestWait(m.pass, n) })
 }
 
-func isSynctestWait(info *types.Info, n ast.Node) bool {
+func isSynctestWait(pass *analysis.Pass, n ast.Node) bool {
 	found := false
 	ast.Inspect(n, func(x ast.Node) bool {
 		if found {
@@ -778,8 +792,7 @@ func isSynctestWait(info *types.Info, n ast.Node) bool {
 		if !ok {
 			return true
 		}
-		fn := typeutil.StaticCallee(info, call)
-		if fn != nil && fn.FullName() == "testing/synctest.Wait" {
+		if isWaitCall(pass.TypesInfo, call) || isWaitViaCall(pass, call) {
 			found = true
 			return false
 		}

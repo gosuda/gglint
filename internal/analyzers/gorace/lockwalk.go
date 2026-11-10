@@ -117,6 +117,9 @@ func resolveRange(s *ast.RangeStmt) ast.Node {
 }
 
 func resolveFor(s *ast.ForStmt) ast.Node {
+	if s.Init != nil {
+		return resolveStmt(s.Init)
+	}
 	if s.Cond != nil {
 		return s.Cond
 	}

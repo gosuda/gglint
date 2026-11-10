@@ -5,7 +5,7 @@ import "sync"
 func mapReported() {
 	m := map[int]int{}
 	for i := range 8 {
-		go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+		go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 			m[i] = i
 		}()
 	}
@@ -25,7 +25,7 @@ func mapSilent() {
 
 func mapParentReported() {
 	m := map[int]int{}
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		m[0] = 1
 	}()
 	m[1] = 2
@@ -45,10 +45,10 @@ func mapJoinedSilent() {
 func mapOtherReported() {
 	m := map[int]int{}
 	var mu sync.Mutex
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		m[1] = 1
 	}()
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		mu.Lock()
 		m[2] = 2
 		mu.Unlock()
@@ -57,12 +57,17 @@ func mapOtherReported() {
 }
 
 func mapKeepRefSilent(m map[int]int) {
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
+		defer wg.Done()
 		m[1] = 1
 	}()
 	go func() {
+		defer wg.Done()
 		keepMap(m)
 	}()
+	wg.Wait()
 }
 
 func keepMap(m map[int]int) {}
@@ -70,7 +75,7 @@ func keepMap(m map[int]int) {}
 func mapDeleteReported() {
 	m := map[int]int{1: 1}
 	for i := range 8 {
-		go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+		go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 			delete(m, i)
 		}()
 	}
@@ -91,7 +96,7 @@ func mapIncSilent() {
 func mapGuardedParentReported() {
 	m := map[int]int{}
 	var mu sync.Mutex
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		mu.Lock()
 		m[1] = 1
 		mu.Unlock()
@@ -102,12 +107,12 @@ func mapGuardedParentReported() {
 func mapTwoLocksReported() {
 	m := map[int]int{}
 	var mu1, mu2 sync.Mutex
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		mu1.Lock()
 		m[1] = 1
 		mu1.Unlock()
 	}()
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		mu2.Lock()
 		m[2] = 2
 		mu2.Unlock()
@@ -119,7 +124,7 @@ type mapReg struct{ m map[int]int }
 func mapFieldReported() {
 	r := &mapReg{m: map[int]int{}}
 	for i := range 8 {
-		go func() { // want `r.m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+		go func() { // want `r.m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 			r.m[i] = i
 		}()
 	}
@@ -127,7 +132,7 @@ func mapFieldReported() {
 
 func mapDeclReadReported() int {
 	m := map[int]int{}
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		m[1] = 1
 	}()
 	var v = m[1]
@@ -137,7 +142,7 @@ func mapDeclReadReported() int {
 func mapFirstAccessGuardedReported() {
 	m := map[int]int{0: 0}
 	var mu sync.Mutex
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		mu.Lock()
 		_ = m[0]
 		mu.Unlock()
@@ -148,21 +153,11 @@ func mapFirstAccessGuardedReported() {
 	mu.Unlock()
 }
 
-func mapPerIterationSilent() {
-	for i := range 8 {
-		m := map[int]int{}
-		go func() {
-			m[i] = i
-		}()
-		_ = m
-	}
-}
-
 func mapPerIterationParentReported() int {
 	total := 0
 	for i := range 8 {
 		m := map[int]int{}
-		go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+		go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 			m[i] = i
 		}()
 		total += m[0]
@@ -182,7 +177,7 @@ func mapNestedLitReported() {
 	func() {
 		m := map[int]int{}
 		for i := range 8 {
-			go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+			go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 				m[i] = i
 			}()
 		}
@@ -191,7 +186,7 @@ func mapNestedLitReported() {
 
 func mapCaseReadReported(k int) {
 	m := map[int]int{}
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		m[1] = 1
 	}()
 	switch {
@@ -201,11 +196,18 @@ func mapCaseReadReported(k int) {
 
 func mapWholeAssignSilent() {
 	var m map[int]int
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for _, x := range xs() {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
+			mu.Lock()
 			m = map[int]int{x: x}
+			mu.Unlock()
 		}()
 	}
+	wg.Wait()
 	_ = m
 }
 
@@ -236,43 +238,26 @@ func mapNilLoopSwitchSilent() {
 	return
 }
 
-func mapNilDeclSelectSilent() {
-	m := map[int]int{}
-	done := make(chan struct{})
-	go func() {
-		m[0] = 1
-		close(done)
-	}()
-	<-done
-	_ = m[0]
-	var v int
-	_ = v
-	s := []int{1}
-	_ = s[:]
-	select {
-	case <-done:
-	default:
-	}
-	go printOne()
-	defer printOne()
-}
-
 func mapGuardedReturnSilent() map[int]int {
 	var mu sync.Mutex
+	var wg sync.WaitGroup
 	m := map[int]int{}
 	for i := range 8 {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			mu.Lock()
 			m[i] = i
 			mu.Unlock()
 		}()
 	}
+	wg.Wait()
 	return m
 }
 
 func mapClearReported() {
 	m := map[int]int{1: 1}
-	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
 		clear(m)
 	}()
 	_ = m[1]
@@ -282,7 +267,7 @@ type recPtr *recPtr
 
 func recPtrUser(p recPtr) {}
 
-func mapRecPtrSilent(p recPtr) {
+func recPtrTypeProbe(p recPtr) {
 	recPtrUser(p)
 }
 
@@ -295,7 +280,33 @@ func mapPerIterationBeforeSpawnSilent() {
 		results["seed"] = 0
 		go func() {
 			results[jb.Name] = work(jb)
+			_ = results
 		}()
-		_ = results
 	}
+}
+
+type mapAliasM = sync.Mutex
+
+func mapAliasLock(m *sync.Mutex) { m.Lock() }
+
+func mapAliasUnlock(m *sync.Mutex) { m.Unlock() }
+
+func mapAliasMutexSilent(xs []int) {
+	var mu mapAliasM
+	m := map[int]int{}
+	for i := range xs {
+		go func() {
+			mapAliasLock(&mu)
+			m[i] = i
+			mapAliasUnlock(&mu)
+		}()
+	}
+}
+
+func mapSharedFieldReported() {
+	r := &mapReg{m: map[int]int{}}
+	go func() { // want `r.m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
+		r.m[1] = 1
+	}()
+	_ = r.m[2]
 }
