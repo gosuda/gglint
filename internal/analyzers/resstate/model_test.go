@@ -28,7 +28,7 @@ func modelStmt(op int) string {
 	case 0:
 		return "f.Close()"
 	case 1:
-		return "f.Read()"
+		return "f.Read(nil)"
 	case 2:
 		return "f = R{}"
 	default:
@@ -164,7 +164,7 @@ func modelSplits(lines []string, progs []modelProg, seq []int, id int) (nextLine
 }
 
 func modelGen() ([]string, []modelProg) {
-	lines := []string{"package p", "", "type R struct{}", "", "func (R) Close() error { return nil }", "", "func (R) Read() {}", "", "func sink(any) {}", ""}
+	lines := []string{"package p", "", "import \"os\"", "", "type R struct { *os.File }", "", "func sink(any) {}", ""}
 	progs := []modelProg{}
 	id := 0
 	for n := range 5 {

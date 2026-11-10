@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/types/typeutil"
@@ -13,14 +14,18 @@ import (
 )
 
 const (
-	viewBufioPath     = "bufio"
-	viewBytesPath     = "bytes"
-	viewScannerName   = "Scanner"
-	viewReaderName    = "Reader"
-	viewBufferName    = "Buffer"
-	viewBytesName     = "Bytes"
-	viewPeekName      = "Peek"
-	viewReadSliceName = "ReadSlice"
+	viewBufioPath       = "bufio"
+	viewBytesPath       = "bytes"
+	viewScannerName     = "Scanner"
+	viewReaderName      = "Reader"
+	viewBufferName      = "Buffer"
+	viewBytesName       = "Bytes"
+	viewPeekName        = "Peek"
+	viewReadSliceName   = "ReadSlice"
+	viewScanName        = "Scan"
+	viewResetName       = "Reset"
+	viewWriteStringName = "WriteString"
+	viewDiscardName     = "Discard"
 )
 
 func runViewescape(pass *analysis.Pass) (any, error) {
@@ -125,12 +130,9 @@ func invalidAdd(pass *analysis.Pass, call *ast.CallExpr, out map[flow.Key][]stri
 	if !ok {
 		return
 	}
-	for _, m := range out[k] {
-		if m == name {
-			return
-		}
+	if !slices.Contains(out[k], name) {
+		out[k] = append(out[k], name)
 	}
-	out[k] = append(out[k], name)
 }
 
 func invalidParts(loop ast.Node) []ast.Node {
@@ -170,12 +172,56 @@ func viewInvalidName(pass *analysis.Pass, call *ast.CallExpr) string {
 	if recv == nil {
 		return ""
 	}
+	if !viewInvalidRecv(recv.Type(), sel.Sel.Name) {
+		return ""
+	}
 	return sel.Sel.Name
+}
+
+func viewInvalidRecv(t types.Type, name string) bool {
+	named, ok := derefNamed(t)
+	if !ok {
+		return false
+	}
+	path, recv, ok := pkgRecv(named)
+	if !ok {
+		return false
+	}
+	for _, want := range viewInvalidRecvTable(name) {
+		if path == want.path && recv == want.recv {
+			return true
+		}
+	}
+	return false
+}
+
+type viewRecv struct {
+	path string
+	recv string
+}
+
+func viewInvalidRecvTable(name string) []viewRecv {
+	scanner := viewRecv{viewBufioPath, viewScannerName}
+	reader := viewRecv{viewBufioPath, viewReaderName}
+	buffer := viewRecv{viewBytesPath, viewBufferName}
+	switch name {
+	case viewScanName:
+		return []viewRecv{scanner}
+	case viewResetName:
+		return []viewRecv{buffer, reader}
+	case closeMethodWrite, viewWriteStringName:
+		return []viewRecv{buffer}
+	case closeMethodRead:
+		return []viewRecv{reader, buffer}
+	case viewReadSliceName, viewPeekName, viewDiscardName:
+		return []viewRecv{reader}
+	}
+	return nil
 }
 
 func invalidMethod(name string) bool {
 	switch name {
-	case "Scan", "Reset", "Write", "WriteString", "Read", viewReadSliceName, viewPeekName, "Discard":
+	case viewScanName, viewResetName, closeMethodWrite, viewWriteStringName, closeMethodRead, viewReadSliceName, viewPeekName, viewDiscardName:
 		return true
 	}
 	return false
@@ -293,6 +339,8 @@ func viewReassignsAt(pass *analysis.Pass, n ast.Node, v *types.Var, after token.
 		return x.Pos() > after && viewAssigns(pass, x.Lhs, v)
 	case *ast.IncDecStmt:
 		return x.Pos() > after && viewTargetIs(pass, x.X, v)
+	case *ast.RangeStmt:
+		return x.Pos() > after && (viewTargetIs(pass, x.Key, v) || viewTargetIs(pass, x.Value, v))
 	}
 	return false
 }

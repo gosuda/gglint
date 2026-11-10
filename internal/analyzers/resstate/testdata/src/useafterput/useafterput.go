@@ -100,3 +100,11 @@ func useafterputSilentReassignGet() {
 	b = resPool.Get().(*resBuf)
 	_ = b.n
 }
+
+func useResBuf(*resBuf) {}
+
+func useafterputReportedCallArg() {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	useResBuf(b) // want "was returned to the pool"
+}

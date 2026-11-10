@@ -167,7 +167,7 @@ func putTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) os
 }
 
 func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) ostate {
-	if hasFreeRelease(pass, n, v) {
+	if hasFreeRelease(pass, fn, n, v) {
 		return stReleased
 	}
 	if assignsVar(pass, fn, n, v) {
@@ -184,7 +184,7 @@ func closeVisit(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) {
 		return
 	}
 	for _, c := range methodCallsOn(pass, n, v) {
-		if !closeFailsOn(c) {
+		if !closeFailsOn(pass, c) {
 			continue
 		}
 		pass.Reportf(c.Pos(), "%s is closed on every path to this call, so the call fails: move Close after the last use", v.Name())
@@ -202,16 +202,16 @@ func putVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
 		pass.Reportf(mentionPos(pass, n, v), "%s was returned to the pool, and another goroutine may own it now: call Put after the last use", v.Name())
 		return
 	}
-	if escapesVar(pass, fn, n, v) {
+	if takesAddr(pass, n, v) {
 		return
 	}
 	if redefinesVar(pass, fn, n, v) {
 		return
 	}
-	if !mentionsVar(pass, n, v) {
+	if mentionsVar(pass, n, v) {
+		pass.Reportf(mentionPos(pass, n, v), "%s was returned to the pool, and another goroutine may own it now: call Put after the last use", v.Name())
 		return
 	}
-	pass.Reportf(mentionPos(pass, n, v), "%s was returned to the pool, and another goroutine may own it now: call Put after the last use", v.Name())
 }
 
 func freeVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
@@ -221,20 +221,20 @@ func freeVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
 	if nilAssign(pass, n, v) {
 		return
 	}
-	if hasFreeRelease(pass, n, v) {
+	if hasFreeRelease(pass, fn, n, v) {
 		pass.Reportf(mentionPos(pass, n, v), "%s is used after it was freed: set it to nil after the free and do not use it again", v.Name())
 		return
 	}
-	if escapesVar(pass, fn, n, v) {
+	if takesAddr(pass, n, v) {
 		return
 	}
 	if redefinesVar(pass, fn, n, v) {
 		return
 	}
-	if !mentionsVar(pass, n, v) {
+	if mentionsVar(pass, n, v) {
+		pass.Reportf(mentionPos(pass, n, v), "%s is used after it was freed: set it to nil after the free and do not use it again", v.Name())
 		return
 	}
-	pass.Reportf(mentionPos(pass, n, v), "%s is used after it was freed: set it to nil after the free and do not use it again", v.Name())
 }
 
 func nilAssign(pass *analysis.Pass, n ast.Node, v *types.Var) bool {

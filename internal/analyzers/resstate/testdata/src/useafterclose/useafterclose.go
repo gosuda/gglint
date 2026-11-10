@@ -1,6 +1,7 @@
 package useafterclose
 
 import (
+	"fmt"
 	"os"
 )
 
@@ -107,6 +108,28 @@ func useaftercloseSilentDoubleClose(p string) {
 	f, _ := os.Open(p)
 	f.Close()
 	_ = f.Close()
+}
+
+func useaftercloseReportedDerivedArg(p string, b []byte) {
+	f, _ := os.Open(p)
+	f.Close()
+	fmt.Println(f.Name())
+	_, _ = f.Read(b) // want "is closed on every path to this call"
+}
+
+type memBuf struct{ data []byte }
+
+func (m *memBuf) Close() error { return nil }
+
+func (m *memBuf) Write(p []byte) (int, error) {
+	m.data = append(m.data, p...)
+	return len(p), nil
+}
+
+func useaftercloseSilentForeignWrite(p []byte) {
+	m := &memBuf{}
+	m.Close()
+	_, _ = m.Write(p)
 }
 
 type afterCloseProbe struct{}

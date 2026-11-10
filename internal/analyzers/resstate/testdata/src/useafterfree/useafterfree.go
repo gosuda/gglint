@@ -57,3 +57,24 @@ func useafterfreeReportedReassign() {
 	b = b[:0] // want "is used after it was freed"
 	_ = b
 }
+
+func useafterfreeSilentReassignNew() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	b = make([]byte, 4096)
+	_ = b
+}
+
+func useFreeBytes([]byte) {}
+
+func useafterfreeReportedCallArg() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	useFreeBytes(b) // want "is used after it was freed"
+}
+
+func useafterfreeSilentElementArg() {
+	bufs := [][]byte{make([]byte, 4096), make([]byte, 4096)}
+	syscall.Munmap(bufs[0])
+	syscall.Munmap(bufs[1])
+}

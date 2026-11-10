@@ -86,7 +86,7 @@ func hasPutRelease(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 	return exactVar(pass, call.Args[0], v)
 }
 
-func hasFreeRelease(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var) bool {
 	es, ok := n.(*ast.ExprStmt)
 	if !ok {
 		return false
@@ -95,12 +95,15 @@ func hasFreeRelease(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 	if !ok {
 		return false
 	}
+	if handled, release := freeLitRelease(pass, call, v); handled {
+		return release
+	}
 	fn := typeutil.StaticCallee(pass.TypesInfo, call)
 	if fn == nil {
 		return false
 	}
 	if fn.Name() == "_Cfunc_free" {
-		return freeArgsMention(pass, call, v)
+		return freeArgsMention(pass, fnode, call, v)
 	}
 	pkg := fn.Pkg()
 	if pkg == nil {
@@ -109,20 +112,70 @@ func hasFreeRelease(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 	if fn.Name() != "Munmap" {
 		return false
 	}
+	return freeMunmapByPkg(pass, fnode, pkg, call, v)
+}
+
+func freeMunmapByPkg(pass *analysis.Pass, fnode ast.Node, pkg *types.Package, call *ast.CallExpr, v *types.Var) bool {
 	if pkg.Path() != "syscall" && pkg.Path() != "golang.org/x/sys/unix" {
 		return false
 	}
-	return freeArgsMention(pass, call, v)
+	return freeArgsMention(pass, fnode, call, v)
 }
 
-func freeArgsMention(pass *analysis.Pass, call *ast.CallExpr, v *types.Var) bool {
+func freeLitRelease(pass *analysis.Pass, call *ast.CallExpr, v *types.Var) (release, handled bool) {
+	lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit)
+	if !ok || len(call.Args) != 0 || lit.Body == nil {
+		return false, false
+	}
+	return litFreeRelease(pass, lit, v), true
+}
+
+func litFreeRelease(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
+	released := false
+	ast.Inspect(lit.Body, func(x ast.Node) bool {
+		if released {
+			return false
+		}
+		switch x.(type) {
+		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+			return false
+		}
+		if litFreeFound(pass, lit, x, v) {
+			released = true
+			return false
+		}
+		return true
+	})
+	return released
+}
+
+func litFreeFound(pass *analysis.Pass, lit *ast.FuncLit, x ast.Node, v *types.Var) bool {
+	es, ok := x.(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	call, ok := ast.Unparen(es.X).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	if _, ok := ast.Unparen(call.Fun).(*ast.FuncLit); ok {
+		return false
+	}
+	cfn := typeutil.StaticCallee(pass.TypesInfo, call)
+	if cfn == nil || cfn.Name() != "_Cfunc_free" {
+		return false
+	}
+	return freeArgsMention(pass, lit, call, v)
+}
+
+func freeArgsMention(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, v *types.Var) bool {
 	if len(call.Args) == 0 {
 		return false
 	}
-	return freeTargets(pass, call.Args[0], v)
+	return freeTargets(pass, fn, call.Args[0], v)
 }
 
-func freeTargets(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
+func freeTargets(pass *analysis.Pass, fn ast.Node, e ast.Expr, v *types.Var) bool {
 	e = ast.Unparen(e)
 	if exactVar(pass, e, v) {
 		return true
@@ -132,15 +185,104 @@ func freeTargets(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
 		if x.X == nil {
 			return false
 		}
-		return freeTargets(pass, x.X, v)
-	case *ast.IndexExpr:
-		return freeTargets(pass, x.X, v)
-	case *ast.UnaryExpr:
-		return freeTargets(pass, x.X, v)
-	case *ast.StarExpr:
-		return freeTargets(pass, x.X, v)
+		return freeTargets(pass, fn, x.X, v)
+	case *ast.CallExpr:
+		return freeConvTarget(pass, fn, e, x, v)
+	case *ast.Ident:
+		return freeTempTarget(pass, fn, x, v)
 	}
 	return false
+}
+
+func freeConvTarget(pass *analysis.Pass, fn ast.Node, e ast.Expr, call *ast.CallExpr, v *types.Var) bool {
+	if len(call.Args) != 1 || !pass.TypesInfo.Types[call.Fun].IsType() {
+		return false
+	}
+	if t := pass.TypesInfo.Types[e].Type; t == nil || t.String() != "unsafe.Pointer" {
+		return false
+	}
+	return freeTargets(pass, fn, call.Args[0], v)
+}
+
+func freeTempTarget(pass *analysis.Pass, scope ast.Node, id *ast.Ident, v *types.Var) bool {
+	tv, ok := pass.TypesInfo.Uses[id].(*types.Var)
+	if !ok || tv == v {
+		return false
+	}
+	def, ok := freeTempDef(pass, scope, tv)
+	if !ok {
+		return false
+	}
+	return freeConvOf(pass, def, v) || exactVar(pass, def, v)
+}
+
+func freeTempDef(pass *analysis.Pass, scope ast.Node, tv *types.Var) (ast.Expr, bool) {
+	var rhs ast.Expr
+	unique := true
+	ast.Inspect(scope, func(n ast.Node) bool {
+		if !unique || freeTempSkip(n, scope) {
+			return false
+		}
+		as, targeted := freeTempTargeted(pass, n, tv)
+		if !targeted {
+			return true
+		}
+		if rhs != nil || !freeTempSingle(as) {
+			unique = false
+			return false
+		}
+		rhs = as.Rhs[0]
+		return true
+	})
+	if !unique || rhs == nil {
+		return nil, false
+	}
+	return rhs, true
+}
+
+func freeTempSkip(n, scope ast.Node) bool {
+	lit, ok := n.(*ast.FuncLit)
+	return ok && lit != scope
+}
+
+func freeTempTargeted(pass *analysis.Pass, n ast.Node, tv *types.Var) (*ast.AssignStmt, bool) {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 {
+		return nil, false
+	}
+	lid, ok := ast.Unparen(as.Lhs[0]).(*ast.Ident)
+	if !ok || freeTempVar(pass, as, lid) != tv {
+		return nil, false
+	}
+	return as, true
+}
+
+func freeTempSingle(as *ast.AssignStmt) bool {
+	return as.Tok == token.DEFINE && len(as.Rhs) == 1
+}
+
+func freeTempVar(pass *analysis.Pass, as *ast.AssignStmt, lid *ast.Ident) *types.Var {
+	if as.Tok == token.DEFINE {
+		if w, ok := pass.TypesInfo.Defs[lid].(*types.Var); ok {
+			return w
+		}
+		return nil
+	}
+	if w, ok := pass.TypesInfo.Uses[lid].(*types.Var); ok {
+		return w
+	}
+	return nil
+}
+
+func freeConvOf(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 || !pass.TypesInfo.Types[call.Fun].IsType() {
+		return false
+	}
+	if t := pass.TypesInfo.Types[e].Type; t == nil || t.String() != "unsafe.Pointer" {
+		return false
+	}
+	return exactVar(pass, call.Args[0], v)
 }
 
 func methodCallsOn(pass *analysis.Pass, n ast.Node, v *types.Var) []*ast.CallExpr {
@@ -169,14 +311,33 @@ func methodCallsOn(pass *analysis.Pass, n ast.Node, v *types.Var) []*ast.CallExp
 	return out
 }
 
+const (
+	closeMethodRead        = "Read"
+	closeMethodWrite       = "Write"
+	closeMethodWriteString = "WriteString"
+)
+
+var closeFailPkgs = map[string]bool{"os": true, "net": true, "net/http": true}
+
 var closeFailMethods = map[string]bool{
-	"Read": true, "ReadAt": true, "Write": true, "WriteAt": true, "WriteString": true,
+	closeMethodRead: true, "ReadAt": true, closeMethodWrite: true, "WriteAt": true, closeMethodWriteString: true,
 	"Seek": true, "Sync": true, "Truncate": true, "Accept": true, "RoundTrip": true,
 	"SetDeadline": true, "SetReadDeadline": true, "SetWriteDeadline": true,
 }
 
-func closeFailsOn(call *ast.CallExpr) bool {
-	return closeFailMethods[callName(call)]
+func closeFailsOn(pass *analysis.Pass, call *ast.CallExpr) bool {
+	if !closeFailMethods[callName(call)] {
+		return false
+	}
+	fn := typeutil.StaticCallee(pass.TypesInfo, call)
+	if fn == nil {
+		return false
+	}
+	pkg := fn.Pkg()
+	if pkg == nil {
+		return false
+	}
+	return closeFailPkgs[pkg.Path()]
 }
 
 func callName(call *ast.CallExpr) string {
@@ -385,7 +546,7 @@ func callArgEscapes(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 			return true
 		}
 		for _, a := range call.Args {
-			if exprMentions(pass, a, v) {
+			if exactVar(pass, a, v) {
 				found = true
 				return false
 			}
@@ -440,7 +601,7 @@ func storeEscapes(pass *analysis.Pass, fn, n ast.Node, v *types.Var) bool {
 		return false
 	}
 	for _, r := range as.Rhs {
-		if exprMentions(pass, r, v) {
+		if exactVar(pass, r, v) {
 			return true
 		}
 	}

@@ -190,3 +190,26 @@ func viewescapeSilentSelfInvalid(b *bufio.Reader) []byte {
 	}
 	return frag
 }
+
+type viewConn struct{ *bufio.Scanner }
+
+func (viewConn) Write(p []byte) (int, error) { return len(p), nil }
+
+func viewescapeSilentForeignInvalidator(c viewConn, out [][]byte) [][]byte {
+	for _, s := range []string{"a"} {
+		_ = s
+		out = append(out, c.Bytes())
+		_, _ = c.Write(nil)
+	}
+	return out
+}
+
+func viewescapeSilentRangeReassign(sc *bufio.Scanner, ch chan []byte, out [][]byte) [][]byte {
+	for sc.Scan() {
+		b := sc.Bytes()
+		for b = range ch {
+		}
+		out = append(out, b)
+	}
+	return out
+}
