@@ -174,11 +174,12 @@ func freeFunc(pass *analysis.Pass, fn ast.Node) {
 	if len(cands) == 0 {
 		return
 	}
+	cache := newFreeTempCache(pass)
 	for _, v := range localsOf(pass, fn) {
 		if !cands[v] {
 			continue
 		}
-		freeVar(pass, fn, g, v)
+		freeVar(pass, fn, g, v, cache)
 	}
 }
 
@@ -365,11 +366,11 @@ func putVar(pass *analysis.Pass, fn ast.Node, g *flow.Graph, v *types.Var) {
 		func(n ast.Node, s ostate) { putVisit(pass, fn, n, v, s) })
 }
 
-func freeVar(pass *analysis.Pass, fn ast.Node, g *flow.Graph, v *types.Var) {
+func freeVar(pass *analysis.Pass, fn ast.Node, g *flow.Graph, v *types.Var, cache *freeTempCache) {
 	flow.Forward(g, stLive,
-		func(n ast.Node, s ostate) ostate { return freeTransfer(pass, fn, n, v, s) },
+		func(n ast.Node, s ostate) ostate { return freeTransfer(pass, fn, n, v, s, cache) },
 		joinState,
-		func(n ast.Node, s ostate) { freeVisit(pass, fn, n, v, s) })
+		func(n ast.Node, s ostate) { freeVisit(pass, fn, n, v, s, cache) })
 }
 
 func closeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) ostate {
@@ -401,8 +402,8 @@ func putTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) os
 	return s
 }
 
-func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) ostate {
-	if hasFreeRelease(pass, fn, n, v) {
+func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate, cache *freeTempCache) ostate {
+	if hasFreeRelease(pass, fn, n, v, cache) {
 		return stReleased
 	}
 	if keepsReleased(pass, n, v) {
@@ -482,7 +483,7 @@ func putVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
 	}
 }
 
-func freeVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
+func freeVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate, cache *freeTempCache) {
 	if s != stReleased {
 		return
 	}
@@ -492,7 +493,7 @@ func freeVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
 	if selfAssign(pass, n, v) {
 		return
 	}
-	if hasFreeRelease(pass, fn, n, v) {
+	if hasFreeRelease(pass, fn, n, v, cache) {
 		pass.Reportf(mentionPos(pass, n, v), "%s is used after it was freed: set it to nil after the free and do not use it again", v.Name())
 		return
 	}

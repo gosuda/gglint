@@ -101,7 +101,7 @@ func hasPutRelease(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 	return exactVar(pass, call.Args[0], v)
 }
 
-func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var) bool {
+func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var, cache *freeTempCache) bool {
 	es, ok := n.(*ast.ExprStmt)
 	if !ok {
 		return false
@@ -110,7 +110,7 @@ func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var) bool {
 	if !ok {
 		return false
 	}
-	if handled, release := freeLitRelease(pass, call, v); handled {
+	if handled, release := freeLitRelease(pass, call, v, cache); handled {
 		return release
 	}
 	fn := typeutil.StaticCallee(pass.TypesInfo, call)
@@ -118,7 +118,7 @@ func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var) bool {
 		return false
 	}
 	if fn.Name() == cFreeFunc {
-		return freeArgsMention(pass, fnode, call, v)
+		return freeArgsMention(pass, fnode, call, v, cache)
 	}
 	pkg := fn.Pkg()
 	if pkg == nil {
@@ -127,34 +127,34 @@ func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var) bool {
 	if fn.Name() != "Munmap" {
 		return false
 	}
-	return freeMunmapByPkg(pass, fnode, pkg, call, v)
+	return freeMunmapByPkg(pass, fnode, pkg, call, v, cache)
 }
 
-func freeMunmapByPkg(pass *analysis.Pass, fnode ast.Node, pkg *types.Package, call *ast.CallExpr, v *types.Var) bool {
+func freeMunmapByPkg(pass *analysis.Pass, fnode ast.Node, pkg *types.Package, call *ast.CallExpr, v *types.Var, cache *freeTempCache) bool {
 	if pkg.Path() != "syscall" && pkg.Path() != "golang.org/x/sys/unix" {
 		return false
 	}
-	return freeArgsMention(pass, fnode, call, v)
+	return freeArgsMention(pass, fnode, call, v, cache)
 }
 
-func freeLitRelease(pass *analysis.Pass, call *ast.CallExpr, v *types.Var) (release, handled bool) {
+func freeLitRelease(pass *analysis.Pass, call *ast.CallExpr, v *types.Var, cache *freeTempCache) (release, handled bool) {
 	lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit)
 	if !ok || len(call.Args) != 0 || lit.Body == nil {
 		return false, false
 	}
-	return litFreeRelease(pass, lit, v), true
+	return litFreeRelease(pass, lit, v, cache), true
 }
 
-func litFreeRelease(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
+func litFreeRelease(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var, cache *freeTempCache) bool {
 	for _, s := range lit.Body.List {
-		if litFreeFound(pass, lit, s, v) {
+		if litFreeFound(pass, lit, s, v, cache) {
 			return true
 		}
 	}
 	return false
 }
 
-func litFreeFound(pass *analysis.Pass, lit *ast.FuncLit, x ast.Node, v *types.Var) bool {
+func litFreeFound(pass *analysis.Pass, lit *ast.FuncLit, x ast.Node, v *types.Var, cache *freeTempCache) bool {
 	es, ok := x.(*ast.ExprStmt)
 	if !ok {
 		return false
@@ -170,17 +170,17 @@ func litFreeFound(pass *analysis.Pass, lit *ast.FuncLit, x ast.Node, v *types.Va
 	if cfn == nil || cfn.Name() != cFreeFunc {
 		return false
 	}
-	return freeArgsMention(pass, lit, call, v)
+	return freeArgsMention(pass, lit, call, v, cache)
 }
 
-func freeArgsMention(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, v *types.Var) bool {
+func freeArgsMention(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, v *types.Var, cache *freeTempCache) bool {
 	if len(call.Args) == 0 {
 		return false
 	}
-	return freeTargets(pass, fn, call.Args[0], v)
+	return freeTargets(pass, fn, call.Args[0], v, cache)
 }
 
-func freeTargets(pass *analysis.Pass, fn ast.Node, e ast.Expr, v *types.Var) bool {
+func freeTargets(pass *analysis.Pass, fn ast.Node, e ast.Expr, v *types.Var, cache *freeTempCache) bool {
 	e = ast.Unparen(e)
 	if exactVar(pass, e, v) {
 		return true
@@ -190,11 +190,11 @@ func freeTargets(pass *analysis.Pass, fn ast.Node, e ast.Expr, v *types.Var) boo
 		if !wholeSlice(pass, x, v) {
 			return false
 		}
-		return freeTargets(pass, fn, x.X, v)
+		return freeTargets(pass, fn, x.X, v, cache)
 	case *ast.CallExpr:
-		return freeConvTarget(pass, fn, e, x, v)
+		return freeConvTarget(pass, fn, e, x, v, cache)
 	case *ast.Ident:
-		return freeTempTarget(pass, fn, x, v)
+		return freeTempTarget(pass, fn, x, v, cache)
 	}
 	return false
 }
@@ -238,99 +238,116 @@ func isLenOf(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
 	return exactVar(pass, call.Args[0], v)
 }
 
-func freeConvTarget(pass *analysis.Pass, fn ast.Node, e ast.Expr, call *ast.CallExpr, v *types.Var) bool {
+func freeConvTarget(pass *analysis.Pass, fn ast.Node, e ast.Expr, call *ast.CallExpr, v *types.Var, cache *freeTempCache) bool {
 	if len(call.Args) != 1 || !pass.TypesInfo.Types[call.Fun].IsType() {
 		return false
 	}
 	if t := pass.TypesInfo.Types[e].Type; t == nil || t.String() != unsafePointerType {
 		return false
 	}
-	return freeTargets(pass, fn, call.Args[0], v)
+	return freeTargets(pass, fn, call.Args[0], v, cache)
 }
 
-func freeTempTarget(pass *analysis.Pass, scope ast.Node, id *ast.Ident, v *types.Var) bool {
+func freeTempTarget(pass *analysis.Pass, scope ast.Node, id *ast.Ident, v *types.Var, cache *freeTempCache) bool {
 	tv, ok := pass.TypesInfo.Uses[id].(*types.Var)
 	if !ok || tv == v {
 		return false
 	}
-	def, ok := freeTempDef(pass, scope, tv)
+	def, ok := cache.forScope(scope)[tv]
 	if !ok {
 		return false
 	}
 	return freeConvOf(pass, def, v) || exactVar(pass, def, v)
 }
 
-func freeTempDef(pass *analysis.Pass, scope ast.Node, tv *types.Var) (ast.Expr, bool) {
-	var rhs ast.Expr
-	unique := true
+type freeTempCache struct {
+	pass    *analysis.Pass
+	byScope map[ast.Node]map[*types.Var]ast.Expr
+}
+
+func newFreeTempCache(pass *analysis.Pass) *freeTempCache {
+	return &freeTempCache{pass: pass, byScope: map[ast.Node]map[*types.Var]ast.Expr{}}
+}
+
+func (c *freeTempCache) forScope(scope ast.Node) map[*types.Var]ast.Expr {
+	if m, ok := c.byScope[scope]; ok {
+		return m
+	}
+	m := buildFreeTempIndex(c.pass, scope)
+	c.byScope[scope] = m
+	return m
+}
+
+func buildFreeTempIndex(pass *analysis.Pass, scope ast.Node) map[*types.Var]ast.Expr {
+	rhsOf := map[*types.Var]ast.Expr{}
+	bad := map[*types.Var]bool{}
 	ast.Inspect(scope, func(n ast.Node) bool {
-		if !unique || freeTempSkip(n, scope) {
+		if freeTempSkip(n, scope) {
 			return false
 		}
-		as, targeted := freeTempTargeted(pass, n, tv)
-		if !targeted {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
 			return true
 		}
-		if rhs != nil || !freeTempSingle(as) {
-			unique = false
-			return false
+		if as.Tok == token.DEFINE && len(as.Rhs) == 1 {
+			recordFreeTempSingle(pass, as, rhsOf, bad)
+		} else {
+			markFreeTempBad(pass, as, rhsOf, bad)
 		}
-		rhs = as.Rhs[0]
 		return true
 	})
-	if !unique || rhs == nil {
-		return nil, false
-	}
-	return rhs, true
+	return rhsOf
 }
 
-func freeTempSkip(n, scope ast.Node) bool {
-	lit, ok := n.(*ast.FuncLit)
-	return ok && lit != scope
-}
-
-func freeTempTargeted(pass *analysis.Pass, n ast.Node, tv *types.Var) (*ast.AssignStmt, bool) {
-	as, ok := n.(*ast.AssignStmt)
-	if !ok {
-		return nil, false
-	}
+func recordFreeTempSingle(pass *analysis.Pass, as *ast.AssignStmt, rhsOf map[*types.Var]ast.Expr, bad map[*types.Var]bool) {
 	for _, lhs := range as.Lhs {
 		lid, ok := ast.Unparen(lhs).(*ast.Ident)
 		if !ok {
 			continue
 		}
-		if tempBinds(pass, as, lid, tv) {
-			return as, true
+		tv := boundTempVar(pass, as, lid)
+		if tv == nil || bad[tv] {
+			continue
 		}
+		if _, seen := rhsOf[tv]; seen {
+			delete(rhsOf, tv)
+			bad[tv] = true
+			continue
+		}
+		rhsOf[tv] = as.Rhs[0]
 	}
-	return nil, false
 }
 
-func tempBinds(pass *analysis.Pass, as *ast.AssignStmt, lid *ast.Ident, tv *types.Var) bool {
-	if v, ok := pass.TypesInfo.Defs[lid].(*types.Var); ok && v == tv {
-		return true
+func markFreeTempBad(pass *analysis.Pass, as *ast.AssignStmt, rhsOf map[*types.Var]ast.Expr, bad map[*types.Var]bool) {
+	for _, lhs := range as.Lhs {
+		lid, ok := ast.Unparen(lhs).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		tv := boundTempVar(pass, as, lid)
+		if tv == nil {
+			continue
+		}
+		delete(rhsOf, tv)
+		bad[tv] = true
 	}
-	if v, ok := pass.TypesInfo.Uses[lid].(*types.Var); ok && v == tv {
-		return true
-	}
-	return freeTempVar(pass, as, lid) == tv
 }
 
-func freeTempSingle(as *ast.AssignStmt) bool {
-	return as.Tok == token.DEFINE && len(as.Rhs) == 1
-}
-
-func freeTempVar(pass *analysis.Pass, as *ast.AssignStmt, lid *ast.Ident) *types.Var {
+func boundTempVar(pass *analysis.Pass, as *ast.AssignStmt, lid *ast.Ident) *types.Var {
 	if as.Tok == token.DEFINE {
 		if w, ok := pass.TypesInfo.Defs[lid].(*types.Var); ok {
 			return w
 		}
-		return nil
 	}
 	if w, ok := pass.TypesInfo.Uses[lid].(*types.Var); ok {
 		return w
 	}
 	return nil
+}
+
+func freeTempSkip(n, scope ast.Node) bool {
+	lit, ok := n.(*ast.FuncLit)
+	return ok && lit != scope
 }
 
 func freeConvOf(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
