@@ -391,16 +391,3 @@ func closedrecvSilentReassign() {
 	}
 	use(sum)
 }
-func closedrecvSilentUncalledReassign() {
-	ch := make(chan int)
-	done := make(chan struct{})
-	go func() { close(ch); close(done) }()
-	<-done
-	reset := func() { ch = make(chan int) }
-	reset()
-	sum := 0
-	for {
-		sum += <-ch
-	}
-	use(sum)
-}

@@ -45,7 +45,7 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt,
 		return
 	}
 	fc := staleFnFor(pass.TypesInfo, fn, cache)
-	if loopHasOutsideJump(fc, loop) {
+	if loopHasOutsideJump(pass.TypesInfo, fc, loop, old) {
 		return
 	}
 	if fc.addrs[old] {
@@ -88,13 +88,24 @@ func noteAddr(info *types.Info, fc *staleFn, t *ast.UnaryExpr) {
 	if t.Op != token.AND {
 		return
 	}
-	id := rootIdent(t.X)
-	if id == nil {
+	id, ok := ast.Unparen(t.X).(*ast.Ident)
+	if !ok {
 		return
 	}
 	if v, ok := info.ObjectOf(id).(*types.Var); ok {
 		fc.addrs[v] = true
 	}
+}
+
+func isOldIdent(info *types.Info, e ast.Expr, old *types.Var) bool {
+	if e == nil {
+		return false
+	}
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return info.ObjectOf(id) == types.Object(old)
 }
 
 func otherLitAssignsOld(info *types.Info, fc *staleFn, loop *ast.ForStmt, old *types.Var) bool {
@@ -128,7 +139,7 @@ func litNodeAssignsOld(info *types.Info, n ast.Node, old *types.Var) bool {
 	case *ast.AssignStmt:
 		return lhsAssignsOld(info, t, old)
 	case *ast.IncDecStmt:
-		return hitRoot(info, t.X, old)
+		return isOldIdent(info, t.X, old)
 	case *ast.RangeStmt:
 		return rangeAssignsOld(info, t, old)
 	default:
@@ -140,13 +151,13 @@ func rangeAssignsOld(info *types.Info, t *ast.RangeStmt, old *types.Var) bool {
 	if t.Tok != token.ASSIGN {
 		return false
 	}
-	return hitRoot(info, t.Key, old) || hitRoot(info, t.Value, old)
+	return isOldIdent(info, t.Key, old) || isOldIdent(info, t.Value, old)
 }
 
 func lhsAssignsOld(info *types.Info, t *ast.AssignStmt, old *types.Var) bool {
 	for _, e := range t.Lhs {
-		id := rootIdent(e)
-		if id == nil {
+		id, ok := ast.Unparen(e).(*ast.Ident)
+		if !ok {
 			continue
 		}
 		if info.ObjectOf(id) != types.Object(old) {
@@ -170,22 +181,41 @@ func assignsOldInLoop(info *types.Info, loop *ast.ForStmt, old *types.Var) bool 
 	return loop.Post != nil && assignsRoot(info, loop.Post, old)
 }
 
-func loopHasOutsideJump(fc *staleFn, loop *ast.ForStmt) bool {
+func loopHasOutsideJump(info *types.Info, fc *staleFn, loop *ast.ForStmt, old *types.Var) bool {
 	if loop.Body == nil {
 		return false
 	}
 	inside := loopLabels(loop.Body)
-	includeLoopLabels(fc, loop, inside)
+	own := ownLoopLabels(fc, loop)
+	for name := range own {
+		inside[name] = true
+	}
 	enclosing := enclosingLabels(fc, loop)
-	return scanLeaves(loop.Body, inside, enclosing)
+	var reloadOwn map[string]bool
+	if initAssignsOld(info, loop, old) {
+		reloadOwn = own
+	}
+	return scanLeaves(loop.Body, inside, enclosing, reloadOwn)
 }
 
-func includeLoopLabels(fc *staleFn, loop *ast.ForStmt, inside map[string]bool) {
+func ownLoopLabels(fc *staleFn, loop *ast.ForStmt) map[string]bool {
+	out := map[string]bool{}
 	for _, lab := range fc.labels {
 		if labelsLoop(lab, loop) {
-			inside[lab.Label.Name] = true
+			out[lab.Label.Name] = true
 		}
 	}
+	return out
+}
+
+func initAssignsOld(info *types.Info, loop *ast.ForStmt, old *types.Var) bool {
+	if loop.Init == nil {
+		return false
+	}
+	if loop.Init.Pos() <= old.Pos() && old.Pos() < loop.Init.End() {
+		return true
+	}
+	return assignsRoot(info, loop.Init, old)
 }
 
 func enclosingLabels(fc *staleFn, loop *ast.ForStmt) map[string]bool {
@@ -201,13 +231,13 @@ func enclosingLabels(fc *staleFn, loop *ast.ForStmt) map[string]bool {
 	return out
 }
 
-func scanLeaves(body ast.Node, inside, enclosing map[string]bool) bool {
+func scanLeaves(body ast.Node, inside, enclosing, reloadOwn map[string]bool) bool {
 	leaves := false
 	walkNoLit(body, func(n ast.Node) bool {
 		if leaves {
 			return false
 		}
-		if branchLeaves(n, inside, enclosing) {
+		if branchLeaves(n, inside, enclosing, reloadOwn) {
 			leaves = true
 		}
 		return !leaves
@@ -215,13 +245,19 @@ func scanLeaves(body ast.Node, inside, enclosing map[string]bool) bool {
 	return leaves
 }
 
-func branchLeaves(n ast.Node, inside, enclosing map[string]bool) bool {
+func branchLeaves(n ast.Node, inside, enclosing, reloadOwn map[string]bool) bool {
 	b, ok := n.(*ast.BranchStmt)
 	if !ok {
 		return false
 	}
 	if b.Tok == token.GOTO {
-		return b.Label != nil && !inside[b.Label.Name]
+		if b.Label == nil {
+			return false
+		}
+		if reloadOwn != nil && reloadOwn[b.Label.Name] {
+			return true
+		}
+		return !inside[b.Label.Name]
 	}
 	if b.Tok == token.BREAK || b.Tok == token.CONTINUE {
 		return b.Label != nil && enclosing[b.Label.Name]

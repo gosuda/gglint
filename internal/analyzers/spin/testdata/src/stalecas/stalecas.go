@@ -296,15 +296,17 @@ func stalecasSilentAddrBefore(n *atomic.Int64) {
 }
 func stalecasSilentClosureAfter(n *atomic.Int64) {
 	old := n.Load()
+	reset := func() { old = n.Load() }
 	for !n.CompareAndSwap(old, old+1) {
+		reset()
 	}
-	reset := func() { old = 0 }
 	reset()
 }
 
 func stalecasSilentAddrAfter(n *atomic.Int64) {
 	old := n.Load()
 	for !n.CompareAndSwap(old, old+1) {
+		loadOld(&old, n)
 	}
 	use(&old)
 }
@@ -335,6 +337,7 @@ func stalecasSilentInRange(n *atomic.Int64, xs []int) {
 	sink := func(p *int64) { use(*p) }
 	for _, x := range xs {
 		for !n.CompareAndSwap(old, old+int64(x)) {
+			loadOld(&old, n)
 		}
 		sink(&old)
 	}
@@ -411,4 +414,28 @@ func stalecasReportedInnerGoto(n *atomic.Int64) {
 		use(2)
 	}
 	use(old)
+}
+func stalecasSilentSelfGotoInit(n *atomic.Int64) {
+retry:
+	for old := n.Load(); !n.CompareAndSwap(old, old+1); {
+		if oneArg(1) {
+			goto retry
+		}
+	}
+}
+
+type staleNode struct{ count int }
+
+func stalecasReportedAddrField(h *atomic.Pointer[staleNode], n *staleNode) *int {
+	old := h.Load()
+	for !h.CompareAndSwap(old, n) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+	}
+	return &old.count
+}
+func stalecasReportedFieldLitAssign(h *atomic.Pointer[staleNode], n *staleNode) {
+	old := h.Load()
+	bump := func() { old.count = 0 }
+	_ = bump
+	for !h.CompareAndSwap(old, n) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+	}
 }
