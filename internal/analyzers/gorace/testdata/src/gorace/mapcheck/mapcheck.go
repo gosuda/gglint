@@ -56,6 +56,17 @@ func mapOtherReported() {
 	_ = mu
 }
 
+func mapKeepRefSilent(m map[int]int) {
+	go func() {
+		m[1] = 1
+	}()
+	go func() {
+		keepMap(m)
+	}()
+}
+
+func keepMap(m map[int]int) {}
+
 func mapDeleteReported() {
 	m := map[int]int{1: 1}
 	for i := range 8 {
@@ -265,4 +276,12 @@ func mapClearReported() {
 		clear(m)
 	}()
 	_ = m[1]
+}
+
+type recPtr *recPtr
+
+func recPtrUser(p recPtr) {}
+
+func mapRecPtrSilent(p recPtr) {
+	recPtrUser(p)
 }

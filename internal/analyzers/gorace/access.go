@@ -565,7 +565,7 @@ func (m *mapScope) otherLitConflicts(s flow.Spawn, a varAccess, o flow.Spawn) bo
 		lit = collectLit(m.pass.TypesInfo, o.Body)
 	}
 	for _, b := range lit {
-		if b.key == a.key && !commonKey(m.litHeld(s.Body, a.stmt), m.litHeld(o.Body, b.stmt)) {
+		if b.key == a.key && mapOpAccess(b) && !commonKey(m.litHeld(s.Body, a.stmt), m.litHeld(o.Body, b.stmt)) {
 			return true
 		}
 	}

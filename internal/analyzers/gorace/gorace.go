@@ -69,7 +69,15 @@ func keyText(pass *analysis.Pass, k flow.Key) string {
 }
 
 func deref(t types.Type) types.Type {
+	if t == nil {
+		return nil
+	}
+	seen := map[types.Type]bool{}
 	for {
+		if seen[t] {
+			return t
+		}
+		seen[t] = true
 		p, ok := t.Underlying().(*types.Pointer)
 		if !ok {
 			return t
@@ -287,11 +295,18 @@ func bodyContains(body *ast.BlockStmt, pos token.Pos) bool {
 }
 
 func exitsListAfter(fn, site ast.Node) bool {
-	return slices.ContainsFunc(stmtListAfter(fn, site), isLoopExit)
+	list, owner := stmtListAfter(fn, site)
+	switch owner.(type) {
+	case *ast.CaseClause, *ast.CommClause:
+		return slices.ContainsFunc(list, isReturnStmt)
+	default:
+		return slices.ContainsFunc(list, isLoopExit)
+	}
 }
 
-func stmtListAfter(fn, site ast.Node) []ast.Stmt {
+func stmtListAfter(fn, site ast.Node) ([]ast.Stmt, ast.Node) {
 	var out []ast.Stmt
+	var owner ast.Node
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if out != nil {
 			return false
@@ -300,12 +315,13 @@ func stmtListAfter(fn, site ast.Node) []ast.Stmt {
 		for i, stmt := range list {
 			if stmt == site {
 				out = list[i+1:]
+				owner = n
 				return false
 			}
 		}
 		return true
 	})
-	return out
+	return out, owner
 }
 
 func stmtListOf(n ast.Node) []ast.Stmt {
@@ -328,6 +344,11 @@ func isLoopExit(stmt ast.Stmt) bool {
 		return true
 	}
 	return false
+}
+
+func isReturnStmt(stmt ast.Stmt) bool {
+	_, ok := stmt.(*ast.ReturnStmt)
+	return ok
 }
 
 func bodyParks(fn ast.Node) bool {

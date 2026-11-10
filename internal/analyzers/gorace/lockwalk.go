@@ -26,6 +26,7 @@ const (
 
 type holder struct {
 	keys map[flow.Key]map[ast.Node]bool
+	held func(ast.Node) []flow.Key
 }
 
 func newHolder(pass *analysis.Pass, fn ast.Node) *holder {
@@ -37,6 +38,7 @@ func newHolder(pass *analysis.Pass, fn ast.Node) *holder {
 	if g == nil {
 		return h
 	}
+	h.held = flow.HeldAt(pass, g)
 	deferOps := deferStmts(fn)
 	for _, k := range lockerKeys(pass.TypesInfo, fn) {
 		seen := map[ast.Node]bool{}
@@ -54,13 +56,110 @@ func newHolder(pass *analysis.Pass, fn ast.Node) *holder {
 }
 
 func (h *holder) at(n ast.Node) []flow.Key {
+	seen := map[flow.Key]bool{}
 	var out []flow.Key
-	for k, seen := range h.keys {
-		if seen[n] {
-			out = append(out, k)
+	resolved := resolveStmt(n)
+	for k, nodes := range h.keys {
+		if nodes[n] || nodes[resolved] {
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
+		}
+	}
+	if h.held != nil {
+		for _, k := range h.held(n) {
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
 		}
 	}
 	return out
+}
+
+func resolveStmt(n ast.Node) ast.Node {
+	switch s := n.(type) {
+	case *ast.IfStmt:
+		return resolveIf(s)
+	case *ast.ForStmt:
+		return resolveFor(s)
+	case *ast.RangeStmt:
+		return s.X
+	case *ast.SwitchStmt:
+		return resolveSwitch(s)
+	case *ast.TypeSwitchStmt:
+		return resolveTypeSwitch(s)
+	case *ast.DeclStmt:
+		return declSpec(s)
+	default:
+		return resolveClause(n)
+	}
+}
+
+func resolveIf(s *ast.IfStmt) ast.Node {
+	if s.Init != nil {
+		return resolveStmt(s.Init)
+	}
+	return s.Cond
+}
+
+func resolveFor(s *ast.ForStmt) ast.Node {
+	if s.Init != nil {
+		return resolveStmt(s.Init)
+	}
+	if s.Cond != nil {
+		return s.Cond
+	}
+	return nil
+}
+
+func resolveSwitch(s *ast.SwitchStmt) ast.Node {
+	if s.Init != nil {
+		return resolveStmt(s.Init)
+	}
+	if s.Tag != nil {
+		return s.Tag
+	}
+	return nil
+}
+
+func resolveTypeSwitch(s *ast.TypeSwitchStmt) ast.Node {
+	if s.Init != nil {
+		return resolveStmt(s.Init)
+	}
+	return s.Assign
+}
+
+func resolveClause(n ast.Node) ast.Node {
+	switch s := n.(type) {
+	case *ast.CaseClause:
+		if len(s.List) > 0 {
+			return s.List[0]
+		}
+		return nil
+	case *ast.CommClause:
+		if s.Comm != nil {
+			return s.Comm
+		}
+		return nil
+	case *ast.LabeledStmt:
+		return resolveStmt(s.Stmt)
+	}
+	return n
+}
+
+func declSpec(s *ast.DeclStmt) ast.Node {
+	d, ok := s.Decl.(*ast.GenDecl)
+	if !ok {
+		return nil
+	}
+	for _, spec := range d.Specs {
+		if vs, ok := spec.(*ast.ValueSpec); ok {
+			return vs
+		}
+	}
+	return nil
 }
 
 func joinLockState(a, b lockState) lockState {

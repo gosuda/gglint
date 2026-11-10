@@ -183,3 +183,32 @@ func fanoutDeleteClearSilent() {
 	}
 	_ = m
 }
+
+var fanoutRangeMu sync.Mutex
+
+func fanoutRangeGuardedSilent(xs []int) {
+	var v int
+	for range 3 {
+		go func() {
+			fanoutRangeMu.Lock()
+			for _, v = range xs {
+			}
+			fanoutRangeMu.Unlock()
+		}()
+	}
+	_ = v
+}
+
+func fanoutSwitchBreakReported(xs []int) {
+	var out int
+	for _, x := range xs {
+		switch {
+		case x > 0:
+			go func() {
+				out = x // want `out is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+			}()
+			break
+		}
+	}
+	_ = out
+}

@@ -225,3 +225,18 @@ func sharedIndexReadReported(m map[int]int) {
 	}()
 	k = 1
 }
+
+func sharedIfGuardedSilent() {
+	var mu sync.Mutex
+	n := 0
+	go func() {
+		mu.Lock()
+		if n > 0 {
+			println("pos")
+		}
+		mu.Unlock()
+	}()
+	mu.Lock()
+	n = 2
+	mu.Unlock()
+}
