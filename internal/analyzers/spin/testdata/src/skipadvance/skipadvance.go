@@ -1,6 +1,9 @@
 package skipadvance
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 var xs = []int{1, 2, 3}
 
@@ -189,4 +192,20 @@ func skipadvanceReportedSleep() {
 		}
 		i++
 	}
+}
+
+func skipadvanceSilentCursorAdvance(words []string, n int) (out []int) {
+	for len(out) < n {
+		if len(words) == 0 {
+			return out
+		}
+		w := words[0]
+		words = words[1:]
+		v, err := strconv.Atoi(w)
+		if err != nil {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }

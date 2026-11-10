@@ -323,3 +323,17 @@ func stalecasSilentAddrBefore(n *atomic.Int64) {
 	}
 	use(old)
 }
+func stalecasReportedClosureAfter(n *atomic.Int64) {
+	old := n.Load()
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	}
+	reset := func() { old = 0 }
+	reset()
+}
+
+func stalecasReportedAddrAfter(n *atomic.Int64) {
+	old := n.Load()
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	}
+	use(&old)
+}

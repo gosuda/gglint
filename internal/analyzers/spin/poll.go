@@ -29,7 +29,7 @@ func checkPoll(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 	if !ok {
 		return
 	}
-	if loop.Cond != nil {
+	if isCounted(loop) {
 		return
 	}
 	if defaultSpins(pass, def) {
@@ -42,6 +42,10 @@ func checkPoll(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it")
+}
+
+func isCounted(loop *ast.ForStmt) bool {
+	return loop.Init != nil && loop.Cond != nil && loop.Post != nil
 }
 
 func defaultExits(pass *analysis.Pass, cur inspector.Cursor, def *ast.CommClause) bool {

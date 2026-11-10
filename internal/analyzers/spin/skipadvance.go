@@ -35,7 +35,8 @@ func checkSkipadvance(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForSt
 		if !ok || !errorCompared(pass.TypesInfo, check.Cond) {
 			continue
 		}
-		checkContinues(pass, loop.Body.List, j, check, vars, label)
+		site := continueSite{loop: loop, list: loop.Body.List, check: check, vars: vars, at: j, errs: condVars(pass.TypesInfo, check.Cond)}
+		checkContinues(pass, site, label)
 	}
 }
 
@@ -59,23 +60,114 @@ func condVars(info *types.Info, cond ast.Expr) map[*types.Var]bool {
 	return vars
 }
 
-func checkContinues(pass *analysis.Pass, list []ast.Stmt, j int, check *ast.IfStmt, vars map[*types.Var]bool, label string) {
+type continueSite struct {
+	loop  *ast.ForStmt
+	list  []ast.Stmt
+	check *ast.IfStmt
+	vars  map[*types.Var]bool
+	at    int
+	errs  map[*types.Var]bool
+}
+
+func checkContinues(pass *analysis.Pass, site continueSite, label string) {
+	for k, inner := range site.check.Body.List {
+		reportContinue(pass, site, label, k, inner)
+	}
+}
+
+func reportContinue(pass *analysis.Pass, site continueSite, label string, k int, inner ast.Stmt) {
+	branch, ok := inner.(*ast.BranchStmt)
+	if !ok || branch.Tok != token.CONTINUE {
+		return
+	}
+	if branch.Label != nil && (label == "" || branch.Label.Name != label) {
+		return
+	}
 	info := pass.TypesInfo
-	for k, inner := range check.Body.List {
-		branch, ok := inner.(*ast.BranchStmt)
-		if !ok || branch.Tok != token.CONTINUE {
-			continue
-		}
-		if branch.Label != nil && (label == "" || branch.Label.Name != label) {
-			continue
-		}
-		if advancedBefore(info, list, j, check, k, vars) {
-			continue
-		}
-		if advancedAfter(info, list, j, vars) {
-			pass.Reportf(branch.Pos(), "this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue")
+	if advancedBefore(info, site.list, site.at, site.check, k, site.vars) {
+		return
+	}
+	if outerAdvanced(info, site, k) {
+		return
+	}
+	if advancedAfter(info, site.list, site.at, site.vars) {
+		pass.Reportf(branch.Pos(), "this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue")
+	}
+}
+
+func outerAdvanced(info *types.Info, site continueSite, k int) bool {
+	for _, stmt := range site.list[:site.at] {
+		if assignsOuter(info, site.loop, stmt, site.errs) {
+			return true
 		}
 	}
+	if site.check.Init != nil && assignsOuter(info, site.loop, site.check.Init, site.errs) {
+		return true
+	}
+	for _, stmt := range site.check.Body.List[:k] {
+		if assignsOuter(info, site.loop, stmt, site.errs) {
+			return true
+		}
+	}
+	return false
+}
+
+func assignsOuter(info *types.Info, loop *ast.ForStmt, node ast.Node, errs map[*types.Var]bool) bool {
+	hit := false
+	walkNoLit(node, func(n ast.Node) bool {
+		if assignsOuterNode(info, loop, n, errs) {
+			hit = true
+		}
+		return !hit
+	})
+	return hit
+}
+
+func assignsOuterNode(info *types.Info, loop *ast.ForStmt, n ast.Node, errs map[*types.Var]bool) bool {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		return lhsHasOuter(info, loop, t.Lhs, errs)
+	case *ast.IncDecStmt:
+		return isOuterVar(info, loop, t.X, errs)
+	case *ast.RangeStmt:
+		return rangeAssignsOuter(info, loop, t, errs)
+	default:
+		return false
+	}
+}
+
+func lhsHasOuter(info *types.Info, loop *ast.ForStmt, lhs []ast.Expr, errs map[*types.Var]bool) bool {
+	for _, e := range lhs {
+		if isOuterVar(info, loop, e, errs) {
+			return true
+		}
+	}
+	return false
+}
+
+func rangeAssignsOuter(info *types.Info, loop *ast.ForStmt, t *ast.RangeStmt, errs map[*types.Var]bool) bool {
+	if t.Tok != token.ASSIGN {
+		return false
+	}
+	return isOuterVar(info, loop, t.Key, errs) || isOuterVar(info, loop, t.Value, errs)
+}
+
+func isOuterVar(info *types.Info, loop *ast.ForStmt, e ast.Expr, errs map[*types.Var]bool) bool {
+	if e == nil {
+		return false
+	}
+	id := rootIdent(e)
+	if id == nil {
+		return false
+	}
+	v, ok := info.ObjectOf(id).(*types.Var)
+	if !ok || errs[v] {
+		return false
+	}
+	if v.Parent() == nil {
+		return true
+	}
+	return v.Pos() < loop.Pos() || v.Pos() >= loop.End()
 }
 
 func errorCompared(info *types.Info, cond ast.Expr) bool {

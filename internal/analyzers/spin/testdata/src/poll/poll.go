@@ -2,6 +2,7 @@ package poll
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 )
 
@@ -281,4 +282,16 @@ func pollReportedInitPost(ch chan int) int {
 			n += i
 		}
 	}
+}
+func pollReportedCond(ch chan int, stop *atomic.Bool) {
+	n := 0
+	for !stop.Load() { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			n++
+		}
+	}
+	use(n)
 }

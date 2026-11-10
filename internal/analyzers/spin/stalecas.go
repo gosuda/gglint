@@ -40,10 +40,44 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 	if loop.Post != nil && assignsRoot(pass.TypesInfo, loop.Post, old) {
 		return
 	}
-	if staleUnknown(pass.TypesInfo, fn, old) {
+	if staleUnknown(pass.TypesInfo, staleScope{fn: fn, loop: loop, outer: outerLoop(cur, loop, fn)}, old) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "after one failed swap %s is stale, so every retry fails: load it again inside the loop", old.Name())
+}
+
+type staleScope struct {
+	fn    ast.Node
+	loop  *ast.ForStmt
+	outer *ast.ForStmt
+}
+
+func outerLoop(cur inspector.Cursor, loop *ast.ForStmt, fn ast.Node) *ast.ForStmt {
+	if fn == nil {
+		return nil
+	}
+	for c := range cur.Enclosing((*ast.ForStmt)(nil)) {
+		node, ok := c.Node().(*ast.ForStmt)
+		if !ok || node == loop {
+			continue
+		}
+		if node.Pos() < fn.Pos() || node.End() > fn.End() {
+			continue
+		}
+		return node
+	}
+	return nil
+}
+
+func inStaleScope(n ast.Node, scope staleScope) bool {
+	if n.Pos() < scope.loop.End() {
+		return true
+	}
+	return scope.outer != nil && withinOuter(n, scope.outer)
+}
+
+func withinOuter(n ast.Node, outer *ast.ForStmt) bool {
+	return outer.Body != nil && outer.Body.Pos() <= n.Pos() && n.Pos() < outer.Body.End()
 }
 
 func staleShape(pass *analysis.Pass, loop *ast.ForStmt) (*types.Var, bool) {
@@ -249,16 +283,16 @@ func hitRoot(info *types.Info, e ast.Expr, v *types.Var) bool {
 	return info.ObjectOf(id) == types.Object(v)
 }
 
-func staleUnknown(info *types.Info, fn ast.Node, old *types.Var) bool {
-	if fn == nil {
+func staleUnknown(info *types.Info, scope staleScope, old *types.Var) bool {
+	if scope.fn == nil {
 		return false
 	}
-	return capturedByLit(info, fn, old) || addrTaken(info, fn, old)
+	return capturedInScope(info, scope, old) || addrInScope(info, scope, old)
 }
 
-func capturedByLit(info *types.Info, n ast.Node, v *types.Var) bool {
+func capturedInScope(info *types.Info, scope staleScope, v *types.Var) bool {
 	hit := false
-	ast.Inspect(n, func(x ast.Node) bool {
+	ast.Inspect(scope.fn, func(x ast.Node) bool {
 		if hit {
 			return false
 		}
@@ -266,9 +300,35 @@ func capturedByLit(info *types.Info, n ast.Node, v *types.Var) bool {
 		if !ok {
 			return true
 		}
-		return !litMentions(info, lit, v, &hit)
+		if inStaleScope(lit, scope) && litMentions(info, lit, v, &hit) {
+			return false
+		}
+		return !hit
 	})
 	return hit
+}
+
+func addrInScope(info *types.Info, scope staleScope, v *types.Var) bool {
+	hit := false
+	ast.Inspect(scope.fn, func(x ast.Node) bool {
+		if hit {
+			return false
+		}
+		u, ok := x.(*ast.UnaryExpr)
+		if !ok || u.Op != token.AND {
+			return true
+		}
+		if inStaleScope(u, scope) && addrHits(info, u, v) {
+			hit = true
+		}
+		return !hit
+	})
+	return hit
+}
+
+func addrHits(info *types.Info, u *ast.UnaryExpr, v *types.Var) bool {
+	id := rootIdent(u.X)
+	return id != nil && info.ObjectOf(id) == types.Object(v)
 }
 
 func litMentions(info *types.Info, lit *ast.FuncLit, v *types.Var, hit *bool) bool {
@@ -282,23 +342,4 @@ func litMentions(info *types.Info, lit *ast.FuncLit, v *types.Var, hit *bool) bo
 		return !*hit
 	})
 	return *hit
-}
-
-func addrTaken(info *types.Info, n ast.Node, v *types.Var) bool {
-	hit := false
-	ast.Inspect(n, func(x ast.Node) bool {
-		if hit {
-			return false
-		}
-		u, ok := x.(*ast.UnaryExpr)
-		if !ok || u.Op != token.AND {
-			return true
-		}
-		id := rootIdent(u.X)
-		if id != nil && info.ObjectOf(id) == types.Object(v) {
-			hit = true
-		}
-		return !hit
-	})
-	return hit
 }
