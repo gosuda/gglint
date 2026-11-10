@@ -42,7 +42,7 @@ func checkOneValueSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, h
 		return
 	}
 	callee := types.ExprString(call.Fun)
-	pass.Reportf(call.Pos(), "%s is used after the error of %s is dropped, and it is nil when the call fails: check the error, or test %s for nil first", vname, callee, vname)
+	pass.Reportf(call.Pos(), "%s is used after the error of %s is dropped, and it may be nil when the call fails: check the error before using %s", vname, callee, vname)
 	reported[call.Pos()] = true
 }
 

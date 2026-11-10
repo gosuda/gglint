@@ -45,7 +45,7 @@ func checkOneOutSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, has
 		return
 	}
 	callee := types.ExprString(call.Fun)
-	pass.Reportf(call.Pos(), "%s is read after the error of %s is dropped, and it keeps its zero value when the call fails: check the error, or write _ = %s(...) to state that the zero value is intended", xname, callee, callee)
+	pass.Reportf(call.Pos(), "%s is read after the error of %s is dropped, and it may hold partial results when the call fails: check the error, or write _ = %s(...) to state that partial results are intended", xname, callee, callee)
 	reported[call.Pos()] = true
 }
 
@@ -268,7 +268,67 @@ func sinkArgExempt(pass *analysis.Pass, idx int, call *ast.CallExpr, arg ast.Exp
 	if !ok || !isInterfaceType(pt) {
 		return false
 	}
-	return writeHasFact(pass, sinkDestType(pass, arg, x), set)
+	dst := sinkDestType(pass, arg, x)
+	if sinkWantsWrite(pt) {
+		if writeHasFact(pass, dst, set) {
+			return true
+		}
+	}
+	if sinkWantsWriteString(pt) {
+		if writeStringHasFact(pass, dst, set) {
+			return true
+		}
+	}
+	return false
+}
+
+func sinkWantsWrite(pt types.Type) bool {
+	obj, _, _ := types.LookupFieldOrMethod(pt, false, nil, "Write")
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	return writerSigShape(sig)
+}
+
+func sinkWantsWriteString(pt types.Type) bool {
+	sig := writeStringSig(pt)
+	if sig == nil {
+		return false
+	}
+	return writeStringParams(sig) && writeStringResults(sig)
+}
+
+func writeStringSig(pt types.Type) *types.Signature {
+	obj, _, _ := types.LookupFieldOrMethod(pt, false, nil, "WriteString")
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return nil
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return nil
+	}
+	return sig
+}
+
+func writeStringParams(sig *types.Signature) bool {
+	if sig.Params() == nil || sig.Params().Len() != 1 {
+		return false
+	}
+	s, ok := types.Unalias(sig.Params().At(0).Type()).(*types.Basic)
+	return ok && s.Kind() == types.String
+}
+
+func writeStringResults(sig *types.Signature) bool {
+	if sig.Results() == nil || sig.Results().Len() != 2 {
+		return false
+	}
+	return types.Identical(sig.Results().At(0).Type(), types.Typ[types.Int]) && isError(sig.Results().At(1).Type())
 }
 
 func sinkSignatureFor(pass *analysis.Pass, call *ast.CallExpr) (*types.Signature, bool) {

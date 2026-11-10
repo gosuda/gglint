@@ -56,29 +56,7 @@ func isHashWrite(pass *analysis.Pass, hash *types.Interface, call *ast.CallExpr)
 	if hash != nil && implementsHash(recv, hash) {
 		return true
 	}
-	if isSingleWriteIface(recv) {
-		return true
-	}
 	return hashShape(pass, recv)
-}
-
-func isSingleWriteIface(recv types.Type) bool {
-	named, ok := types.Unalias(recv).(*types.Named)
-	if !ok || ast.IsExported(named.Obj().Name()) {
-		return false
-	}
-	iface, ok := named.Underlying().(*types.Interface)
-	if !ok || iface.NumMethods() != 1 {
-		return false
-	}
-	if iface.Method(0).Name() != writeMethodName {
-		return false
-	}
-	sig, ok := iface.Method(0).Type().(*types.Signature)
-	if !ok {
-		return false
-	}
-	return writerSigShape(sig)
 }
 
 func implementsHash(recv types.Type, hash *types.Interface) bool {
@@ -191,11 +169,10 @@ func firstArgHasWriteFact(pass *analysis.Pass, info *types.Info, call *ast.CallE
 }
 
 func isBenignCopy(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
-	switch fn.FullName() {
-	case "io.Copy", "io.CopyN":
-		return copyNeverFails(pass, info, call, set, hash)
+	if fn.FullName() != "io.Copy" {
+		return false
 	}
-	return false
+	return copyNeverFails(pass, info, call, set, hash)
 }
 
 func copyNeverFails(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
@@ -242,6 +219,23 @@ func writeHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) b
 	if _, isPtr := t.Underlying().(*types.Pointer); !isPtr {
 		ptr := types.NewPointer(t)
 		if obj, _, _ := types.LookupFieldOrMethod(ptr, true, pass.Pkg, "Write"); obj != nil {
+			if fn, ok := obj.(*types.Func); ok && hasFact(pass, originOf(fn), set) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func writeStringHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) bool {
+	if obj, _, _ := types.LookupFieldOrMethod(t, true, pass.Pkg, "WriteString"); obj != nil {
+		if fn, ok := obj.(*types.Func); ok && hasFact(pass, originOf(fn), set) {
+			return true
+		}
+	}
+	if _, isPtr := t.Underlying().(*types.Pointer); !isPtr {
+		ptr := types.NewPointer(t)
+		if obj, _, _ := types.LookupFieldOrMethod(ptr, true, pass.Pkg, "WriteString"); obj != nil {
 			if fn, ok := obj.(*types.Func); ok && hasFact(pass, originOf(fn), set) {
 				return true
 			}

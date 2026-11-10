@@ -80,7 +80,7 @@ func verdictPairCall(pass *analysis.Pass, fn inspector.Cursor, p verdictPair, f 
 }
 
 func verdictSuppressed(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, f facts, hash *types.Interface, reported map[token.Pos]bool) bool {
-	if isCloseMethod(pass.TypesInfo, call) || forwardsClose(pass, call) {
+	if isCloseMethod(pass.TypesInfo, call) {
 		return true
 	}
 	if !dropsError(pass.TypesInfo, call) {
@@ -260,76 +260,6 @@ func isCloseMethod(info *types.Info, call *ast.CallExpr) bool {
 		}
 	}
 	return true
-}
-
-func guardsOnly(pass *analysis.Pass, list []ast.Stmt) bool {
-	for _, stmt := range list {
-		cond, ok := guardReturnNil(pass, stmt)
-		if !ok || hasCall(cond) {
-			return false
-		}
-	}
-	return true
-}
-
-func guardReturnNil(pass *analysis.Pass, stmt ast.Stmt) (ast.Expr, bool) {
-	branch, ok := stmt.(*ast.IfStmt)
-	if !ok || branch.Else != nil || branch.Init != nil {
-		return nil, false
-	}
-	if len(branch.Body.List) != 1 {
-		return nil, false
-	}
-	ret, ok := branch.Body.List[0].(*ast.ReturnStmt)
-	if !ok || len(ret.Results) != 1 || !isNilIdent(pass.TypesInfo, ret.Results[0]) {
-		return nil, false
-	}
-	return branch.Cond, true
-}
-
-func forwardsClose(pass *analysis.Pass, call *ast.CallExpr) bool {
-	fd := calleeDecl(pass, call)
-	if fd == nil {
-		return false
-	}
-	list := fd.Body.List
-	if len(list) == 0 || !closeTail(pass, list[len(list)-1]) {
-		return false
-	}
-	return guardsOnly(pass, list[:len(list)-1])
-}
-
-func closeTail(pass *analysis.Pass, stmt ast.Stmt) bool {
-	ret, ok := stmt.(*ast.ReturnStmt)
-	if !ok || len(ret.Results) != 1 {
-		return false
-	}
-	call := callOf(ast.Unparen(ret.Results[0]))
-	if call == nil || !isRealCall(pass.TypesInfo, call) {
-		return false
-	}
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != closeMethodName {
-		return false
-	}
-	if id, ok := ast.Unparen(sel.X).(*ast.Ident); ok {
-		if _, ok := pass.TypesInfo.ObjectOf(id).(*types.PkgName); ok {
-			return false
-		}
-	}
-	return true
-}
-
-func hasCall(n ast.Node) bool {
-	found := false
-	ast.Inspect(n, func(n ast.Node) bool {
-		if _, ok := n.(*ast.CallExpr); ok {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
 }
 
 func discardAfterPeek(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) bool {

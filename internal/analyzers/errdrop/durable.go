@@ -45,7 +45,7 @@ func checkOneDurableSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts,
 	if !durableHolds(pass, fn, xobj) {
 		return
 	}
-	pass.Reportf(call.Pos(), "%s is written in this function and the error of %s.Close is dropped, so a failed Close loses data: return or check the Close error", xname, xname)
+	pass.Reportf(call.Pos(), "%s is opened for writing in this function and the error of %s.Close is dropped, so a failed Close can lose written data: return or check the Close error", xname, xname)
 	reported[call.Pos()] = true
 }
 

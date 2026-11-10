@@ -58,14 +58,7 @@ func stickyStoredField(pass *analysis.Pass, fd *ast.FuncDecl, obj *types.Func) (
 	if recv == nil || !stickyErrorResult(obj) {
 		return "", false
 	}
-	field, ok := stickyReturnField(pass, fd, recv)
-	if !ok {
-		return "", false
-	}
-	if !assignsRecvField(pass, fd.Body, recv, field) {
-		return "", false
-	}
-	return field, true
+	return stickyReturnField(pass, fd, recv)
 }
 
 func stickyReturnField(pass *analysis.Pass, fd *ast.FuncDecl, recv *types.Var) (string, bool) {
@@ -125,50 +118,6 @@ func returnIsRecvField(info *types.Info, e ast.Expr, recv *types.Var, field *str
 	return *field == sel.Sel.Name
 }
 
-func assignsRecvField(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var, field string) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if _, isLit := n.(*ast.FuncLit); isLit {
-			return false
-		}
-		if as, ok := n.(*ast.AssignStmt); ok {
-			if assignsToField(pass, as, recv, field) {
-				found = true
-				return false
-			}
-			return true
-		}
-		if call, ok := n.(*ast.CallExpr); ok && isRecvCall(pass, call, recv) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func assignsToField(pass *analysis.Pass, as *ast.AssignStmt, recv *types.Var, field string) bool {
-	for _, lhs := range as.Lhs {
-		sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != field {
-			continue
-		}
-		if id, ok := ast.Unparen(sel.X).(*ast.Ident); ok && pass.TypesInfo.Uses[id] == recv {
-			return true
-		}
-	}
-	return false
-}
-
-func isRecvCall(pass *analysis.Pass, call *ast.CallExpr, recv *types.Var) bool {
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	id, ok := ast.Unparen(sel.X).(*ast.Ident)
-	return ok && pass.TypesInfo.Uses[id] == recv
-}
-
 func hasFieldGetter(pass *analysis.Pass, decls []*ast.FuncDecl, objs []*types.Func, self *types.Func, field string) bool {
 	base := recvBaseName(self)
 	if base == nil {
@@ -178,7 +127,7 @@ func hasFieldGetter(pass *analysis.Pass, decls []*ast.FuncDecl, objs []*types.Fu
 		if originOf(objs[i]) == self {
 			continue
 		}
-		if recvBaseName(objs[i]) != base {
+		if recvBaseName(objs[i]) == nil || recvBaseName(objs[i]).Origin() != base.Origin() {
 			continue
 		}
 		if methodReturnsField(pass, fd, objs[i], field) {

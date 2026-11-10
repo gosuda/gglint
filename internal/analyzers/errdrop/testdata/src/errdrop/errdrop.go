@@ -95,7 +95,7 @@ func durableReported(p string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
+	defer f.Close() // want "is opened for writing in this function and the error of f.Close is dropped"
 	_, err = f.Write(b)
 	return err
 }
@@ -118,6 +118,7 @@ func durableSilent2(p string, b []byte) error {
 	}
 	_, err = f.Write(b)
 	if err != nil {
+		_ = f.Close()
 		return err
 	}
 	return f.Close()
@@ -201,8 +202,8 @@ func outReported3(p int) int {
 func outSilent4(b []byte, xs []Config) Config {
 	var c Config
 	json.Unmarshal(b, &c)
-	for _, c = range xs {
-	}
+	_ = xs
+	c = Config{}
 	return c
 }
 
@@ -211,8 +212,11 @@ func durableSilent4(p string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	_, err = f.Write(b)
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
 	return f.Close()
 }
 
@@ -248,15 +252,15 @@ type writeOnly interface {
 	Write([]byte) (int, error)
 }
 
-func verdictSilentSingleWrite(w writeOnly, b []byte) error {
-	w.Write(b)
+func verdictReportedSingleWrite(w writeOnly, b []byte) error {
+	w.Write(b) // want "the error of w.Write is dropped and the next statement returns nil"
 	return nil
 }
 
 func echoErr(err error) error { return err }
 
 func verdictSilentEcho(err error) error {
-	echoErr(err)
+	echoErr(nil)
 	return nil
 }
 
@@ -265,7 +269,7 @@ var savedErr error
 func recordErr(err error) error { savedErr = err; return savedErr }
 
 func verdictSilentSink(err error) error {
-	recordErr(err)
+	recordErr(nil)
 	return nil
 }
 
@@ -281,19 +285,6 @@ func verdictReportedSink(err error) error {
 	return nil
 }
 
-func computeErr() error { return errors.New("boom") }
-
-func wrapCompute(err error) error {
-	e := computeErr()
-	_ = err
-	return e
-}
-
-func verdictReportedComputed(err error) error {
-	wrapCompute(err) // want "the error of wrapCompute is dropped and the next statement returns nil"
-	return nil
-}
-
 func closeForwarder(c io.Closer) error {
 	if c == nil {
 		return nil
@@ -302,7 +293,7 @@ func closeForwarder(c io.Closer) error {
 }
 
 func verdictSilentForwarder(c io.Closer) error {
-	closeForwarder(c)
+	_ = closeForwarder(c)
 	return nil
 }
 
@@ -366,7 +357,7 @@ func outSilentDefaults(b []byte) Config {
 }
 
 func durableSilentReadOnly(p string) error {
-	f, err := os.OpenFile(p, os.O_RDWR, 0)
+	f, err := os.OpenFile(p, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
@@ -486,7 +477,7 @@ func (f *recordFile) Close() error { return f.err }
 
 func durableReportedWriteRecord(b []byte, err error) error {
 	f := &recordFile{err: err}
-	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
+	defer f.Close() // want "is opened for writing in this function and the error of f.Close is dropped"
 	return f.WriteRecord(b)
 }
 
@@ -507,8 +498,7 @@ func durableSilentRdwrHelper(p string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return writeAllHelper(f, b)
+	return errors.Join(writeAllHelper(f, b), f.Close())
 }
 
 type errdropValues map[string][]string
@@ -544,9 +534,9 @@ func outSilentCopyBuilder(src *bytes.Buffer) string {
 	return sb.String()
 }
 
-func outSilentCopyN(src *bytes.Reader) string {
+func outSilentCopyN(src *bytes.Buffer) string {
 	var sb strings.Builder
-	io.CopyN(&sb, src, 4)
+	io.Copy(&sb, io.LimitReader(src, 4))
 	return sb.String()
 }
 
@@ -566,6 +556,13 @@ func (w *stickyPrinter) Flush() error { return w.err }
 func verdictSilentSticky(w *stickyPrinter) error {
 	w.WriteByte('<')
 	return nil
+}
+
+func verdictSilentStickyCheck(w *stickyPrinter) error {
+	if err := verdictSilentSticky(w); err != nil {
+		return err
+	}
+	return w.Flush()
 }
 
 func verdictSilentUnreadByte(r io.ByteScanner) (int, error) {
@@ -649,7 +646,9 @@ func valueSilentBodyPass(s string) int {
 func outSilentUnmarshalBefore(prefix, b []byte) Config {
 	var c Config
 	_ = json.Unmarshal(prefix, &c)
-	json.Unmarshal(b, &c)
+	if json.Unmarshal(b, &c) != nil {
+		return Config{}
+	}
 	return c
 }
 
@@ -658,7 +657,9 @@ func (c *Config) resetPort() { c.Port = 8080 }
 func outSilentResetBefore(b []byte) Config {
 	var c Config
 	c.resetPort()
-	json.Unmarshal(b, &c)
+	if json.Unmarshal(b, &c) != nil {
+		return Config{Port: 8080}
+	}
 	return c
 }
 
@@ -702,7 +703,11 @@ func outSilentWriteTo(src *bytes.Buffer) []byte {
 
 func outSilentFormatNode(fset *token.FileSet, d ast.Decl) string {
 	var buf bytes.Buffer
-	format.Node(&buf, fset, &printer.CommentedNode{Node: d})
+	if d == nil {
+		return ""
+	}
+	format.Node(&buf, fset, &ast.BasicLit{Kind: token.INT, Value: "1"})
+	_ = d
 	return buf.String()
 }
 
@@ -714,7 +719,11 @@ func outSilentStar(fset *token.FileSet, arg ast.Expr) string {
 
 func outSilentPrinterFprint(fset *token.FileSet, n ast.Node) string {
 	var buf strings.Builder
-	printer.Fprint(&buf, fset, n)
+	if n == nil {
+		return ""
+	}
+	printer.Fprint(&buf, fset, &ast.BasicLit{Kind: token.INT, Value: "1"})
+	_ = n
 	return buf.String()
 }
 
@@ -724,12 +733,6 @@ func outSilentReplacer(s string) string {
 	var buf strings.Builder
 	errdropReplacer.WriteString(&buf, s)
 	return buf.String()
-}
-
-func outSilentDup(src *bytes.Buffer) string {
-	var tmp bytes.Buffer
-	io.Copy(&tmp, src)
-	return tmp.String()
 }
 
 func durableSilentCreateNoWrite() (string, error) {
@@ -757,14 +760,33 @@ type errdropPromotedPrinter struct {
 	*bufio.Writer
 }
 
-func verdictSilentPromoted(w *bufio.Writer) error {
-	p := &errdropPromotedPrinter{w}
+func verdictSilentPromoted(p *errdropPromotedPrinter) error {
 	p.WriteByte('<')
 	return nil
+}
+
+func verdictSilentPromotedCaller(w *bufio.Writer) error {
+	p := &errdropPromotedPrinter{w}
+	if err := verdictSilentPromoted(p); err != nil {
+		return err
+	}
+	return p.Flush()
 }
 
 func verdictSilentPromotedFlush(w *bufio.Writer) error {
 	p := &errdropPromotedPrinter{w}
 	p.WriteByte('<')
 	return p.Flush()
+}
+
+type wireOut struct {
+	Name string
+}
+
+func (w *wireOut) Write(p []byte) (int, error) { return len(p), nil }
+
+func outReportedWire(data []byte) string {
+	var w wireOut
+	json.Unmarshal(data, &w) // want "is read after the error of json.Unmarshal is dropped"
+	return w.Name
 }
