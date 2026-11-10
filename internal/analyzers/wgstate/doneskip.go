@@ -102,6 +102,9 @@ func reportReturns(pass *analysis.Pass, lit *ast.FuncLit, dones []doneCall, defe
 }
 
 func reportSkipped(pass *analysis.Pass, lit *ast.FuncLit, before []ast.Stmt, dones []doneCall, deferred map[flow.Key]bool, ret *ast.ReturnStmt) {
+	if failsBefore(pass.TypesInfo, before) {
+		return
+	}
 	seen := map[flow.Key]bool{}
 	for _, d := range dones {
 		if d.pos < ret.End() || deferred[d.key] || seen[d.key] {
@@ -113,6 +116,46 @@ func reportSkipped(pass *analysis.Pass, lit *ast.FuncLit, before []ast.Stmt, don
 		}
 		pass.Reportf(ret.Pos(), "this return skips %s.Done(), so Wait blocks forever: defer the Done call", d.text)
 	}
+}
+
+func failsBefore(info *types.Info, before []ast.Stmt) bool {
+	for _, s := range before {
+		call, ok := directCall(s)
+		if !ok {
+			continue
+		}
+		if isPanicCall(info, call) {
+			return true
+		}
+		if isTestFail(info, call) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPanicCall(info *types.Info, call *ast.CallExpr) bool {
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok || id.Name != "panic" {
+		return false
+	}
+	return info.ObjectOf(id) == types.Universe.Lookup("panic")
+}
+
+func isTestFail(info *types.Info, call *ast.CallExpr) bool {
+	fn := typeutil.StaticCallee(info, call)
+	if fn == nil {
+		return false
+	}
+	pkg := fn.Pkg()
+	if pkg == nil || pkg.Path() != "testing" {
+		return false
+	}
+	switch fn.Name() {
+	case "Fail", "FailNow", "Fatal", "Fatalf", "Error", "Errorf", "Skip", "SkipNow", "Skipf":
+		return true
+	}
+	return false
 }
 
 func hasDoneBefore(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt, before []ast.Stmt, k flow.Key) bool {

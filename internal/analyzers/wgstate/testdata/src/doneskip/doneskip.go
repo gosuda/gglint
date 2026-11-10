@@ -1,6 +1,9 @@
 package doneskip
 
-import "sync"
+import (
+	"sync"
+	"testing"
+)
 
 func bad() bool { return false }
 
@@ -79,6 +82,33 @@ func doneskipSilentDoneEarlier() {
 	go func() {
 		wg.Done()
 		if bad() {
+			return
+		}
+		work()
+		wg.Done()
+	}()
+	wg.Wait()
+}
+func doneskipSilentTestErrorf(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		if bad() {
+			t.Errorf("Query: %v", bad())
+			return
+		}
+		work()
+		wg.Done()
+	}()
+	wg.Wait()
+}
+
+func doneskipSilentTestError(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		if bad() {
+			t.Error(bad())
 			return
 		}
 		work()
