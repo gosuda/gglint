@@ -119,14 +119,25 @@ func rangeStmtVars(pass *analysis.Pass, t *ast.RangeStmt) []*types.Var {
 }
 
 func varOfIdent(pass *analysis.Pass, e ast.Expr) *types.Var {
-	id, ok := ast.Unparen(e).(*ast.Ident)
-	if !ok {
-		return nil
+	for {
+		switch t := ast.Unparen(e).(type) {
+		case *ast.Ident:
+			if v, ok := pass.TypesInfo.ObjectOf(t).(*types.Var); ok {
+				return v
+			}
+			return nil
+		case *ast.SelectorExpr:
+			e = t.X
+		case *ast.IndexExpr:
+			e = t.X
+		case *ast.IndexListExpr:
+			e = t.X
+		case *ast.StarExpr:
+			e = t.X
+		default:
+			return nil
+		}
 	}
-	if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
-		return v
-	}
-	return nil
 }
 
 func nilComparedVar(pass *analysis.Pass, b *ast.BinaryExpr) *types.Var {

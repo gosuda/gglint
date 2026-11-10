@@ -917,3 +917,10 @@ func outSilentByteReader() int {
 	outDrain(&p)
 	return p.n
 }
+
+func outSilentFieldDefault(b []byte) Config {
+	var c Config
+	c.Port = 8080
+	json.Unmarshal(b, &c)
+	return c
+}
