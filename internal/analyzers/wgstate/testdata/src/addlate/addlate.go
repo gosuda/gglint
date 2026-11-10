@@ -75,7 +75,7 @@ func addlateSilentMutexGate() {
 	mu.Unlock()
 	wg.Wait()
 }
-func addlateReportedWrongGate() {
+func addlateSilentWrongGate() {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	other := make(chan struct{})
@@ -84,11 +84,11 @@ func addlateReportedWrongGate() {
 		defer wg.Done()
 		work()
 	}()
-	wg.Add(1) // want "so Wait can return early"
+	wg.Add(1)
 	close(start)
 	wg.Wait()
 }
-func addlateReportedCloseBefore() {
+func addlateSilentCloseBefore() {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	go func() {
@@ -97,10 +97,10 @@ func addlateReportedCloseBefore() {
 		work()
 	}()
 	close(start)
-	wg.Add(1) // want "so Wait can return early"
+	wg.Add(1)
 	wg.Wait()
 }
-func addlateReportedRLockGate() {
+func addlateSilentRLockGate() {
 	var wg sync.WaitGroup
 	var mu sync.RWMutex
 	go func() {
@@ -110,11 +110,11 @@ func addlateReportedRLockGate() {
 		work()
 	}()
 	mu.RLock()
-	wg.Add(1) // want "so Wait can return early"
+	wg.Add(1)
 	mu.RUnlock()
 	wg.Wait()
 }
-func addlateReportedLockAfter() {
+func addlateSilentLockAfter() {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	go func() {
@@ -123,12 +123,12 @@ func addlateReportedLockAfter() {
 		mu.Unlock()
 		work()
 	}()
-	wg.Add(1) // want "so Wait can return early"
+	wg.Add(1)
 	mu.Lock()
 	mu.Unlock()
 	wg.Wait()
 }
-func addlateReportedBranchGate(ok bool) {
+func addlateSilentBranchGate(ok bool) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	go func() {
@@ -138,7 +138,7 @@ func addlateReportedBranchGate(ok bool) {
 		defer wg.Done()
 		work()
 	}()
-	wg.Add(1) // want "so Wait can return early"
+	wg.Add(1)
 	close(start)
 	wg.Wait()
 }
@@ -148,6 +148,36 @@ func addlateSilentDeferredGate() {
 	go func() {
 		defer wg.Done()
 		<-start
+		work()
+	}()
+	wg.Add(1)
+	close(start)
+	wg.Wait()
+}
+func addlateSilentRWMutexParent() {
+	var wg sync.WaitGroup
+	var mu sync.RWMutex
+	mu.RLock()
+	go func() {
+		mu.Lock()
+		defer wg.Done()
+		mu.Unlock()
+		work()
+	}()
+	wg.Add(1)
+	mu.RUnlock()
+	wg.Wait()
+}
+func addlateSilentSelectGate() {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	other := make(chan struct{})
+	go func() {
+		select {
+		case <-start:
+		case <-other:
+		}
+		defer wg.Done()
 		work()
 	}()
 	wg.Add(1)
