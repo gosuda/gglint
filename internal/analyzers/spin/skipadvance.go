@@ -30,14 +30,53 @@ func checkSkipadvance(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForSt
 	}
 	vars := condVars(pass.TypesInfo, loop.Cond)
 	label := loopLabel(cur)
+	pre := newSkipPre(pass.TypesInfo, loop, loop.Body.List, vars)
 	for j, stmt := range loop.Body.List {
 		check, ok := stmt.(*ast.IfStmt)
 		if !ok || !errorCompared(pass.TypesInfo, check.Cond) {
 			continue
 		}
-		site := continueSite{loop: loop, list: loop.Body.List, check: check, vars: vars, at: j, errs: condVars(pass.TypesInfo, check.Cond)}
+		site := continueSite{loop: loop, list: loop.Body.List, check: check, vars: vars, at: j, errs: condVars(pass.TypesInfo, check.Cond), pre: pre}
 		checkContinues(pass, site, label)
 	}
+}
+
+type skipPre struct {
+	prefix []bool
+	suffix []bool
+	outer  []map[*types.Var]bool
+	reads  []map[*types.Var]bool
+}
+
+func newSkipPre(info *types.Info, loop *ast.ForStmt, list []ast.Stmt, vars map[*types.Var]bool) *skipPre {
+	n := len(list)
+	pre := &skipPre{prefix: make([]bool, n+1), suffix: make([]bool, n+1), outer: make([]map[*types.Var]bool, n), reads: make([]map[*types.Var]bool, n)}
+	assigns := make([]bool, n)
+	for i, stmt := range list {
+		assigns[i] = stmtAssigns(info, stmt, vars)
+		outer := map[*types.Var]bool{}
+		collectOuterWrites(info, loop, stmt, map[*types.Var]bool{}, outer)
+		pre.outer[i] = outer
+		pre.reads[i] = collectReads(info, stmt)
+		pre.prefix[i+1] = pre.prefix[i] || assigns[i]
+	}
+	for i := n - 1; i >= 0; i-- {
+		pre.suffix[i] = pre.suffix[i+1] || assigns[i]
+	}
+	return pre
+}
+
+func collectReads(info *types.Info, node ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	walkNoLit(node, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			if v, ok := info.Uses[id].(*types.Var); ok {
+				out[v] = true
+			}
+		}
+		return true
+	})
+	return out
 }
 
 func loopLabel(cur inspector.Cursor) string {
@@ -67,6 +106,7 @@ type continueSite struct {
 	vars  map[*types.Var]bool
 	at    int
 	errs  map[*types.Var]bool
+	pre   *skipPre
 }
 
 func checkContinues(pass *analysis.Pass, site continueSite, label string) {
@@ -84,22 +124,20 @@ func reportContinue(pass *analysis.Pass, site continueSite, label string, k int,
 		return
 	}
 	info := pass.TypesInfo
-	if advancedBefore(info, site.list, site.at, site.check, k, site.vars) {
+	if advancedBefore(info, site, k) {
 		return
 	}
 	if outerAdvanced(info, site, k) {
 		return
 	}
-	if advancedAfter(info, site.list, site.at, site.vars) {
+	if advancedAfter(site) {
 		pass.Reportf(branch.Pos(), "this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue")
 	}
 }
 
 func outerAdvanced(info *types.Info, site continueSite, k int) bool {
 	written := map[*types.Var]bool{}
-	for _, stmt := range site.list[:site.at] {
-		collectOuterWrites(info, site.loop, stmt, site.errs, written)
-	}
+	collectPrefixWritten(site, written)
 	if site.check.Init != nil {
 		collectOuterWrites(info, site.loop, site.check.Init, site.errs, written)
 	}
@@ -109,15 +147,45 @@ func outerAdvanced(info *types.Info, site continueSite, k int) bool {
 	if len(written) == 0 {
 		return false
 	}
-	for _, stmt := range site.list[:site.at] {
-		if stmtReadsWritten(info, site.loop, stmt, site.errs, written) {
-			return true
-		}
+	if prefixReadsAny(site, written) {
+		return true
 	}
 	if site.check.Init != nil && stmtReadsWritten(info, site.loop, site.check.Init, site.errs, written) {
 		return true
 	}
 	return condReadsWritten(info, site.check.Cond, written)
+}
+
+func collectPrefixWritten(site continueSite, out map[*types.Var]bool) {
+	for i := range site.at {
+		for v := range site.pre.outer[i] {
+			if !site.errs[v] {
+				out[v] = true
+			}
+		}
+	}
+}
+
+func prefixReadsAny(site continueSite, written map[*types.Var]bool) bool {
+	for i := range site.at {
+		if readsWritten(site.pre.reads[i], site.pre.outer[i], site.errs, written) {
+			return true
+		}
+	}
+	return false
+}
+
+func readsWritten(reads, outer, errs, written map[*types.Var]bool) bool {
+	for v := range reads {
+		if !written[v] {
+			continue
+		}
+		if outer[v] && !errs[v] {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func collectOuterWrites(info *types.Info, loop *ast.ForStmt, node ast.Node, errs, out map[*types.Var]bool) {
@@ -226,30 +294,23 @@ func errorCompared(info *types.Info, cond ast.Expr) bool {
 		isNil(info, cmp.Y) && isErrorType(info.TypeOf(cmp.X))
 }
 
-func advancedBefore(info *types.Info, list []ast.Stmt, j int, check *ast.IfStmt, k int, vars map[*types.Var]bool) bool {
-	for _, stmt := range list[:j] {
-		if stmtAssigns(info, stmt, vars) {
-			return true
-		}
-	}
-	if check.Init != nil && stmtAssigns(info, check.Init, vars) {
+func advancedBefore(info *types.Info, site continueSite, k int) bool {
+	if site.pre.prefix[site.at] {
 		return true
 	}
-	for _, stmt := range check.Body.List[:k] {
-		if stmtAssigns(info, stmt, vars) {
+	if site.check.Init != nil && stmtAssigns(info, site.check.Init, site.vars) {
+		return true
+	}
+	for _, stmt := range site.check.Body.List[:k] {
+		if stmtAssigns(info, stmt, site.vars) {
 			return true
 		}
 	}
 	return false
 }
 
-func advancedAfter(info *types.Info, list []ast.Stmt, j int, vars map[*types.Var]bool) bool {
-	for _, stmt := range list[j+1:] {
-		if stmtAssigns(info, stmt, vars) {
-			return true
-		}
-	}
-	return false
+func advancedAfter(site continueSite) bool {
+	return site.pre.suffix[site.at+1]
 }
 
 func stmtAssigns(info *types.Info, stmt ast.Stmt, vars map[*types.Var]bool) bool {

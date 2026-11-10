@@ -88,24 +88,112 @@ func noteAddr(info *types.Info, fc *staleFn, t *ast.UnaryExpr) {
 	if t.Op != token.AND {
 		return
 	}
-	id, ok := ast.Unparen(t.X).(*ast.Ident)
-	if !ok {
-		return
-	}
-	if v, ok := info.ObjectOf(id).(*types.Var); ok {
-		fc.addrs[v] = true
+	if root, ok := storageRoot(info, t.X); ok {
+		fc.addrs[root] = true
 	}
 }
 
-func isOldIdent(info *types.Info, e ast.Expr, old *types.Var) bool {
-	if e == nil {
+func storageRoot(info *types.Info, e ast.Expr) (*types.Var, bool) {
+	if e == nil || info == nil {
+		return nil, false
+	}
+	switch t := ast.Unparen(e).(type) {
+	case *ast.Ident:
+		return identRoot(info, t)
+	case *ast.SelectorExpr:
+		return selectorRoot(info, t)
+	case *ast.IndexExpr:
+		return arrayRoot(info, t.X)
+	case *ast.IndexListExpr:
+		return arrayRoot(info, t.X)
+	default:
+		return nil, false
+	}
+}
+
+func identRoot(info *types.Info, id *ast.Ident) (*types.Var, bool) {
+	if v, ok := info.ObjectOf(id).(*types.Var); ok {
+		return v, true
+	}
+	return nil, false
+}
+
+func selectorRoot(info *types.Info, t *ast.SelectorExpr) (*types.Var, bool) {
+	inner := ast.Unparen(t.X)
+	if isPointerType(info.TypeOf(inner)) {
+		return nil, false
+	}
+	return storageRoot(info, inner)
+}
+
+func arrayRoot(info *types.Info, x ast.Expr) (*types.Var, bool) {
+	inner := ast.Unparen(x)
+	if !isArrayType(info.TypeOf(inner)) {
+		return nil, false
+	}
+	return storageRoot(info, inner)
+}
+
+func isPointerType(t types.Type) bool {
+	if t == nil {
+		return true
+	}
+	_, ok := t.Underlying().(*types.Pointer)
+	return ok
+}
+
+func isArrayType(t types.Type) bool {
+	if t == nil {
 		return false
 	}
+	_, ok := t.Underlying().(*types.Array)
+	return ok
+}
+
+func isOldStorage(info *types.Info, e ast.Expr, old *types.Var) bool {
+	if e == nil || old == nil {
+		return false
+	}
+	root, ok := storageRoot(info, e)
+	return ok && root == old
+}
+
+func assignsOldNode(info *types.Info, n ast.Node, old *types.Var) bool {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		return assignsLHS(info, t, old)
+	case *ast.IncDecStmt:
+		return isOldStorage(info, t.X, old)
+	case *ast.RangeStmt:
+		return assignsRange(info, t, old)
+	default:
+		return false
+	}
+}
+
+func assignsLHS(info *types.Info, t *ast.AssignStmt, old *types.Var) bool {
+	for _, e := range t.Lhs {
+		if !isOldStorage(info, e, old) {
+			continue
+		}
+		if t.Tok == token.DEFINE && definingIdent(e, old) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func definingIdent(e ast.Expr, old *types.Var) bool {
 	id, ok := ast.Unparen(e).(*ast.Ident)
-	if !ok {
+	return ok && id.Pos() == old.Pos()
+}
+
+func assignsRange(info *types.Info, t *ast.RangeStmt, old *types.Var) bool {
+	if t.Tok != token.ASSIGN {
 		return false
 	}
-	return info.ObjectOf(id) == types.Object(old)
+	return isOldStorage(info, t.Key, old) || isOldStorage(info, t.Value, old)
 }
 
 func otherLitAssignsOld(info *types.Info, fc *staleFn, loop *ast.ForStmt, old *types.Var) bool {
@@ -126,49 +214,12 @@ func litAssignsOld(info *types.Info, lit *ast.FuncLit, old *types.Var) bool {
 		if found {
 			return false
 		}
-		if litNodeAssignsOld(info, n, old) {
+		if assignsOldNode(info, n, old) {
 			found = true
 		}
 		return !found
 	})
 	return found
-}
-
-func litNodeAssignsOld(info *types.Info, n ast.Node, old *types.Var) bool {
-	switch t := n.(type) {
-	case *ast.AssignStmt:
-		return lhsAssignsOld(info, t, old)
-	case *ast.IncDecStmt:
-		return isOldIdent(info, t.X, old)
-	case *ast.RangeStmt:
-		return rangeAssignsOld(info, t, old)
-	default:
-		return false
-	}
-}
-
-func rangeAssignsOld(info *types.Info, t *ast.RangeStmt, old *types.Var) bool {
-	if t.Tok != token.ASSIGN {
-		return false
-	}
-	return isOldIdent(info, t.Key, old) || isOldIdent(info, t.Value, old)
-}
-
-func lhsAssignsOld(info *types.Info, t *ast.AssignStmt, old *types.Var) bool {
-	for _, e := range t.Lhs {
-		id, ok := ast.Unparen(e).(*ast.Ident)
-		if !ok {
-			continue
-		}
-		if info.ObjectOf(id) != types.Object(old) {
-			continue
-		}
-		if t.Tok == token.DEFINE && id.Pos() == old.Pos() {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 func assignsOldInLoop(info *types.Info, loop *ast.ForStmt, old *types.Var) bool {
@@ -449,47 +500,10 @@ func atomicOld(info *types.Info, sel *ast.SelectorExpr, arg ast.Expr) (ast.Expr,
 func assignsRoot(info *types.Info, n ast.Node, v *types.Var) bool {
 	hit := false
 	walkNoLit(n, func(x ast.Node) bool {
-		if assignsNode(info, x, v) {
+		if assignsOldNode(info, x, v) {
 			hit = true
 		}
 		return !hit
 	})
 	return hit
-}
-
-func assignsNode(info *types.Info, n ast.Node, v *types.Var) bool {
-	switch t := n.(type) {
-	case *ast.AssignStmt:
-		return lhsHits(info, t.Lhs, v)
-	case *ast.IncDecStmt:
-		return hitRoot(info, t.X, v)
-	case *ast.RangeStmt:
-		return rangeHits(info, t, v)
-	default:
-		return false
-	}
-}
-
-func lhsHits(info *types.Info, lhs []ast.Expr, v *types.Var) bool {
-	for _, e := range lhs {
-		if hitRoot(info, e, v) {
-			return true
-		}
-	}
-	return false
-}
-
-func rangeHits(info *types.Info, t *ast.RangeStmt, v *types.Var) bool {
-	if t.Tok != token.ASSIGN {
-		return false
-	}
-	return hitRoot(info, t.Key, v) || hitRoot(info, t.Value, v)
-}
-
-func hitRoot(info *types.Info, e ast.Expr, v *types.Var) bool {
-	id := rootIdent(e)
-	if id == nil {
-		return false
-	}
-	return info.ObjectOf(id) == types.Object(v)
 }

@@ -439,3 +439,25 @@ func stalecasReportedFieldLitAssign(h *atomic.Pointer[staleNode], n *staleNode) 
 	for !h.CompareAndSwap(old, n) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 	}
 }
+type staleVal struct{ n int }
+
+func stalecasSilentValueFieldLitAssign(v *atomic.Value) {
+	v.Store(staleVal{n: 1})
+	old := staleVal{}
+	bump := func() { old.n++ }
+	for !v.CompareAndSwap(old, staleVal{n: 2}) {
+		bump()
+	}
+	use(old)
+}
+
+func staleValRefresh(p *int, v *atomic.Value) { *p = v.Load().(staleVal).n }
+
+func stalecasSilentValueAddrField(v *atomic.Value) {
+	v.Store(staleVal{n: 1})
+	old := staleVal{}
+	for !v.CompareAndSwap(old, staleVal{n: 2}) {
+		staleValRefresh(&old.n, v)
+	}
+	use(old)
+}
