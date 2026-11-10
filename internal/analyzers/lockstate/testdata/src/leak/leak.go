@@ -194,22 +194,3 @@ func leakRelockSilent(s *S, n int) error {
 	}
 	return errBad
 }
-
-func leakIfNoElseSilent(s *S, n int) {
-	s.mu.Lock()
-	if n > 0 {
-		return
-	}
-	if n == 0 {
-		s.mu.Unlock()
-	}
-}
-
-func leakUnknownTailSilent(s *S, n int) {
-	s.mu.Lock()
-	if n > 0 {
-		return
-	}
-	touchLeak(&s.mu)
-	s.mu.Unlock()
-}
