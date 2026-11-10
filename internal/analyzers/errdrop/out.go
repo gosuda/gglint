@@ -76,7 +76,30 @@ func outHolds(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, x *t
 	if assignsVar(pass, fn, x) {
 		return false
 	}
+	if takenBefore(pass, fn, x, call.Pos()) {
+		return false
+	}
 	return mentionedAfter(pass, fn, x, call.End())
+}
+
+func takenBefore(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, before token.Pos) bool {
+	for cur := range fn.Preorder((*ast.UnaryExpr)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		u := inspection.As[*ast.UnaryExpr](cur.Node())
+		if u.Op != token.AND || u.Pos() >= before {
+			continue
+		}
+		id, ok := ast.Unparen(u.X).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if pass.TypesInfo.ObjectOf(id) == types.Object(x) {
+			return true
+		}
+	}
+	return false
 }
 
 func isBareVarDecl(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {

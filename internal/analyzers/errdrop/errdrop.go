@@ -16,6 +16,8 @@ type neverFails struct{}
 
 func (*neverFails) AFact() {}
 
+const writeMethodName = "Write"
+
 // Analyzer reports dropped errors that later code depends on.
 var Analyzer = &analysis.Analyzer{
 	Name: "errdrop",

@@ -46,7 +46,7 @@ func findPackage(root *types.Package, path string) *types.Package {
 
 func isHashWrite(pass *analysis.Pass, hash *types.Interface, call *ast.CallExpr) bool {
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Write" {
+	if !ok || sel.Sel.Name != writeMethodName {
 		return false
 	}
 	recv := pass.TypesInfo.TypeOf(sel.X)
@@ -71,7 +71,7 @@ func isSingleWriteIface(recv types.Type) bool {
 	if !ok || iface.NumMethods() != 1 {
 		return false
 	}
-	if iface.Method(0).Name() != "Write" {
+	if iface.Method(0).Name() != writeMethodName {
 		return false
 	}
 	sig, ok := iface.Method(0).Type().(*types.Signature)

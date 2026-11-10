@@ -204,7 +204,7 @@ func returnOK(pass *analysis.Pass, ret *ast.ReturnStmt, sig *types.Signature, se
 	if len(ret.Results) == 0 {
 		return allErrorsNamed(sig)
 	}
-	if len(ret.Results) == 1 && singleCallPasses(pass, ret.Results[0], nres, set) {
+	if len(ret.Results) == 1 && singleCallPasses(pass, ret.Results[0], sig, set) {
 		return true
 	}
 	if len(ret.Results) != nres {
@@ -228,20 +228,35 @@ func resultsLen(sig *types.Signature) int {
 	return sig.Results().Len()
 }
 
-func singleCallPasses(pass *analysis.Pass, e ast.Expr, nres int, set map[*types.Func]bool) bool {
+func singleCallPasses(pass *analysis.Pass, e ast.Expr, sig *types.Signature, set map[*types.Func]bool) bool {
 	call, ok := ast.Unparen(e).(*ast.CallExpr)
 	if !ok {
-		return nres == 1 && isNilIdent(pass.TypesInfo, e)
+		return resultsLen(sig) == 1 && isNilIdent(pass.TypesInfo, e)
 	}
 	callee := calleeOrigin(pass, call)
 	if callee == nil {
-		return nres == 1 && isNilIdent(pass.TypesInfo, e)
+		return resultsLen(sig) == 1 && isNilIdent(pass.TypesInfo, e)
 	}
 	csig, ok := callee.Type().(*types.Signature)
 	if !ok {
 		return false
 	}
-	return resultsLen(csig) == nres && hasFact(pass, callee, set)
+	if resultsLen(csig) != resultsLen(sig) {
+		return false
+	}
+	if !hasFact(pass, callee, set) {
+		return false
+	}
+	return errorPositionsMatch(sig, csig)
+}
+
+func errorPositionsMatch(sig, csig *types.Signature) bool {
+	for i := range resultsLen(sig) {
+		if isError(sig.Results().At(i).Type()) && !isError(csig.Results().At(i).Type()) {
+			return false
+		}
+	}
+	return true
 }
 
 func allErrorsNamed(sig *types.Signature) bool {

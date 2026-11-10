@@ -335,3 +335,51 @@ func verdictReportedDiscardAfterRead(r *bufio.Reader, p []byte) error {
 	r.Discard(2) // want "the error of r.Discard is dropped and the next statement returns nil"
 	return nil
 }
+
+type mismatchErr struct{}
+
+func (*mismatchErr) Error() string { return "boom" }
+
+func mismatchG() (*mismatchErr, error) { return &mismatchErr{}, nil }
+
+func mismatchF() (error, error) { return mismatchG() }
+
+func verdictReportedMismatch() error {
+	mismatchF() // want "the error of mismatchF is dropped and the next statement returns nil"
+	return nil
+}
+
+func setDefaults(c *Config) { c.Port = 80 }
+
+func outSilentDefaults(b []byte) Config {
+	var c Config
+	setDefaults(&c)
+	json.Unmarshal(b, &c)
+	return c
+}
+
+func durableSilentReadOnly(p string) error {
+	f, err := os.OpenFile(p, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	b := make([]byte, 4)
+	_, err = f.Read(b)
+	return err
+}
+
+func durableSilentWriteTo(p string, w io.Writer) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteTo(w)
+	return err
+}
+
+func valueReportedParen(p string) string {
+	f, _ := os.Open(p) // want "is used after the error of os.Open is dropped"
+	return (f).Name()
+}

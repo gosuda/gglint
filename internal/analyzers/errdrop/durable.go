@@ -5,7 +5,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
-	"strings"
+	"os"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
@@ -164,7 +164,7 @@ func flagWritable(info *types.Info, e ast.Expr) bool {
 		return false
 	}
 	n, ok := constant.Int64Val(v)
-	return ok && n&3 != 0
+	return ok && n&int64(os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND) != 0
 }
 
 func writtenByMethod(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
@@ -184,7 +184,8 @@ func writtenByMethod(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) boo
 		if pass.TypesInfo.ObjectOf(id) != types.Object(x) {
 			continue
 		}
-		if strings.HasPrefix(sel.Sel.Name, "Write") || sel.Sel.Name == "ReadFrom" {
+		switch sel.Sel.Name {
+		case writeMethodName, "WriteAt", "WriteString", "ReadFrom":
 			return true
 		}
 	}

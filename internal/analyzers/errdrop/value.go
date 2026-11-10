@@ -6,7 +6,6 @@ import (
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
 
 	"github.com/gosuda/gglint/internal/inspection"
@@ -165,10 +164,12 @@ func firstUseAfter(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, after
 }
 
 func skipParens(cur inspector.Cursor) inspector.Cursor {
-	for cur.ParentEdgeKind() == edge.ParenExpr_X {
+	for {
+		if _, ok := cur.Node().(*ast.ParenExpr); !ok {
+			return cur
+		}
 		cur = cur.Parent()
 	}
-	return cur
 }
 
 func isDeref(cur inspector.Cursor, v *types.Var) bool {
