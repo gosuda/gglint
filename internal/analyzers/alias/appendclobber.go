@@ -2,6 +2,7 @@ package alias
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 
@@ -18,8 +19,10 @@ func runAppendclobber(pass *analysis.Pass) (any, error) {
 }
 
 type sliceDef struct {
-	a   *types.Var
-	pos token.Pos
+	a         *types.Var
+	pos       token.Pos
+	high      int
+	highKnown bool
 }
 
 func checkAppendclobber(pass *analysis.Pass, fn ast.Node) {
@@ -75,7 +78,20 @@ func addSliceExpr(info *types.Info, fn ast.Node, e ast.Expr, b *types.Var, pos t
 	if isLenOf(info, s.High, a) {
 		return
 	}
-	defs[b] = sliceDef{a: a, pos: pos}
+	high, highKnown := constInt(info, s.High)
+	defs[b] = sliceDef{a: a, pos: pos, high: high, highKnown: highKnown}
+}
+
+func constInt(info *types.Info, e ast.Expr) (int, bool) {
+	tv, ok := info.Types[ast.Unparen(e)]
+	if !ok || tv.Value == nil {
+		return 0, false
+	}
+	v, ok := constant.Int64Val(tv.Value)
+	if !ok {
+		return 0, false
+	}
+	return int(v), true
 }
 
 func isLenOf(info *types.Info, e ast.Expr, target *types.Var) bool {
@@ -96,28 +112,138 @@ func isLenOf(info *types.Info, e ast.Expr, target *types.Var) bool {
 }
 
 func checkAppendAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, defs map[*types.Var]sliceDef) {
-	if len(st.Lhs) != 1 || len(st.Rhs) != 1 {
-		return
-	}
-	call, ok := isAppend(pass.TypesInfo, st.Rhs[0])
-	if !ok || len(call.Args) < 2 {
-		return
-	}
-	b, ok := appendTarget(pass.TypesInfo, st, call)
+	b, def, call, ok := appendDef(pass.TypesInfo, st, defs)
 	if !ok {
 		return
 	}
-	def, ok := defs[b]
-	if !ok {
+	if reallocates(pass.TypesInfo, fn, def, call) {
 		return
 	}
 	if assignedBetween(pass.TypesInfo, fn, b, def.pos, st.Pos()) {
+		return
+	}
+	if assignedBetween(pass.TypesInfo, fn, def.a, def.pos, st.Pos()) {
 		return
 	}
 	if !mentionedAfter(pass.TypesInfo, fn, def.a, st.End()) {
 		return
 	}
 	pass.Reportf(call.Pos(), "%s shares its backing array with %s, so this append overwrites elements of %s that are read later: slice it with three indexes to cap its capacity", b.Name(), def.a.Name(), def.a.Name())
+}
+
+func appendDef(info *types.Info, st *ast.AssignStmt, defs map[*types.Var]sliceDef) (*types.Var, sliceDef, *ast.CallExpr, bool) {
+	if len(st.Lhs) != 1 || len(st.Rhs) != 1 {
+		return nil, sliceDef{}, nil, false
+	}
+	call, ok := isAppend(info, st.Rhs[0])
+	if !ok || len(call.Args) < 2 {
+		return nil, sliceDef{}, nil, false
+	}
+	b, ok := appendTarget(info, st, call)
+	if !ok {
+		return nil, sliceDef{}, nil, false
+	}
+	def, ok := defs[b]
+	if !ok {
+		return nil, sliceDef{}, nil, false
+	}
+	return b, def, call, true
+}
+
+func reallocates(info *types.Info, fn ast.Node, def sliceDef, call *ast.CallExpr) bool {
+	if call.Ellipsis.IsValid() {
+		return true
+	}
+	if !def.highKnown {
+		return false
+	}
+	n := len(call.Args) - 1
+	length, capacity, lenKnown, capKnown := arrayLenCap(info, fn, def.a, def.pos)
+	if capKnown && def.high+n > capacity {
+		return true
+	}
+	if !capKnown && lenKnown && def.high+n > length {
+		return true
+	}
+	return false
+}
+
+func arrayLenCap(info *types.Info, fn ast.Node, a *types.Var, before token.Pos) (length, capacity int, lenKnown, capKnown bool) {
+	best := token.NoPos
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		st, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		l, c, lk, ck, ok := defBefore(info, st, a, before, best)
+		if !ok {
+			return true
+		}
+		best, length, capacity, lenKnown, capKnown = st.Pos(), l, c, lk, ck
+		return true
+	})
+	return length, capacity, lenKnown, capKnown
+}
+
+func defBefore(info *types.Info, st *ast.AssignStmt, a *types.Var, before, best token.Pos) (length, capacity int, lenKnown, capKnown, ok bool) {
+	if !isDefOf(info, st, a) {
+		return 0, 0, false, false, false
+	}
+	if st.Pos() >= before || st.Pos() <= best {
+		return 0, 0, false, false, false
+	}
+	l, c, lk, ck := defLenCap(info, st.Rhs[0])
+	if !lk && !ck {
+		return 0, 0, false, false, false
+	}
+	return l, c, lk, ck, true
+}
+
+func isDefOf(info *types.Info, st *ast.AssignStmt, a *types.Var) bool {
+	if st.Tok != token.DEFINE || len(st.Lhs) != 1 || len(st.Rhs) != 1 {
+		return false
+	}
+	v, ok := identVar(info, st.Lhs[0])
+	return ok && v == a
+}
+
+func defLenCap(info *types.Info, rhs ast.Expr) (length, capacity int, lenKnown, capKnown bool) {
+	if comp, ok := ast.Unparen(rhs).(*ast.CompositeLit); ok {
+		n := len(comp.Elts)
+		return n, n, true, true
+	}
+	call, ok := ast.Unparen(rhs).(*ast.CallExpr)
+	if !ok || !isMake(info, call) || len(call.Args) < 2 {
+		return 0, 0, false, false
+	}
+	return makeLenCap(info, call)
+}
+
+func isMake(info *types.Info, call *ast.CallExpr) bool {
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	b, ok := info.Uses[id].(*types.Builtin)
+	return ok && b.Name() == "make"
+}
+
+func makeLenCap(info *types.Info, call *ast.CallExpr) (length, capacity int, lenKnown, capKnown bool) {
+	l, lok := constInt(info, call.Args[1])
+	if len(call.Args) < 3 {
+		return l, l, lok, lok
+	}
+	c, cok := constInt(info, call.Args[2])
+	if !lok {
+		return 0, c, false, cok
+	}
+	if !cok {
+		return l, l, true, true
+	}
+	return l, c, true, true
 }
 
 func appendTarget(info *types.Info, st *ast.AssignStmt, call *ast.CallExpr) (*types.Var, bool) {
@@ -177,6 +303,7 @@ func isVarTarget(info *types.Info, e ast.Expr, v *types.Var) bool {
 }
 
 func mentionedAfter(info *types.Info, fn ast.Node, v *types.Var, after token.Pos) bool {
+	writes := lhsIdents(fn)
 	found := false
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if found {
@@ -189,10 +316,33 @@ func mentionedAfter(info *types.Info, fn ast.Node, v *types.Var, after token.Pos
 		if !ok {
 			return true
 		}
-		if id.Pos() > after && info.Uses[id] == v {
+		if id.Pos() > after && info.Uses[id] == v && !writes[id] {
 			found = true
 		}
 		return !found
 	})
 	return found
+}
+
+func lhsIdents(fn ast.Node) map[*ast.Ident]bool {
+	out := map[*ast.Ident]bool{}
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		st, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range st.Lhs {
+			ast.Inspect(lhs, func(m ast.Node) bool {
+				if id, ok := m.(*ast.Ident); ok {
+					out[id] = true
+				}
+				return true
+			})
+		}
+		return true
+	})
+	return out
 }

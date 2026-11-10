@@ -221,6 +221,9 @@ func checkMapIncDec(pass *analysis.Pass, st *ast.IncDecStmt, d mapDef) {
 }
 
 func fieldOf(info *types.Info, e ast.Expr, v *types.Var) bool {
+	if passesPointer(info, e) {
+		return false
+	}
 	k, ok := flow.KeyOf(info, e)
 	return ok && k.Root == v && k.Path != ""
 }

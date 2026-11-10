@@ -87,3 +87,28 @@ func isAppend(info *types.Info, e ast.Expr) (*ast.CallExpr, bool) {
 	}
 	return call, true
 }
+
+func passesPointer(info *types.Info, e ast.Expr) bool {
+	e = ast.Unparen(e)
+	if _, ok := e.(*ast.StarExpr); ok {
+		return true
+	}
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if passesPointer(info, sel.X) {
+		return true
+	}
+	t := info.TypeOf(sel.X)
+	if t == nil {
+		return false
+	}
+	if _, ok := t.(*types.Pointer); ok {
+		return true
+	}
+	if _, ok := t.Underlying().(*types.Pointer); ok {
+		return true
+	}
+	return false
+}

@@ -130,3 +130,13 @@ func RangemutateSilentBlockBreak() []int {
 	}
 	return s
 }
+
+func RangemutateReportedNestedSame() []int {
+	s := []int{1, 2, 3}
+	for _, x := range s {
+		for _, y := range s {
+			s = append(s, y+x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+		}
+	}
+	return s
+}

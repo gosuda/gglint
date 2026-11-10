@@ -100,4 +100,13 @@ func MapcopySilentHeld(m map[string]item, k string) {
 	_ = held
 }
 
+type inner struct{ n int }
+
+type withPtr struct{ p *inner }
+
+func MapcopySilentPtrField(m map[string]withPtr, k string) {
+	v := m[k]
+	v.p.n++
+}
+
 func useItem(v item) {}

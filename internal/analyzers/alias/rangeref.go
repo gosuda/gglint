@@ -110,6 +110,9 @@ func ampNodes(info *types.Info, body *ast.BlockStmt, v *types.Var) []*ast.UnaryE
 }
 
 func ampOf(info *types.Info, u *ast.UnaryExpr, v *types.Var) bool {
+	if passesPointer(info, u.X) {
+		return false
+	}
 	k, ok := flow.KeyOf(info, u.X)
 	return ok && k.Root == v
 }

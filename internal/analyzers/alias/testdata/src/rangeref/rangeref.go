@@ -177,3 +177,15 @@ func RangerefSilentBlank() {
 	for _, _ = range items {
 	}
 }
+
+type innerBox struct{ n int }
+
+type withPtr struct{ p *innerBox }
+
+func RangerefSilentPtrField(items []withPtr) []*int {
+	var out []*int
+	for _, v := range items {
+		out = append(out, &v.p.n)
+	}
+	return out
+}

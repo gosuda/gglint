@@ -60,3 +60,27 @@ func AppendclobberSilentWhole() int {
 	b = append(b, 9)
 	return len(b)
 }
+
+func AppendclobberSilentRealloc() int {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	b = append(b, 9, 10)
+	return a[2]
+}
+
+func AppendclobberSilentReassignedA() int {
+	a := make([]int, 4)
+	b := a[:2]
+	a = make([]int, 4)
+	b = append(b, 9)
+	return a[2]
+}
+
+func AppendclobberSilentWriteOnlyLocal() int {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	b = append(b, 9)
+	a = nil
+	return len(b)
+}
+
