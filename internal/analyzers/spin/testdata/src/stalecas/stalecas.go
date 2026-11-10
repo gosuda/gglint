@@ -515,3 +515,12 @@ func stalecasSilentEmbeddedValueMethod(v *atomic.Value) {
 	}
 	use(old)
 }
+func stalecasSilentMethodValue(v *atomic.Value) {
+	v.Store(staleCell{n: 1})
+	old := staleCell{}
+	bind := old.reload
+	for !v.CompareAndSwap(old, staleCell{n: 2}) {
+		bind(v)
+	}
+	use(old)
+}

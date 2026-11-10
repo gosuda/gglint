@@ -81,18 +81,14 @@ func collectStaleNode(info *types.Info, fc *staleFn, n ast.Node) {
 		fc.labels = append(fc.labels, t)
 	case *ast.UnaryExpr:
 		noteAddr(info, fc, t)
-	case *ast.CallExpr:
+	case *ast.SelectorExpr:
 		noteMethodAddr(info, fc, t)
 	}
 }
 
-func noteMethodAddr(info *types.Info, fc *staleFn, call *ast.CallExpr) {
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok {
-		return
-	}
+func noteMethodAddr(info *types.Info, fc *staleFn, sel *ast.SelectorExpr) {
 	chosen := info.Selections[sel]
-	if chosen == nil || hopsPointer(chosen) || !hasPtrReceiver(chosen) {
+	if chosen == nil || chosen.Kind() != types.MethodVal || hopsPointer(chosen) || !hasPtrReceiver(chosen) {
 		return
 	}
 	recv := ast.Unparen(sel.X)
