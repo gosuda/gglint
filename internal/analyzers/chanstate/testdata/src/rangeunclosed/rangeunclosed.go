@@ -154,3 +154,14 @@ OuterRange:
 	}
 	return 0
 }
+
+func rangeunclosedReportedContinueSelf() {
+	ch := make(chan int)
+	go func() { ch <- 1 }()
+LRange:
+	for v := range ch { // want `no code closes ch, so this range never ends: close it when the senders finish`
+		if v > 0 {
+			continue LRange
+		}
+	}
+}

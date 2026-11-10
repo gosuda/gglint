@@ -93,18 +93,41 @@ func insideComm(cc *ast.CommClause, n ast.Node) bool {
 	return cc.Comm != nil && cc.Comm.Pos() <= n.Pos() && n.End() <= cc.Comm.End()
 }
 
+func unwrapLabeled(s ast.Stmt) ast.Stmt {
+	for {
+		l, ok := s.(*ast.LabeledStmt)
+		if !ok {
+			return s
+		}
+		s = l.Stmt
+	}
+}
+
+func indexOfLoop(l []ast.Stmt, target ast.Stmt) int {
+	for i, c := range l {
+		if c == target {
+			return i
+		}
+		if unwrapLabeled(c) == target {
+			return i
+		}
+	}
+	return -1
+}
+
 func straightRecvs(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) (int64, bool) {
 	list := enclosingList(fn, loop)
 	if list == nil {
 		return 0, false
 	}
-	start := sliceIndex(list, loop)
+	start := indexOfLoop(list, loop)
 	if start < 0 {
 		return 0, false
 	}
+	rep := list[start]
 	var count int64
 	for _, s := range list[start+1:] {
-		stop, fail := stepAfterLoop(info, fn, loop, s, k, &count)
+		stop, fail := stepAfterLoop(info, fn, rep, s, k, &count)
 		if fail {
 			return 0, false
 		}
@@ -140,24 +163,172 @@ func stepAfterLoop(info *types.Info, fn ast.Node, loop, s ast.Stmt, k flow.Key, 
 func drainLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
 	switch s := s.(type) {
 	case *ast.ForStmt, *ast.RangeStmt:
-		straight := drainBodyStraight(info, s, k)
-		if countLoopRecvs(info, s, k) != straight {
-			return 0, false
-		}
-		if straight == 0 {
-			return 0, true
-		}
-		trip, ok := loopTrip(info, s)
-		if !ok {
-			return 0, false
-		}
-		return trip * straight, true
+		return drainCountedLoop(info, s, k)
 	case *ast.IfStmt:
-		return stmtRecvs(info, s.Init, k) + exprRecvs(info, s.Cond, k), true
+		return drainIfRecvs(info, s, k)
 	case *ast.SwitchStmt:
-		return stmtRecvs(info, s.Init, k) + exprRecvs(info, s.Tag, k), true
+		return stmtRecvs(info, s.Init, k) + uncondRecvs(info, s.Tag, k), true
 	}
 	return 0, true
+}
+
+func drainCountedLoop(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
+	straight := drainBodyStraight(info, s, k)
+	if countLoopRecvs(info, s, k) != straight {
+		return 0, false
+	}
+	if straight == 0 {
+		return 0, true
+	}
+	trip, ok := loopTrip(info, s)
+	if !ok {
+		return 0, false
+	}
+	return trip * straight, true
+}
+
+func drainIfRecvs(info *types.Info, s *ast.IfStmt, k flow.Key) (int64, bool) {
+	header := stmtRecvs(info, s.Init, k) + uncondRecvs(info, s.Cond, k)
+	if s.Else == nil {
+		return header, true
+	}
+	bodyCount, ok := blockStraightRecvs(info, s.Body, k)
+	if !ok {
+		return 0, false
+	}
+	elseCount, ok := elseStraightRecvs(info, s.Else, k)
+	if !ok {
+		return 0, false
+	}
+	if bodyCount != elseCount {
+		return 0, false
+	}
+	return header + bodyCount, true
+}
+
+func blockStraightRecvs(info *types.Info, body *ast.BlockStmt, k flow.Key) (int64, bool) {
+	if body == nil {
+		return 0, true
+	}
+	var n int64
+	for _, st := range body.List {
+		if !isStraightStmt(st) {
+			return 0, false
+		}
+		n += recvCount(info, st, k)
+	}
+	return n, true
+}
+
+func elseStraightRecvs(info *types.Info, elseStmt ast.Stmt, k flow.Key) (int64, bool) {
+	body, ok := elseStmt.(*ast.BlockStmt)
+	if !ok {
+		return 0, false
+	}
+	return blockStraightRecvs(info, body, k)
+}
+
+func uncondRecvs(info *types.Info, x ast.Expr, k flow.Key) int64 {
+	if x == nil {
+		return 0
+	}
+	return countUncond(info, ast.Unparen(x), k)
+}
+
+func countUncond(info *types.Info, x ast.Expr, k flow.Key) int64 {
+	switch x := x.(type) {
+	case nil:
+		return 0
+	case *ast.BinaryExpr:
+		return countUncondBinary(info, x, k)
+	case *ast.UnaryExpr:
+		return countUncondUnary(info, x, k)
+	case *ast.CallExpr:
+		return countUncondCall(info, x, k)
+	default:
+		return countUncondCompound(info, x, k)
+	}
+}
+
+func countUncondBinary(info *types.Info, x *ast.BinaryExpr, k flow.Key) int64 {
+	if x.Op == token.LAND || x.Op == token.LOR {
+		return countUncond(info, ast.Unparen(x.X), k)
+	}
+	return countUncond(info, ast.Unparen(x.X), k) + countUncond(info, ast.Unparen(x.Y), k)
+}
+
+func countUncondUnary(info *types.Info, x *ast.UnaryExpr, k flow.Key) int64 {
+	if x.Op == token.ARROW {
+		if kk, ok := flow.KeyOf(info, x.X); ok && kk == k {
+			return 1
+		}
+		return 0
+	}
+	return countUncond(info, ast.Unparen(x.X), k)
+}
+
+func countUncondCall(info *types.Info, x *ast.CallExpr, k flow.Key) int64 {
+	n := countUncond(info, ast.Unparen(x.Fun), k)
+	for _, a := range x.Args {
+		n += countUncond(info, ast.Unparen(a), k)
+	}
+	return n
+}
+
+func countUncondCompound(info *types.Info, x ast.Expr, k flow.Key) int64 {
+	switch x := x.(type) {
+	case *ast.StarExpr:
+		return countUncond(info, ast.Unparen(x.X), k)
+	case *ast.SelectorExpr:
+		return countUncond(info, ast.Unparen(x.X), k)
+	case *ast.TypeAssertExpr:
+		return countUncond(info, ast.Unparen(x.X), k)
+	case *ast.Ellipsis:
+		if x.Elt == nil {
+			return 0
+		}
+		return countUncond(info, ast.Unparen(x.Elt), k)
+	case *ast.FuncLit, *ast.Ident, *ast.BasicLit:
+		return 0
+	default:
+		return countUncondIndex(info, x, k)
+	}
+}
+
+func countUncondIndex(info *types.Info, x ast.Expr, k flow.Key) int64 {
+	switch x := x.(type) {
+	case *ast.IndexExpr:
+		return countUncond(info, ast.Unparen(x.X), k) + countUncond(info, ast.Unparen(x.Index), k)
+	case *ast.IndexListExpr:
+		n := countUncond(info, ast.Unparen(x.X), k)
+		for _, ix := range x.Indices {
+			n += countUncond(info, ast.Unparen(ix), k)
+		}
+		return n
+	case *ast.SliceExpr:
+		return countUncondSlice(info, x, k)
+	case *ast.CompositeLit:
+		var n int64
+		for _, e := range x.Elts {
+			n += countUncond(info, ast.Unparen(e), k)
+		}
+		return n
+	case *ast.KeyValueExpr:
+		return countUncond(info, ast.Unparen(x.Key), k) + countUncond(info, ast.Unparen(x.Value), k)
+	case *ast.ParenExpr:
+		return countUncond(info, ast.Unparen(x.X), k)
+	}
+	return exprRecvs(info, x, k)
+}
+
+func countUncondSlice(info *types.Info, x *ast.SliceExpr, k flow.Key) int64 {
+	n := countUncond(info, ast.Unparen(x.X), k)
+	for _, bound := range []ast.Expr{x.Low, x.High, x.Max} {
+		if bound != nil {
+			n += countUncond(info, ast.Unparen(bound), k)
+		}
+	}
+	return n
 }
 
 func stmtRecvs(info *types.Info, s ast.Stmt, k flow.Key) int64 {
@@ -210,7 +381,7 @@ func enclosingList(fn ast.Node, target ast.Stmt) []ast.Stmt {
 	if body == nil {
 		return nil
 	}
-	if sliceIndex(body.List, target) >= 0 {
+	if indexOfLoop(body.List, target) >= 0 {
 		return body.List
 	}
 	return searchEnclosing(body, target)
@@ -246,7 +417,7 @@ func listForNode(n ast.Node, target ast.Stmt) []ast.Stmt {
 }
 
 func listContaining(list []ast.Stmt, target ast.Stmt) []ast.Stmt {
-	if sliceIndex(list, target) >= 0 {
+	if indexOfLoop(list, target) >= 0 {
 		return list
 	}
 	return nil
@@ -465,15 +636,6 @@ func loopsIdent(info *types.Info, n ast.Node, id *ast.Ident) bool {
 		return !found
 	})
 	return found
-}
-
-func sliceIndex(l []ast.Stmt, s ast.Stmt) int {
-	for i, c := range l {
-		if c == s {
-			return i
-		}
-	}
-	return -1
 }
 
 func underSelect(fn, target ast.Node) bool {

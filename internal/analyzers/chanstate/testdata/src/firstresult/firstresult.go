@@ -287,3 +287,45 @@ func firstresultSilentIfInit() int {
 	}
 	return 0
 }
+
+func firstresultReportedLabeled() int {
+	ch := make(chan int)
+	if false {
+		goto LFan
+	}
+LFan:
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }() // want `3 goroutines send on ch and 1 values are received with capacity 0`
+	}
+	return <-ch
+}
+
+func firstresultReportedShortCircuit(ok bool) int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }() // want `3 goroutines send on ch and 2 values are received with capacity 0`
+	}
+	<-ch
+	<-ch
+	if ok && <-ch == 0 {
+		return 1
+	}
+	return 0
+}
+
+func firstresultSilentIfElseBalanced(c bool) int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }()
+	}
+	if c {
+		<-ch
+		<-ch
+		<-ch
+	} else {
+		<-ch
+		<-ch
+		<-ch
+	}
+	return 0
+}

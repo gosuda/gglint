@@ -170,7 +170,7 @@ func rangeKeyClosed(info *types.Info, fn ast.Node, r *ast.RangeStmt, k flow.Key)
 	if handsOn(info, fn, k) {
 		return true
 	}
-	return loopExits(r.Body.List)
+	return loopExits(fn, r)
 }
 
 func runOrphansend(pass *analysis.Pass) (any, error) {
