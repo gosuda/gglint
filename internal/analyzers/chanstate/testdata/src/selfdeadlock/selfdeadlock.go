@@ -82,3 +82,22 @@ func selfdeadlockSilentDefineReuse(src chan int) int {
 	ch <- 1
 	return <-ch
 }
+
+func selfdeadlockSilentAnsweredLit() {
+	ch := make(chan int)
+	go func() { v := <-ch; ch <- v + 1 }()
+	ch <- 1
+	<-ch
+}
+
+func selfdeadlockSilentSelectPair() {
+	ch := make(chan int)
+	select {
+	case ch <- 1:
+	default:
+	}
+	select {
+	case <-ch:
+	default:
+	}
+}

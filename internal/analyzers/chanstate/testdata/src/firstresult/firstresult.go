@@ -719,3 +719,10 @@ Top:
 	}
 	return 0
 }
+
+func firstresultSilentBufferedMakeInLoop() {
+	for i := 0; i < 3; i++ {
+		out := make(chan int, 1)
+		go func() { out <- i }()
+	}
+}
