@@ -65,14 +65,6 @@ func joinState(a, b ostate) ostate {
 	return stUnknown
 }
 
-func isDeferGo(n ast.Node) bool {
-	switch n.(type) {
-	case *ast.DeferStmt, *ast.GoStmt, *ast.FuncLit:
-		return true
-	}
-	return false
-}
-
 func runUseafterclose(pass *analysis.Pass) (any, error) {
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
 		closeFunc(pass, cur.Node())
@@ -103,7 +95,7 @@ func closeFunc(pass *analysis.Pass, fn ast.Node) {
 		if !hasCloseResult(v.Type()) {
 			continue
 		}
-		closeVar(pass, g, v)
+		closeVar(pass, fn, g, v)
 	}
 }
 
@@ -113,7 +105,7 @@ func putFunc(pass *analysis.Pass, fn ast.Node) {
 		return
 	}
 	for _, v := range localsOf(pass, fn) {
-		putVar(pass, g, v)
+		putVar(pass, fn, g, v)
 	}
 }
 
@@ -123,74 +115,65 @@ func freeFunc(pass *analysis.Pass, fn ast.Node) {
 		return
 	}
 	for _, v := range localsOf(pass, fn) {
-		freeVar(pass, g, v)
+		freeVar(pass, fn, g, v)
 	}
 }
 
-func closeVar(pass *analysis.Pass, g *flow.Graph, v *types.Var) {
+func closeVar(pass *analysis.Pass, fn ast.Node, g *flow.Graph, v *types.Var) {
 	flow.Forward(g, stLive,
-		func(n ast.Node, s ostate) ostate { return closeTransfer(pass, n, v, s) },
+		func(n ast.Node, s ostate) ostate { return closeTransfer(pass, fn, n, v, s) },
 		joinState,
 		func(n ast.Node, s ostate) { closeVisit(pass, n, v, s) })
 }
 
-func putVar(pass *analysis.Pass, g *flow.Graph, v *types.Var) {
+func putVar(pass *analysis.Pass, fn ast.Node, g *flow.Graph, v *types.Var) {
 	flow.Forward(g, stLive,
-		func(n ast.Node, s ostate) ostate { return putTransfer(pass, n, v, s) },
+		func(n ast.Node, s ostate) ostate { return putTransfer(pass, fn, n, v, s) },
 		joinState,
-		func(n ast.Node, s ostate) { putVisit(pass, n, v, s) })
+		func(n ast.Node, s ostate) { putVisit(pass, fn, n, v, s) })
 }
 
-func freeVar(pass *analysis.Pass, g *flow.Graph, v *types.Var) {
+func freeVar(pass *analysis.Pass, fn ast.Node, g *flow.Graph, v *types.Var) {
 	flow.Forward(g, stLive,
-		func(n ast.Node, s ostate) ostate { return freeTransfer(pass, n, v, s) },
+		func(n ast.Node, s ostate) ostate { return freeTransfer(pass, fn, n, v, s) },
 		joinState,
-		func(n ast.Node, s ostate) { freeVisit(pass, n, v, s) })
+		func(n ast.Node, s ostate) { freeVisit(pass, fn, n, v, s) })
 }
 
-func closeTransfer(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) ostate {
-	if isDeferGo(n) {
-		return s
-	}
+func closeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) ostate {
 	if hasCloseRelease(pass, n, v) {
 		return stReleased
 	}
-	if assignsVar(pass, n, v) {
+	if assignsVar(pass, fn, n, v) {
 		return stUnknown
 	}
-	if escapesVar(pass, n, v) {
+	if escapesVar(pass, fn, n, v) {
 		return stUnknown
 	}
 	return s
 }
 
-func putTransfer(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) ostate {
-	if isDeferGo(n) {
-		return s
-	}
+func putTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) ostate {
 	if hasPutRelease(pass, n, v) {
 		return stReleased
 	}
-	if assignsVar(pass, n, v) {
+	if assignsVar(pass, fn, n, v) {
 		return stUnknown
 	}
-	if escapesVar(pass, n, v) {
+	if escapesVar(pass, fn, n, v) {
 		return stUnknown
 	}
 	return s
 }
 
-func freeTransfer(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) ostate {
-	if isDeferGo(n) {
-		return s
-	}
+func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) ostate {
 	if hasFreeRelease(pass, n, v) {
 		return stReleased
 	}
-	if assignsVar(pass, n, v) {
+	if assignsVar(pass, fn, n, v) {
 		return stUnknown
 	}
-	if escapesVar(pass, n, v) {
+	if escapesVar(pass, fn, n, v) {
 		return stUnknown
 	}
 	return s
@@ -201,18 +184,28 @@ func closeVisit(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) {
 		return
 	}
 	for _, c := range methodCallsOn(pass, n, v) {
-		if callName(c) == "Close" {
+		if !closeFailsOn(c) {
 			continue
 		}
 		pass.Reportf(c.Pos(), "%s is closed on every path to this call, so the call fails: move Close after the last use", v.Name())
 	}
 }
 
-func putVisit(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) {
+func putVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
 	if s != stReleased {
 		return
 	}
-	if assignsVar(pass, n, v) {
+	if nilAssign(pass, n, v) {
+		return
+	}
+	if hasPutRelease(pass, n, v) {
+		pass.Reportf(mentionPos(pass, n, v), "%s was returned to the pool, and another goroutine may own it now: call Put after the last use", v.Name())
+		return
+	}
+	if escapesVar(pass, fn, n, v) {
+		return
+	}
+	if redefinesVar(pass, fn, n, v) {
 		return
 	}
 	if !mentionsVar(pass, n, v) {
@@ -221,17 +214,39 @@ func putVisit(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) {
 	pass.Reportf(mentionPos(pass, n, v), "%s was returned to the pool, and another goroutine may own it now: call Put after the last use", v.Name())
 }
 
-func freeVisit(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) {
+func freeVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
 	if s != stReleased {
 		return
 	}
-	if assignsVar(pass, n, v) {
+	if nilAssign(pass, n, v) {
+		return
+	}
+	if hasFreeRelease(pass, n, v) {
+		pass.Reportf(mentionPos(pass, n, v), "%s is used after it was freed: set it to nil after the free and do not use it again", v.Name())
+		return
+	}
+	if escapesVar(pass, fn, n, v) {
+		return
+	}
+	if redefinesVar(pass, fn, n, v) {
 		return
 	}
 	if !mentionsVar(pass, n, v) {
 		return
 	}
 	pass.Reportf(mentionPos(pass, n, v), "%s is used after it was freed: set it to nil after the free and do not use it again", v.Name())
+}
+
+func nilAssign(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		return false
+	}
+	id, ok := ast.Unparen(as.Lhs[0]).(*ast.Ident)
+	if !ok || pass.TypesInfo.Uses[id] != v {
+		return false
+	}
+	return pass.TypesInfo.Types[as.Rhs[0]].IsNil()
 }
 
 func localsOf(pass *analysis.Pass, fn ast.Node) []*types.Var {
@@ -252,6 +267,9 @@ func localsOf(pass *analysis.Pass, fn ast.Node) []*types.Var {
 			return true
 		}
 		seen[v] = true
+		if v.IsField() {
+			return true
+		}
 		if flow.IsLocal(pass.TypesInfo, fn, v) {
 			out = append(out, v)
 		}

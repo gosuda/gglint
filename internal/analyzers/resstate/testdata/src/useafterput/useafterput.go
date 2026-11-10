@@ -30,3 +30,73 @@ func useafterputSilentInc() {
 	n++
 	_ = n
 }
+
+type putHolder struct {
+	data []byte
+	n    int
+}
+
+func useafterputSilentFieldArg() {
+	b := &putHolder{}
+	resPool.Put(b.data)
+	b.n = 0
+}
+
+func reopenPut(p **resBuf) {
+	*p = &resBuf{}
+}
+
+func useafterputSilentGoAddr() {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	go reopenPut(&b)
+	_ = b.n
+}
+
+func useafterputSilentRangeAssign(ch chan *resBuf) {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	for b = range ch {
+		_ = b.n
+	}
+}
+
+func useafterputSilentFieldObj() int {
+	type holder struct {
+		b []byte
+	}
+	x := holder{b: make([]byte, 4)}
+	y := holder{b: make([]byte, 4)}
+	resPool.Put(x.b)
+	return len(y.b)
+}
+
+func useafterputReportedLoop() {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	for range 2 {
+		_ = b.n // want "was returned to the pool"
+	}
+}
+
+func useafterputReportedAfterCopy() {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	n := b.n // want "was returned to the pool"
+	_ = b.n  // want "was returned to the pool"
+	_ = n
+}
+
+func useafterputReportedReassign() {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	b = b // want "was returned to the pool"
+	_ = b
+}
+
+func useafterputSilentReassignGet() {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	b = resPool.Get().(*resBuf)
+	_ = b.n
+}

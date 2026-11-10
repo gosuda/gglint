@@ -93,3 +93,100 @@ func viewescapeSilentSpread(sc *bufio.Scanner, buf []byte) []byte {
 	}
 	return buf
 }
+
+func viewescapeSilentLoopLocal(sc *bufio.Scanner) int {
+	n := 0
+	for sc.Scan() {
+		var b []byte
+		b = sc.Bytes()
+		n += len(b)
+	}
+	return n
+}
+
+func viewescapeSilentLoopArray(sc *bufio.Scanner) int {
+	n := 0
+	for sc.Scan() {
+		var row [1][]byte
+		row[0] = sc.Bytes()
+		n += len(row[0])
+	}
+	return n
+}
+
+func viewescapeSilentReassigned(sc *bufio.Scanner) [][]byte {
+	var keep [][]byte
+	for sc.Scan() {
+		b := sc.Bytes()
+		b = bytes.Clone(b)
+		keep = append(keep, b)
+	}
+	return keep
+}
+
+func viewescapeReportedNested(sc *bufio.Scanner) [][]byte {
+	var lines [][]byte
+	for sc.Scan() {
+		for sc.Scan() {
+			lines = append(lines, sc.Bytes()) // want "points into the buffer of"
+		}
+	}
+	return lines
+}
+
+func viewescapeSilentPostOnly(buf *bytes.Buffer, out [][]byte) [][]byte {
+	for i := 0; i < 2; _, _ = buf.Write(nil) {
+		out = append(out, buf.Bytes())
+		i++
+	}
+	return out
+}
+
+func viewescapeReportedPreLoop(sc *bufio.Scanner) [][]byte {
+	var out [][]byte
+	line := sc.Bytes()
+	for sc.Scan() {
+		out = append(out, line) // want "points into the buffer of"
+	}
+	return out
+}
+
+func viewescapeReportedMultiTarget(r *bufio.Reader, h *viewHolder) {
+	for i := 0; i < 2; i++ {
+		h.b, _ = r.Peek(1) // want "points into the buffer of"
+		_, _ = r.Discard(1)
+	}
+}
+
+func viewescapeReportedBufferRead(buf *bytes.Buffer, out [][]byte) [][]byte {
+	for buf.Len() > 0 {
+		out = append(out, buf.Bytes()) // want "points into the buffer of"
+		_, _ = buf.Read(make([]byte, 1))
+	}
+	return out
+}
+
+func viewescapeReportedReaderReset(r *bufio.Reader, rd *bytes.Buffer) [][]byte {
+	var out [][]byte
+	p, _ := r.Peek(1)
+	for i := 0; i < 2; i++ {
+		out = append(out, p) // want "points into the buffer of"
+		r.Reset(rd)
+	}
+	return out
+}
+
+func viewescapeSilentSelfInvalid(b *bufio.Reader) []byte {
+	var frag []byte
+	for {
+		var e error
+		frag, e = b.ReadSlice('\n')
+		if e == nil {
+			break
+		}
+		if e != bufio.ErrBufferFull {
+			break
+		}
+	}
+	return frag
+}
