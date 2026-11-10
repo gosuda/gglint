@@ -84,3 +84,13 @@ func AppendclobberSilentWriteOnlyLocal() int {
 	return len(b)
 }
 
+func AppendclobberSilentUnreachable(cond bool) int {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	if cond {
+		b = append(b, 9)
+		return len(b)
+	}
+	return a[2]
+}
+

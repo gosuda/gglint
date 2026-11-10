@@ -293,26 +293,59 @@ func writeThrough(info *types.Info, fn ast.Node, tk flow.Key, u *ast.UnaryExpr) 
 	if body == nil {
 		return false
 	}
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		st, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		for _, lhs := range st.Lhs {
-			if matchesWrite(info, lhs, tk, u) {
-				found = true
-			}
-		}
-		return !found
-	})
-	return found
+	scan := throughScan{info: info, target: tk, stop: u}
+	ast.Inspect(body, scan.visit)
+	return scan.found
+}
+
+type throughScan struct {
+	info   *types.Info
+	target flow.Key
+	stop   *ast.UnaryExpr
+	killed bool
+	found  bool
+}
+
+func (s *throughScan) visit(n ast.Node) bool {
+	if s.found {
+		return false
+	}
+	if _, ok := n.(*ast.FuncLit); ok {
+		return false
+	}
+	st, ok := n.(*ast.AssignStmt)
+	if !ok {
+		return true
+	}
+	s.statement(st)
+	return !s.found
+}
+
+func (s *throughScan) statement(st *ast.AssignStmt) {
+	for _, lhs := range st.Lhs {
+		s.assign(lhs)
+	}
+}
+
+func (s *throughScan) assign(lhs ast.Expr) {
+	if lhs.Pos() <= s.stop.End() {
+		return
+	}
+	if isWholeTarget(s.info, lhs, s.target) {
+		s.killed = true
+		return
+	}
+	if !s.killed && matchesWrite(s.info, lhs, s.target, s.stop) {
+		s.found = true
+	}
+}
+
+func isWholeTarget(info *types.Info, lhs ast.Expr, tk flow.Key) bool {
+	if _, ok := ast.Unparen(lhs).(*ast.StarExpr); ok {
+		return false
+	}
+	wk, ok := flow.KeyOf(info, lhs)
+	return ok && wk == tk
 }
 
 func matchesWrite(info *types.Info, lhs ast.Expr, tk flow.Key, u *ast.UnaryExpr) bool {

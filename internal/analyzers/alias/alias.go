@@ -5,6 +5,7 @@ import (
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/passes/ctrlflow"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 
 	"github.com/gosuda/gglint/internal/flow"
@@ -19,7 +20,7 @@ func Analyzers() []*analysis.Analyzer {
 var appendclobber = &analysis.Analyzer{
 	Name:     "appendclobber",
 	Doc:      "reports appends that clobber a slice read later; covers only appendclobber, mapcopy, rangemutate, rangeref",
-	Requires: []*analysis.Analyzer{inspect.Analyzer},
+	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runAppendclobber,
 }
 

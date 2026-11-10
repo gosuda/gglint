@@ -189,3 +189,13 @@ func RangerefSilentPtrField(items []withPtr) []*int {
 	}
 	return out
 }
+
+func RangerefSilentReassigned(items []item) *item {
+	var p *item
+	for _, v := range items {
+		p = &v
+	}
+	p = &items[0]
+	p.n = 1
+	return p
+}

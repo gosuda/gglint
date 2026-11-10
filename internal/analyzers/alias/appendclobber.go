@@ -125,7 +125,7 @@ func checkAppendAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, def
 	if assignedBetween(pass.TypesInfo, fn, def.a, def.pos, st.Pos()) {
 		return
 	}
-	if !mentionedAfter(pass.TypesInfo, fn, def.a, st.End()) {
+	if !mentionedAfter(pass, fn, def.a, st, st.End()) {
 		return
 	}
 	pass.Reportf(call.Pos(), "%s shares its backing array with %s, so this append overwrites elements of %s that are read later: slice it with three indexes to cap its capacity", b.Name(), def.a.Name(), def.a.Name())
@@ -302,7 +302,11 @@ func isVarTarget(info *types.Info, e ast.Expr, v *types.Var) bool {
 	return ok && got == v
 }
 
-func mentionedAfter(info *types.Info, fn ast.Node, v *types.Var, after token.Pos) bool {
+func mentionedAfter(pass *analysis.Pass, fn ast.Node, v *types.Var, from ast.Node, after token.Pos) bool {
+	g := flow.NewGraph(pass, fn)
+	if g == nil {
+		return false
+	}
 	writes := lhsIdents(fn)
 	found := false
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
@@ -316,12 +320,16 @@ func mentionedAfter(info *types.Info, fn ast.Node, v *types.Var, after token.Pos
 		if !ok {
 			return true
 		}
-		if id.Pos() > after && info.Uses[id] == v && !writes[id] {
+		if isReadMention(pass.TypesInfo, writes, id, v, after) && g.Reaches(from, id, nil) {
 			found = true
 		}
 		return !found
 	})
 	return found
+}
+
+func isReadMention(info *types.Info, writes map[*ast.Ident]bool, id *ast.Ident, v *types.Var, after token.Pos) bool {
+	return id.Pos() > after && info.Uses[id] == v && !writes[id]
 }
 
 func lhsIdents(fn ast.Node) map[*ast.Ident]bool {
