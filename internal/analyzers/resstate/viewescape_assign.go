@@ -44,25 +44,25 @@ func outerIdent(pass *analysis.Pass, loop ast.Node, lhs ast.Expr) (*types.Var, b
 }
 
 func outerAssignLive(pass *analysis.Pass, ctx loopCtx, sink *ast.AssignStmt, v *types.Var, recvKey flow.Key, viewMethod string) bool {
-	g := flow.NewGraph(pass, ctx.fn)
+	g := viewCachedGraph(pass, ctx)
 	if g == nil {
 		return false
 	}
-	calls := invalidCalls(pass, ctx.fn, recvKey, viewMethod)
+	calls := viewCachedInvalid(pass, ctx, recvKey, viewMethod)
 	if len(calls) == 0 {
 		return false
 	}
 	avoid := func(n ast.Node) bool {
-		return assignsVar(pass, ctx.fn, n, v)
+		return viewAssignsFast(pass, ctx, n, v)
 	}
 	for _, k := range calls {
-		if callInAssignToVar(pass, ctx.fn, k, v) {
+		if viewCallInAssign(pass, ctx, k, v) {
 			continue
 		}
 		if !g.Reaches(sink, k, avoid) {
 			continue
 		}
-		if hasLiveRead(pass, ctx.fn, g, k, v, avoid) {
+		if hasLiveRead(pass, ctx, g, k, v, avoid) {
 			return true
 		}
 	}
@@ -99,51 +99,27 @@ func invalidCallMatch(pass *analysis.Pass, call *ast.CallExpr, recvKey flow.Key,
 	return true
 }
 
-func callInAssignToVar(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, v *types.Var) bool {
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
-			return false
-		}
-		as, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		if !assignsVar(pass, fn, as, v) {
-			return true
-		}
-		if as.Pos() <= call.Pos() && call.End() <= as.End() {
-			found = true
-		}
-		return !found
-	})
-	return found
-}
-
-func hasLiveRead(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k ast.Node, v *types.Var, avoid func(ast.Node) bool) bool {
-	if liveReturn(pass, fn, g, k, v, avoid) {
+func hasLiveRead(pass *analysis.Pass, ctx loopCtx, g *flow.Graph, k ast.Node, v *types.Var, avoid func(ast.Node) bool) bool {
+	if liveReturn(pass, ctx, g, k, v, avoid) {
 		return true
 	}
-	return liveIdent(pass, fn, g, k, v, avoid)
+	return liveIdent(pass, ctx, g, k, v, avoid)
 }
 
-func liveReturn(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k ast.Node, v *types.Var, avoid func(ast.Node) bool) bool {
+func liveReturn(pass *analysis.Pass, ctx loopCtx, g *flow.Graph, k ast.Node, v *types.Var, avoid func(ast.Node) bool) bool {
 	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
+	ast.Inspect(ctx.fn, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != ctx.fn {
 			return false
 		}
 		ret, ok := n.(*ast.ReturnStmt)
 		if !ok {
 			return true
 		}
-		if returnReads(pass, ret, v, fn) && g.Reaches(k, ret, avoid) {
+		if returnReads(pass, ret, v, ctx.fn) && g.Reaches(k, ret, avoid) {
 			found = true
 		}
 		return !found
@@ -163,15 +139,15 @@ func returnReads(pass *analysis.Pass, ret *ast.ReturnStmt, v *types.Var, fn ast.
 	return false
 }
 
-func liveIdent(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k ast.Node, v *types.Var, avoid func(ast.Node) bool) bool {
-	skip := assignLHSIdents(pass, fn, v)
-	discard := discardRHSIdents(pass, fn, v)
+func liveIdent(pass *analysis.Pass, ctx loopCtx, g *flow.Graph, k ast.Node, v *types.Var, avoid func(ast.Node) bool) bool {
+	skip := viewCachedLHS(pass, ctx, v)
+	discard := viewCachedDiscard(pass, ctx, v)
 	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
+	ast.Inspect(ctx.fn, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != ctx.fn {
 			return false
 		}
 		id, ok := n.(*ast.Ident)

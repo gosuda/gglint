@@ -39,6 +39,7 @@ func viewFunc(pass *analysis.Pass, fn ast.Node) {
 	seen := map[token.Pos]bool{}
 	var views map[*types.Var]viewSrc
 	ready := false
+	cache := newViewCache()
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if n != fn {
 			if _, ok := n.(*ast.FuncLit); ok {
@@ -53,7 +54,7 @@ func viewFunc(pass *analysis.Pass, fn ast.Node) {
 			views = viewDefs(pass, fn)
 			ready = true
 		}
-		viewLoop(pass, fn, n, loop, seen, views)
+		viewLoop(pass, loopCtx{fn: fn, loop: n, body: loop, cache: cache}, seen, views)
 		return true
 	})
 }
@@ -74,12 +75,11 @@ type viewSink struct {
 	assign *ast.AssignStmt
 }
 
-func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]bool, views map[*types.Var]viewSrc) {
-	invalid := invalidReceivers(pass, loop)
+func viewLoop(pass *analysis.Pass, ctx loopCtx, seen map[token.Pos]bool, views map[*types.Var]viewSrc) {
+	invalid := invalidReceivers(pass, ctx.loop)
 	if len(invalid) == 0 {
 		return
 	}
-	ctx := loopCtx{fn: fn, loop: loop, body: body}
 	for _, s := range sinkExprs(pass, ctx) {
 		v, recvExpr, recvKey, viewMethod, ready := sinkReady(pass, ctx, views, s)
 		if !ready {
@@ -140,9 +140,9 @@ func viewSilent(pass *analysis.Pass, ctx loopCtx, sink viewSink, recvKey flow.Ke
 		if v, ok := outerViewVar(pass, ctx.loop, sink.assign, sink.expr); ok {
 			return !outerAssignLive(pass, ctx, sink.assign, v, recvKey, viewMethod)
 		}
-		return !invalidAfter(pass, ctx.fn, sink.assign, recvKey, viewMethod)
+		return !invalidAfter(pass, ctx, sink.assign, recvKey, viewMethod)
 	}
-	return !invalidAfter(pass, ctx.fn, sink.expr, recvKey, viewMethod)
+	return !invalidAfter(pass, ctx, sink.expr, recvKey, viewMethod)
 }
 
 func returnSilent(pass *analysis.Pass, fn ast.Node, recvKey flow.Key) bool {
@@ -150,12 +150,12 @@ func returnSilent(pass *analysis.Pass, fn ast.Node, recvKey flow.Key) bool {
 	return !pooled
 }
 
-func invalidAfter(pass *analysis.Pass, fn, from ast.Node, recvKey flow.Key, viewMethod string) bool {
-	g := flow.NewGraph(pass, fn)
+func invalidAfter(pass *analysis.Pass, ctx loopCtx, from ast.Node, recvKey flow.Key, viewMethod string) bool {
+	g := viewCachedGraph(pass, ctx)
 	if g == nil {
 		return false
 	}
-	for _, k := range invalidCalls(pass, fn, recvKey, viewMethod) {
+	for _, k := range viewCachedInvalid(pass, ctx, recvKey, viewMethod) {
 		if g.Reaches(from, k, nil) {
 			return true
 		}
@@ -494,9 +494,163 @@ func isViewSourceType(t types.Type, name string) bool {
 }
 
 type loopCtx struct {
-	fn   ast.Node
-	loop ast.Node
-	body ast.Node
+	fn    ast.Node
+	loop  ast.Node
+	body  ast.Node
+	cache *viewCache
+}
+
+type invalidKey struct {
+	recv   flow.Key
+	method string
+}
+
+type viewCache struct {
+	graph       *flow.Graph
+	graphDone   bool
+	invalid     map[invalidKey][]*ast.CallExpr
+	rangeSet    map[*ast.Ident]bool
+	rangeDone   bool
+	assignLists map[*types.Var][]*ast.AssignStmt
+	lhsSets     map[*types.Var]map[*ast.Ident]bool
+	discardSets map[*types.Var]map[*ast.Ident]bool
+}
+
+func newViewCache() *viewCache {
+	return &viewCache{
+		invalid:     map[invalidKey][]*ast.CallExpr{},
+		assignLists: map[*types.Var][]*ast.AssignStmt{},
+		lhsSets:     map[*types.Var]map[*ast.Ident]bool{},
+		discardSets: map[*types.Var]map[*ast.Ident]bool{},
+	}
+}
+
+func viewCachedGraph(pass *analysis.Pass, ctx loopCtx) *flow.Graph {
+	if ctx.cache == nil {
+		return flow.NewGraph(pass, ctx.fn)
+	}
+	if ctx.cache.graphDone {
+		return ctx.cache.graph
+	}
+	ctx.cache.graph = flow.NewGraph(pass, ctx.fn)
+	ctx.cache.graphDone = true
+	return ctx.cache.graph
+}
+
+func viewCachedInvalid(pass *analysis.Pass, ctx loopCtx, recvKey flow.Key, viewMethod string) []*ast.CallExpr {
+	if ctx.cache == nil {
+		return invalidCalls(pass, ctx.fn, recvKey, viewMethod)
+	}
+	k := invalidKey{recv: recvKey, method: viewMethod}
+	if out, ok := ctx.cache.invalid[k]; ok {
+		return out
+	}
+	out := invalidCalls(pass, ctx.fn, recvKey, viewMethod)
+	ctx.cache.invalid[k] = out
+	return out
+}
+
+func viewRangeSet(ctx loopCtx) map[*ast.Ident]bool {
+	if ctx.cache != nil && ctx.cache.rangeDone {
+		return ctx.cache.rangeSet
+	}
+	out := map[*ast.Ident]bool{}
+	ast.Inspect(ctx.fn, func(n ast.Node) bool {
+		r, ok := n.(*ast.RangeStmt)
+		if !ok {
+			return true
+		}
+		if id, ok := ast.Unparen(r.Key).(*ast.Ident); ok {
+			out[id] = true
+		}
+		if id, ok := ast.Unparen(r.Value).(*ast.Ident); ok {
+			out[id] = true
+		}
+		return true
+	})
+	if ctx.cache != nil {
+		ctx.cache.rangeSet = out
+		ctx.cache.rangeDone = true
+	}
+	return out
+}
+
+func viewAssignsFast(pass *analysis.Pass, ctx loopCtx, n ast.Node, v *types.Var) bool {
+	switch x := n.(type) {
+	case *ast.AssignStmt:
+		return lhsAssigns(pass, x.Lhs, v)
+	case *ast.IncDecStmt:
+		return incAssigns(pass, x.X, v)
+	case *ast.Ident:
+		if pass.TypesInfo.Uses[x] != v {
+			return false
+		}
+		return viewRangeSet(ctx)[x]
+	case *ast.ValueSpec:
+		return false
+	}
+	return false
+}
+
+func viewAssignList(pass *analysis.Pass, ctx loopCtx, v *types.Var) []*ast.AssignStmt {
+	if ctx.cache != nil {
+		if out, ok := ctx.cache.assignLists[v]; ok {
+			return out
+		}
+	}
+	var out []*ast.AssignStmt
+	ast.Inspect(ctx.fn, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != ctx.fn {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		if lhsAssigns(pass, as.Lhs, v) {
+			out = append(out, as)
+		}
+		return true
+	})
+	if ctx.cache != nil {
+		ctx.cache.assignLists[v] = out
+	}
+	return out
+}
+
+func viewCallInAssign(pass *analysis.Pass, ctx loopCtx, call *ast.CallExpr, v *types.Var) bool {
+	for _, as := range viewAssignList(pass, ctx, v) {
+		if as.Pos() <= call.Pos() && call.End() <= as.End() {
+			return true
+		}
+	}
+	return false
+}
+
+func viewCachedLHS(pass *analysis.Pass, ctx loopCtx, v *types.Var) map[*ast.Ident]bool {
+	if ctx.cache != nil {
+		if out, ok := ctx.cache.lhsSets[v]; ok {
+			return out
+		}
+	}
+	out := assignLHSIdents(pass, ctx.fn, v)
+	if ctx.cache != nil {
+		ctx.cache.lhsSets[v] = out
+	}
+	return out
+}
+
+func viewCachedDiscard(pass *analysis.Pass, ctx loopCtx, v *types.Var) map[*ast.Ident]bool {
+	if ctx.cache != nil {
+		if out, ok := ctx.cache.discardSets[v]; ok {
+			return out
+		}
+	}
+	out := discardRHSIdents(pass, ctx.fn, v)
+	if ctx.cache != nil {
+		ctx.cache.discardSets[v] = out
+	}
+	return out
 }
 
 func sinkExprs(pass *analysis.Pass, ctx loopCtx) []viewSink {
