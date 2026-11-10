@@ -119,3 +119,38 @@ func donespinSilentCustomDone(ctx context.Context, t doneT, ch chan int) {
 		}
 	}
 }
+type ctxAlias = context.Context
+
+func donespinReportedAlias(ctx ctxAlias) {
+	for {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+}
+
+func donespinReportedConversion(ctx context.Context, n int) int64 {
+	var x int64
+	for {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return x
+		default:
+			x = int64(n)
+		}
+	}
+}
+
+func donespinReportedLen(ctx context.Context, buf []byte) int {
+	var n int
+	for {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return n
+		default:
+			n = len(buf)
+		}
+	}
+}

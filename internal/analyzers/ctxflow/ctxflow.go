@@ -8,6 +8,11 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
+const (
+	contextPath = "context"
+	netHTTPPath = "net/http"
+)
+
 // Analyzers returns the four context checks of this package.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{rootAnalyzer, cancelAnalyzer, nocontextAnalyzer, donespinAnalyzer}
@@ -50,17 +55,17 @@ func isContextType(info *types.Info, e ast.Expr) bool {
 	if t == nil {
 		return false
 	}
-	if named, ok := t.(*types.Named); ok {
+	if named, ok := types.Unalias(t).(*types.Named); ok {
 		obj := named.Obj()
-		return obj.Name() == "Context" && obj.Pkg() != nil && obj.Pkg().Path() == "context"
+		return obj.Name() == "Context" && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
 	}
-	if ptr, ok := t.(*types.Pointer); ok {
-		named, ok := ptr.Elem().(*types.Named)
+	if ptr, ok := types.Unalias(t).(*types.Pointer); ok {
+		named, ok := types.Unalias(ptr.Elem()).(*types.Named)
 		if !ok {
 			return false
 		}
 		obj := named.Obj()
-		return obj.Name() == "Request" && obj.Pkg() != nil && obj.Pkg().Path() == "net/http"
+		return obj.Name() == "Request" && obj.Pkg() != nil && obj.Pkg().Path() == netHTTPPath
 	}
 	return false
 }
@@ -107,29 +112,46 @@ func isNilIdent(info *types.Info, e ast.Expr) bool {
 
 func varOf(info *types.Info, id *ast.Ident) *types.Var {
 	if obj, ok := info.Defs[id]; ok && obj != nil {
-		v, _ := obj.(*types.Var)
+		if v, ok := obj.(*types.Var); ok {
+			return v
+		}
+		return nil
+	}
+	if v, ok := info.Uses[id].(*types.Var); ok {
 		return v
 	}
-	v, _ := info.Uses[id].(*types.Var)
-	return v
+	return nil
 }
 
 func isContextParam(pass *analysis.Pass, cur inspector.Cursor, v *types.Var) bool {
-	info := pass.TypesInfo
 	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		ft := funcTypeOf(fn.Node())
-		if ft == nil || ft.Params == nil {
-			continue
+		if funcDeclaresVarAsContextParam(pass.TypesInfo, fn.Node(), v) {
+			return true
 		}
-		for _, field := range ft.Params.List {
-			if !isContextType(info, field.Type) {
-				continue
-			}
-			for _, name := range field.Names {
-				if info.Defs[name] == v {
-					return true
-				}
-			}
+	}
+	return false
+}
+
+func funcDeclaresVarAsContextParam(info *types.Info, fn ast.Node, v *types.Var) bool {
+	ft := funcTypeOf(fn)
+	if ft == nil || ft.Params == nil {
+		return false
+	}
+	for _, field := range ft.Params.List {
+		if fieldDefinesVarAsContext(info, field, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func fieldDefinesVarAsContext(info *types.Info, field *ast.Field, v *types.Var) bool {
+	if !isContextType(info, field.Type) {
+		return false
+	}
+	for _, name := range field.Names {
+		if info.Defs[name] == v {
+			return true
 		}
 	}
 	return false

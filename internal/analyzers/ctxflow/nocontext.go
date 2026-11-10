@@ -43,7 +43,8 @@ func checkNocontext(pass *analysis.Pass, cur inspector.Cursor) {
 		Message: "a context is in scope and " + left + " cannot be cancelled: use " + right,
 	})
 }
-func nocontextTarget(info *types.Info, call *ast.CallExpr) (string, string, bool) {
+
+func nocontextTarget(info *types.Info, call *ast.CallExpr) (left, right string, found bool) {
 	fn := typeutil.StaticCallee(info, call)
 	if fn == nil {
 		return "", "", false
@@ -58,7 +59,7 @@ func nocontextTarget(info *types.Info, call *ast.CallExpr) (string, string, bool
 	return nocontextFunc(fn)
 }
 
-func nocontextFunc(fn *types.Func) (string, string, bool) {
+func nocontextFunc(fn *types.Func) (left, right string, found bool) {
 	pkg := fn.Pkg()
 	if pkg == nil {
 		return "", "", false
@@ -66,7 +67,7 @@ func nocontextFunc(fn *types.Func) (string, string, bool) {
 	switch pkg.Path() {
 	case "net":
 		return netTarget(fn.Name())
-	case "net/http":
+	case netHTTPPath:
 		return httpFuncTarget(fn.Name())
 	case "os/exec":
 		if fn.Name() == "Command" {
@@ -76,7 +77,7 @@ func nocontextFunc(fn *types.Func) (string, string, bool) {
 	return "", "", false
 }
 
-func netTarget(name string) (string, string, bool) {
+func netTarget(name string) (left, right string, found bool) {
 	switch name {
 	case "Dial":
 		return "net.Dial", "(&net.Dialer{}).DialContext", true
@@ -86,7 +87,7 @@ func netTarget(name string) (string, string, bool) {
 	return "", "", false
 }
 
-func httpFuncTarget(name string) (string, string, bool) {
+func httpFuncTarget(name string) (left, right string, found bool) {
 	switch name {
 	case "Get", "Head", "Post", "PostForm":
 		return "http." + name, httpDoReplacement, true
@@ -95,7 +96,8 @@ func httpFuncTarget(name string) (string, string, bool) {
 	}
 	return "", "", false
 }
-func nocontextMethod(fn *types.Func, recv *types.Var) (string, string, bool) {
+
+func nocontextMethod(fn *types.Func, recv *types.Var) (left, right string, found bool) {
 	t := recv.Type()
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = ptr.Elem()
@@ -111,7 +113,7 @@ func nocontextMethod(fn *types.Func, recv *types.Var) (string, string, bool) {
 	}
 	recvName := "(*" + pkg.Name() + "." + obj.Name() + ")."
 	switch pkg.Path() {
-	case "net/http":
+	case netHTTPPath:
 		return httpClientTarget(recvName, obj.Name(), fn.Name())
 	case "database/sql":
 		return sqlTarget(recvName, obj.Name(), fn.Name())
@@ -119,7 +121,7 @@ func nocontextMethod(fn *types.Func, recv *types.Var) (string, string, bool) {
 	return "", "", false
 }
 
-func httpClientTarget(recvName, typeName, method string) (string, string, bool) {
+func httpClientTarget(recvName, typeName, method string) (left, right string, found bool) {
 	if typeName != "Client" {
 		return "", "", false
 	}
@@ -130,7 +132,7 @@ func httpClientTarget(recvName, typeName, method string) (string, string, bool) 
 	return "", "", false
 }
 
-func sqlTarget(recvName, typeName, method string) (string, string, bool) {
+func sqlTarget(recvName, typeName, method string) (left, right string, found bool) {
 	switch typeName {
 	case "DB":
 		return sqlDBTarget(recvName, method)
@@ -143,7 +145,7 @@ func sqlTarget(recvName, typeName, method string) (string, string, bool) {
 	return "", "", false
 }
 
-func sqlDBTarget(recvName, method string) (string, string, bool) {
+func sqlDBTarget(recvName, method string) (left, right string, found bool) {
 	switch method {
 	case "Query", "QueryRow", "Exec", "Prepare", "Ping":
 		return recvName + method, recvName + method + "Context", true

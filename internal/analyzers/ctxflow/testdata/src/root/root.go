@@ -27,10 +27,14 @@ func rootSilentNoScope() {
 
 func main() {
 	use(context.Background())
+	f := func(ctx context.Context) { use(context.Background()) }
+	f(nil)
 }
 
 func init() {
 	use(context.Background())
+	g := func(ctx context.Context) { use(context.TODO()) }
+	g(nil)
 }
 
 func rootReportedVar(ctx context.Context) {
@@ -88,4 +92,22 @@ func rootSilentReversed(ctx context.Context) {
 		ctx = context.Background()
 	}
 	use(ctx)
+}
+type ctxAlias = context.Context
+
+func rootReportedAlias(ctx ctxAlias) {
+	use(context.Background()) // want "a context is in scope, and this root context drops its cancellation and deadline"
+}
+
+func rootSilentGoDefer(ctx context.Context) {
+	defer context.Background()
+	go context.Background()
+	use(ctx)
+}
+
+func rootReportedNestedArg(ctx context.Context, k, v any) context.Context {
+	if ctx == nil {
+		ctx = context.WithValue(context.Background(), k, v) // want "a context is in scope, and this root context drops its cancellation and deadline"
+	}
+	return ctx
 }

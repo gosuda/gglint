@@ -49,7 +49,7 @@ func isRootCall(info *types.Info, call *ast.CallExpr) bool {
 	if !ok || sig.Recv() != nil {
 		return false
 	}
-	if pkg := fn.Pkg(); pkg == nil || pkg.Path() != "context" {
+	if pkg := fn.Pkg(); pkg == nil || pkg.Path() != contextPath {
 		return false
 	}
 	return fn.Name() == "Background" || fn.Name() == "TODO"
@@ -57,7 +57,7 @@ func isRootCall(info *types.Info, call *ast.CallExpr) bool {
 
 func resultUsed(cur inspector.Cursor) bool {
 	switch n := cur.Parent().Node().(type) {
-	case *ast.ExprStmt:
+	case *ast.ExprStmt, *ast.GoStmt, *ast.DeferStmt:
 		return false
 	case *ast.AssignStmt:
 		return !allBlank(n.Lhs)
@@ -119,7 +119,7 @@ func enclosingAssign(cur inspector.Cursor, call *ast.CallExpr) *ast.AssignStmt {
 			return nil
 		}
 		if as, ok := n.(*ast.AssignStmt); ok {
-			if inRhs(as, call) {
+			if inRHS(as, call) {
 				return as
 			}
 			return nil
@@ -134,9 +134,9 @@ func enclosingAssign(cur inspector.Cursor, call *ast.CallExpr) *ast.AssignStmt {
 	}
 }
 
-func inRhs(as *ast.AssignStmt, call *ast.CallExpr) bool {
+func inRHS(as *ast.AssignStmt, call *ast.CallExpr) bool {
 	for _, rhs := range as.Rhs {
-		if rhs.Pos() <= call.Pos() && call.End() <= rhs.End() {
+		if stripParens(rhs) == call {
 			return true
 		}
 	}

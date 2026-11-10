@@ -116,22 +116,28 @@ func pairsFromDecl(pass *analysis.Pass, d *ast.DeclStmt) []cancelPair {
 	}
 	var out []cancelPair
 	for _, spec := range gd.Specs {
-		vs, ok := spec.(*ast.ValueSpec)
-		if !ok || len(vs.Names) != 2 || len(vs.Values) != 1 {
-			continue
+		if p, ok := pairFromValueSpec(pass, spec); ok {
+			out = append(out, p)
 		}
-		call, ok := stripParens(vs.Values[0]).(*ast.CallExpr)
-		if !ok || !isWithCall(pass.TypesInfo, call) {
-			continue
-		}
-		ctx := varOf(pass.TypesInfo, vs.Names[0])
-		cancel := varOf(pass.TypesInfo, vs.Names[1])
-		if ctx == nil || cancel == nil {
-			continue
-		}
-		out = append(out, cancelPair{ctx: ctx, cancel: cancel})
 	}
 	return out
+}
+
+func pairFromValueSpec(pass *analysis.Pass, spec ast.Spec) (cancelPair, bool) {
+	vs, ok := spec.(*ast.ValueSpec)
+	if !ok || len(vs.Names) != 2 || len(vs.Values) != 1 {
+		return cancelPair{}, false
+	}
+	call, ok := stripParens(vs.Values[0]).(*ast.CallExpr)
+	if !ok || !isWithCall(pass.TypesInfo, call) {
+		return cancelPair{}, false
+	}
+	ctx := varOf(pass.TypesInfo, vs.Names[0])
+	cancel := varOf(pass.TypesInfo, vs.Names[1])
+	if ctx == nil || cancel == nil {
+		return cancelPair{}, false
+	}
+	return cancelPair{ctx: ctx, cancel: cancel}, true
 }
 
 func isWithCall(info *types.Info, call *ast.CallExpr) bool {
@@ -143,7 +149,7 @@ func isWithCall(info *types.Info, call *ast.CallExpr) bool {
 	if !ok || sig.Recv() != nil {
 		return false
 	}
-	if pkg := fn.Pkg(); pkg == nil || pkg.Path() != "context" {
+	if pkg := fn.Pkg(); pkg == nil || pkg.Path() != contextPath {
 		return false
 	}
 	switch fn.Name() {
@@ -152,6 +158,7 @@ func isWithCall(info *types.Info, call *ast.CallExpr) bool {
 	}
 	return false
 }
+
 func isCancelCall(pass *analysis.Pass, d *ast.DeferStmt, cancel *types.Var) bool {
 	if d.Call == nil || d.Call.Ellipsis.IsValid() {
 		return false
@@ -162,6 +169,7 @@ func isCancelCall(pass *analysis.Pass, d *ast.DeferStmt, cancel *types.Var) bool
 	}
 	return varOf(pass.TypesInfo, id) == cancel
 }
+
 func mentionsVar(pass *analysis.Pass, fn inspector.Cursor, v *types.Var) bool {
 	for cur := range fn.Preorder((*ast.ReturnStmt)(nil)) {
 		if mentionsAt(pass, fn, cur, v) {
@@ -171,7 +179,7 @@ func mentionsVar(pass *analysis.Pass, fn inspector.Cursor, v *types.Var) bool {
 	return false
 }
 
-func mentionsAt(pass *analysis.Pass, fn inspector.Cursor, cur inspector.Cursor, v *types.Var) bool {
+func mentionsAt(pass *analysis.Pass, fn, cur inspector.Cursor, v *types.Var) bool {
 	if ownerOf(cur) != fn {
 		return false
 	}

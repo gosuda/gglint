@@ -1,6 +1,9 @@
 package cancelreturned
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 func useAny(...any) {}
 
@@ -150,4 +153,21 @@ func cancelreturnedSilentVarOther(ctx context.Context) context.Context {
 func cancelreturnedSilentVarBlank(ctx context.Context) context.Context {
 	var _, _ = context.WithTimeout(ctx, 0)
 	return ctx
+}
+func cancelreturnedReportedDeadline(ctx context.Context) context.Context {
+	c, cancel := context.WithDeadline(ctx, time.Now())
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	return c
+}
+
+func cancelreturnedReportedTimeoutCause(ctx context.Context) context.Context {
+	c, cancel := context.WithTimeoutCause(ctx, 0, nil)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	return c
+}
+
+func cancelreturnedReportedDeadlineCause(ctx context.Context) context.Context {
+	c, cancel := context.WithDeadlineCause(ctx, time.Now(), nil)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	return c
 }

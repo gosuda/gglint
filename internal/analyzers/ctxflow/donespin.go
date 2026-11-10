@@ -34,7 +34,7 @@ func checkDonespin(pass *analysis.Pass, cur inspector.Cursor) {
 		return
 	}
 	comm, dflt, ok := splitDonespin(sel)
-	if !ok || !receivesDone(pass.TypesInfo, comm.Comm) || defaultHasCall(dflt) {
+	if !ok || !receivesDone(pass.TypesInfo, comm.Comm) || defaultHasCall(pass.TypesInfo, dflt) {
 		return
 	}
 	if !directlyInFor(cur) {
@@ -57,26 +57,25 @@ func directlyInFor(cur inspector.Cursor) bool {
 	return false
 }
 
-func splitDonespin(sel *ast.SelectStmt) (*ast.CommClause, *ast.CommClause, bool) {
+func splitDonespin(sel *ast.SelectStmt) (commClause, dfltClause *ast.CommClause, found bool) {
 	if sel.Body == nil || len(sel.Body.List) != 2 {
 		return nil, nil, false
 	}
-	var comm, dflt *ast.CommClause
 	for _, st := range sel.Body.List {
 		cc, ok := st.(*ast.CommClause)
 		if !ok {
 			return nil, nil, false
 		}
 		if cc.Comm == nil {
-			dflt = cc
+			dfltClause = cc
 		} else {
-			comm = cc
+			commClause = cc
 		}
 	}
-	if comm == nil || dflt == nil {
+	if commClause == nil || dfltClause == nil {
 		return nil, nil, false
 	}
-	return comm, dflt, true
+	return commClause, dfltClause, true
 }
 
 func receivesDone(info *types.Info, comm ast.Stmt) bool {
@@ -113,22 +112,40 @@ func isDoneCall(info *types.Info, call *ast.CallExpr) bool {
 	if !ok || sel.Sel.Name != "Done" {
 		return false
 	}
-	named, ok := info.TypeOf(sel.X).(*types.Named)
+	named, ok := types.Unalias(info.TypeOf(sel.X)).(*types.Named)
 	if !ok {
 		return false
 	}
 	obj := named.Obj()
-	return obj.Name() == "Context" && obj.Pkg() != nil && obj.Pkg().Path() == "context"
+	return obj.Name() == "Context" && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
 }
 
-func defaultHasCall(dflt *ast.CommClause) bool {
+func defaultHasCall(info *types.Info, dflt *ast.CommClause) bool {
 	found := false
 	ast.Inspect(dflt, func(n ast.Node) bool {
-		if _, ok := n.(*ast.CallExpr); ok {
-			found = true
-			return false
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return !found
 		}
-		return !found
+		if isTypeConversion(info, call) || isLenOrCap(info, call) {
+			return true
+		}
+		found = true
+		return false
 	})
 	return found
+}
+
+func isTypeConversion(info *types.Info, call *ast.CallExpr) bool {
+	tv, ok := info.Types[stripParens(call.Fun)]
+	return ok && tv.IsType()
+}
+
+func isLenOrCap(info *types.Info, call *ast.CallExpr) bool {
+	id, ok := stripParens(call.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	b, ok := info.ObjectOf(id).(*types.Builtin)
+	return ok && (b.Name() == "len" || b.Name() == "cap")
 }
