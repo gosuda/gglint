@@ -18,6 +18,7 @@ type varAccess struct {
 	index bool
 	del   bool
 	rng   bool
+	clr   bool
 	isMap bool
 }
 
@@ -99,11 +100,15 @@ func appendIncWrites(info *types.Info, n *ast.IncDecStmt, stmt ast.Stmt, out []v
 
 func appendDeleteWrite(info *types.Info, n *ast.CallExpr, stmt ast.Stmt, out []varAccess) []varAccess {
 	id, ok := ast.Unparen(n.Fun).(*ast.Ident)
-	if !ok || len(n.Args) == 0 || !isBuiltin(info, id, "delete") {
+	if !ok || len(n.Args) == 0 {
+		return out
+	}
+	clr := isBuiltin(info, id, "clear")
+	if !clr && !isBuiltin(info, id, "delete") {
 		return out
 	}
 	if k, ok := flow.KeyOf(info, n.Args[0]); ok {
-		out = append(out, varAccess{key: k, stmt: stmt, write: true, del: true, isMap: true})
+		out = append(out, varAccess{key: k, stmt: stmt, write: true, del: !clr, clr: clr, isMap: true})
 	}
 	return out
 }
@@ -504,15 +509,19 @@ func (m *mapScope) reportableMapWrite(s flow.Spawn, a varAccess) bool {
 
 func (m *mapScope) parentMapOp(a varAccess) bool {
 	for _, p := range m.parent {
-		if p.key == a.key && (p.index || p.del || p.rng) {
+		if p.key == a.key && mapOpAccess(p) {
 			return true
 		}
 	}
 	return false
 }
 
+func mapOpAccess(p varAccess) bool {
+	return p.index || p.del || p.rng || p.clr
+}
+
 func mapReportable(s flow.Spawn, a varAccess) bool {
-	if !a.write || !a.isMap || (!a.index && !a.del) {
+	if !a.write || !a.isMap || (!a.index && !a.del && !a.clr) {
 		return false
 	}
 	v, ok := a.key.Root.(*types.Var)
@@ -532,7 +541,7 @@ func (m *mapScope) hasOther(s flow.Spawn, a varAccess) bool {
 }
 
 func (m *mapScope) parentConflicts(s flow.Spawn, a, p varAccess) bool {
-	if p.key != a.key || !m.graph.Reaches(s.Site, p.stmt, nil) || flow.Joined(m.pass, m.graph, s, p.stmt) {
+	if p.key != a.key || !mapOpAccess(p) || !m.graph.Reaches(s.Site, p.stmt, nil) || flow.Joined(m.pass, m.graph, s, p.stmt) {
 		return false
 	}
 	return !commonKey(m.litHeld(s.Body, a.stmt), m.parentHeld(p.stmt))
@@ -593,7 +602,7 @@ func reportFanoutWrite(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAcce
 }
 
 func fanoutReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAccess) bool {
-	if !a.write || a.index {
+	if !a.write || a.index || a.del || a.clr {
 		return false
 	}
 	v, ok := a.key.Root.(*types.Var)

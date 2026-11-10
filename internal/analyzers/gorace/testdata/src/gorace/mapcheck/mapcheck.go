@@ -245,3 +245,24 @@ func mapNilDeclSelectSilent() {
 	go printOne()
 	defer printOne()
 }
+
+func mapGuardedReturnSilent() map[int]int {
+	var mu sync.Mutex
+	m := map[int]int{}
+	for i := range 8 {
+		go func() {
+			mu.Lock()
+			m[i] = i
+			mu.Unlock()
+		}()
+	}
+	return m
+}
+
+func mapClearReported() {
+	m := map[int]int{1: 1}
+	go func() { // want `m is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex`
+		clear(m)
+	}()
+	_ = m[1]
+}

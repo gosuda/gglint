@@ -168,3 +168,18 @@ func fanoutLockerSilent() {
 	}
 	_ = id
 }
+
+func fanoutDeleteClearSilent() {
+	m := map[int]int{1: 1}
+	for i := range 8 {
+		go func() {
+			delete(m, i)
+		}()
+	}
+	for range 8 {
+		go func() {
+			clear(m)
+		}()
+	}
+	_ = m
+}
