@@ -891,19 +891,29 @@ func r3Run(d []byte) error {
 	return nil
 }
 
-type r4Loader interface{ Load([]byte) error }
+type outValidator interface{ Validate() error }
 
-type r4Cfg struct{ Port int }
+func (c *Config) Validate() error { return nil }
 
-func (c *r4Cfg) Load(b []byte) error {
-	c.Port = 80
-	return json.Unmarshal(b, c)
+func outCheck(v outValidator) error { return v.Validate() }
+
+func outSilentValidator() int {
+	var c Config
+	outCheck(&c)
+	return c.Port
 }
 
-func r4Fill(l r4Loader, b []byte) error { return l.Load(b) }
+type outByteParser struct{ n int }
 
-func r4Port(b []byte) int {
-	var c r4Cfg
-	r4Fill(&c, b) // want "is read after the error of r4Fill is dropped"
-	return c.Port
+func (p *outByteParser) ReadByte() (byte, error) { return 0, nil }
+
+func outDrain(r io.ByteReader) error {
+	_, err := r.ReadByte()
+	return err
+}
+
+func outSilentByteReader() int {
+	var p outByteParser
+	outDrain(&p)
+	return p.n
 }

@@ -262,21 +262,3 @@ func lhsStoresIndex(as *ast.AssignStmt, up inspector.Cursor, p *ast.IndexExpr) b
 	}
 	return false
 }
-
-func nodeAssignsVar(info *types.Info, n ast.Node, v *types.Var) bool {
-	switch t := n.(type) {
-	case *ast.AssignStmt:
-		for _, lhs := range t.Lhs {
-			if resolvesTo(info, lhs, []*types.Var{v}) {
-				return true
-			}
-		}
-	case *ast.IncDecStmt:
-		if resolvesTo(info, t.X, []*types.Var{v}) {
-			return true
-		}
-	case *ast.RangeStmt:
-		return rangeAssigns(info, t, []*types.Var{v})
-	}
-	return false
-}

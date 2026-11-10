@@ -16,16 +16,188 @@ import (
 
 const closeMethodName = "Close"
 
+type durableMemo struct {
+	fn     inspector.Cursor
+	method map[*types.Var][]token.Pos
+	arg    map[*types.Var][]token.Pos
+	opened map[*types.Var]bool
+	stored map[*types.Var]bool
+	used   map[*types.Var]bool
+}
+
+func buildDurableMemo(pass *analysis.Pass, fn inspector.Cursor) *durableMemo {
+	memo := &durableMemo{fn: fn, method: map[*types.Var][]token.Pos{}, arg: map[*types.Var][]token.Pos{}, opened: map[*types.Var]bool{}, stored: map[*types.Var]bool{}, used: map[*types.Var]bool{}}
+	collectDurableCalls(pass, fn, memo)
+	collectDurableAssigns(pass, fn, memo)
+	collectDurableSpecs(pass, fn, memo)
+	return memo
+}
+
+func collectDurableCalls(pass *analysis.Pass, fn inspector.Cursor, memo *durableMemo) {
+	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		noteDurableCall(pass, cur, inspection.As[*ast.CallExpr](cur.Node()), memo)
+	}
+}
+
+func noteDurableCall(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, memo *durableMemo) {
+	noteMethodWrite(pass, call, memo)
+	noteArgWrite(pass, call, memo)
+	noteUsedClose(pass, cur, call, memo)
+}
+
+func noteMethodWrite(pass *analysis.Pass, call *ast.CallExpr, memo *durableMemo) {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || len(call.Args) == 0 || !isWriteMethodName(sel.Sel.Name) {
+		return
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	if !ok {
+		return
+	}
+	if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
+		memo.method[v] = append(memo.method[v], call.Pos())
+	}
+}
+
+func noteArgWrite(pass *analysis.Pass, call *ast.CallExpr, memo *durableMemo) {
+	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fnobj == nil {
+		return
+	}
+	sig, ok := fnobj.Type().(*types.Signature)
+	if !ok {
+		return
+	}
+	for idx, arg := range call.Args {
+		id, ok := ast.Unparen(arg).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+		if !ok {
+			continue
+		}
+		pt, ok := paramTypeAt(sig, idx, call)
+		if !ok || !isWriterInterface(pt) {
+			continue
+		}
+		memo.arg[v] = append(memo.arg[v], call.Pos())
+	}
+}
+
+func noteUsedClose(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, memo *durableMemo) {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || (sel.Sel.Name != closeMethodName && sel.Sel.Name != "Sync") {
+		return
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	if !ok {
+		return
+	}
+	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if !ok || !resultUsed(cur) {
+		return
+	}
+	memo.used[v] = true
+}
+
+func collectDurableAssigns(pass *analysis.Pass, fn inspector.Cursor, memo *durableMemo) {
+	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		noteDurableAssign(pass, inspection.As[*ast.AssignStmt](cur.Node()), memo)
+	}
+}
+
+func noteDurableAssign(pass *analysis.Pass, as *ast.AssignStmt, memo *durableMemo) {
+	for i, lhs := range as.Lhs {
+		rhs := as.Rhs[0]
+		if len(as.Rhs) == len(as.Lhs) {
+			rhs = as.Rhs[i]
+		}
+		noteOpened(pass, lhs, rhs, memo)
+		noteStoredAssign(pass, as, lhs, rhs, memo)
+	}
+}
+
+func noteOpened(pass *analysis.Pass, lhs, rhs ast.Expr, memo *durableMemo) {
+	id, ok := ast.Unparen(lhs).(*ast.Ident)
+	if !ok {
+		return
+	}
+	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if !ok || !openWrites(pass, rhs) {
+		return
+	}
+	memo.opened[v] = true
+}
+
+func noteStoredAssign(pass *analysis.Pass, as *ast.AssignStmt, lhs, rhs ast.Expr, memo *durableMemo) {
+	if len(as.Lhs) != len(as.Rhs) && len(as.Rhs) != 1 {
+		return
+	}
+	id, ok := ast.Unparen(rhs).(*ast.Ident)
+	if !ok {
+		return
+	}
+	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if !ok {
+		return
+	}
+	if pass.TypesInfo.TypeOf(lhs) != nil && isWriterInterface(pass.TypesInfo.TypeOf(lhs)) {
+		memo.stored[v] = true
+	}
+}
+
+func collectDurableSpecs(pass *analysis.Pass, fn inspector.Cursor, memo *durableMemo) {
+	for cur := range fn.Preorder((*ast.ValueSpec)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		noteDurableSpec(pass, inspection.As[*ast.ValueSpec](cur.Node()), memo)
+	}
+}
+
+func noteDurableSpec(pass *analysis.Pass, vs *ast.ValueSpec, memo *durableMemo) {
+	if len(vs.Values) == 0 {
+		return
+	}
+	for i, name := range vs.Names {
+		v, ok := valueForName(vs, i)
+		if !ok {
+			continue
+		}
+		id, ok := ast.Unparen(v).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		x, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+		if !ok {
+			continue
+		}
+		obj, ok := pass.TypesInfo.Defs[name].(*types.Var)
+		if !ok || !isWriterInterface(obj.Type()) {
+			continue
+		}
+		memo.stored[x] = true
+	}
+}
+
 func checkDurableSites(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
+	memo := buildDurableMemo(pass, fn)
 	for cur := range fn.Preorder((*ast.ExprStmt)(nil), (*ast.DeferStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		checkOneDurableSite(pass, fn, cur, f, hash, reported)
+		checkOneDurableSite(pass, cur, memo, f, hash, reported)
 	}
 }
 
-func checkOneDurableSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
+func checkOneDurableSite(pass *analysis.Pass, cur inspector.Cursor, memo *durableMemo, f facts, hash *types.Interface, reported map[token.Pos]bool) {
 	call := durableCall(cur)
 	if call == nil || !isRealCall(pass.TypesInfo, call) {
 		return
@@ -43,7 +215,7 @@ func checkOneDurableSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts,
 	if isExempt(pass, call, f, hash) {
 		return
 	}
-	if !durableHolds(pass, fn, cur, xobj) {
+	if !durableHolds(pass, cur, xobj, memo) {
 		return
 	}
 	pass.Reportf(call.Pos(), "%s is written in this function and the error of %s.Close is dropped, so a failed Close can lose written data: return or check the Close error", xname, xname)
@@ -83,28 +255,46 @@ func isExactlyError(info *types.Info, call *ast.CallExpr) bool {
 	return t != nil && isError(t)
 }
 
-func durableHolds(pass *analysis.Pass, fn, closeCur inspector.Cursor, x *types.Var) bool {
-	if !isLocalPtrStruct(fn, x) {
+func durableHolds(pass *analysis.Pass, closeCur inspector.Cursor, x *types.Var, memo *durableMemo) bool {
+	if !isLocalPtrStruct(memo.fn, x) {
 		return false
 	}
 	if isConnection(x.Type()) {
 		return false
 	}
-	guard := guardWriteCall(pass, fn, closeCur, x)
-	if !writtenExcept(pass, fn, x, guard) {
+	guard := guardWriteCall(pass, memo.fn, closeCur, x)
+	if !writtenExcept(x, guard, memo) {
 		return false
 	}
-	return !hasUsedCloseSync(pass, fn, x)
+	return !memo.used[x]
 }
 
-func writtenExcept(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, ignore *ast.CallExpr) bool {
-	if writtenByMethodExcept(pass, fn, x, ignore) {
+func writtenExcept(x *types.Var, ignore *ast.CallExpr, memo *durableMemo) bool {
+	if hasMethodWrite(x, ignore, memo) {
 		return true
 	}
-	if writtenByArgExcept(pass, fn, x, ignore) {
+	if hasArgWrite(x, ignore, memo) {
 		return true
 	}
-	return assignedAfterOpen(pass, fn, x)
+	return memo.opened[x] && memo.stored[x]
+}
+
+func hasMethodWrite(x *types.Var, ignore *ast.CallExpr, memo *durableMemo) bool {
+	for _, pos := range memo.method[x] {
+		if ignore == nil || pos != ignore.Pos() {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArgWrite(x *types.Var, ignore *ast.CallExpr, memo *durableMemo) bool {
+	for _, pos := range memo.arg[x] {
+		if ignore == nil || pos != ignore.Pos() {
+			return true
+		}
+	}
+	return false
 }
 
 func isLocalPtrStruct(fn inspector.Cursor, x *types.Var) bool {
@@ -254,31 +444,6 @@ func isWriteMethodOn(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool
 	return ok && pass.TypesInfo.ObjectOf(id) == types.Object(x)
 }
 
-func writtenByMethodExcept(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, ignore *ast.CallExpr) bool {
-	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		call := inspection.As[*ast.CallExpr](cur.Node())
-		if ignore != nil && call.Pos() == ignore.Pos() {
-			continue
-		}
-		if isMethodWriteOn(pass, call, x) {
-			return true
-		}
-	}
-	return false
-}
-
-func isMethodWriteOn(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || len(call.Args) == 0 || !isWriteMethodName(sel.Sel.Name) {
-		return false
-	}
-	id, ok := ast.Unparen(sel.X).(*ast.Ident)
-	return ok && pass.TypesInfo.ObjectOf(id) == types.Object(x)
-}
-
 func isWriteMethodName(name string) bool {
 	if name == "ReadFrom" {
 		return true
@@ -324,27 +489,6 @@ func writerResultsShape(sig *types.Signature) bool {
 	return types.Identical(sig.Results().At(0).Type(), types.Typ[types.Int]) && isError(sig.Results().At(1).Type())
 }
 
-func hasUsedCloseSync(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		call := inspection.As[*ast.CallExpr](cur.Node())
-		sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-		if !ok || (sel.Sel.Name != closeMethodName && sel.Sel.Name != "Sync") {
-			continue
-		}
-		id, ok := ast.Unparen(sel.X).(*ast.Ident)
-		if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-			continue
-		}
-		if resultUsed(cur) {
-			return true
-		}
-	}
-	return false
-}
-
 func resultUsed(cur inspector.Cursor) bool {
 	p := skipParens(cur.Parent())
 	switch n := p.Node().(type) {
@@ -354,22 +498,6 @@ func resultUsed(cur inspector.Cursor) bool {
 		return !allBlank(n.Lhs)
 	}
 	return true
-}
-
-func writtenByArgExcept(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, ignore *ast.CallExpr) bool {
-	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		call := inspection.As[*ast.CallExpr](cur.Node())
-		if ignore != nil && call.Pos() == ignore.Pos() {
-			continue
-		}
-		if callWritesViaWriter(pass, call, x) {
-			return true
-		}
-	}
-	return false
 }
 
 func callWritesViaWriter(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
@@ -396,43 +524,6 @@ func argIsWriter(pass *analysis.Pass, sig *types.Signature, idx int, call *ast.C
 	}
 	pt, ok := paramTypeAt(sig, idx, call)
 	return ok && isWriterInterface(pt)
-}
-
-func assignedAfterOpen(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	if !openedForWriting(pass, fn, x) {
-		return false
-	}
-	return assignStmtWritesToWriter(pass, fn, x) || valueSpecWritesToWriter(pass, fn, x)
-}
-
-func openedForWriting(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		as := inspection.As[*ast.AssignStmt](cur.Node())
-		if assignedFromWritableOpen(pass, as, x) {
-			return true
-		}
-	}
-	return false
-}
-
-func assignedFromWritableOpen(pass *analysis.Pass, as *ast.AssignStmt, x *types.Var) bool {
-	for i, lhs := range as.Lhs {
-		id, ok := ast.Unparen(lhs).(*ast.Ident)
-		if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-			continue
-		}
-		rhs := as.Rhs[0]
-		if len(as.Rhs) == len(as.Lhs) {
-			rhs = as.Rhs[i]
-		}
-		if openWrites(pass, rhs) {
-			return true
-		}
-	}
-	return false
 }
 
 func openWrites(pass *analysis.Pass, e ast.Expr) bool {
@@ -465,71 +556,6 @@ func openFlagWritable(pass *analysis.Pass, call *ast.CallExpr) bool {
 	return exact && flag&3 != 0
 }
 
-func assignStmtWritesToWriter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		as := inspection.As[*ast.AssignStmt](cur.Node())
-		if writesToWriter(pass, as, x) {
-			return true
-		}
-	}
-	return false
-}
-
-func writesToWriter(pass *analysis.Pass, as *ast.AssignStmt, x *types.Var) bool {
-	if len(as.Lhs) != len(as.Rhs) && len(as.Rhs) != 1 {
-		return false
-	}
-	for i, lhs := range as.Lhs {
-		if pairWritesToWriter(pass, as, i, lhs, x) {
-			return true
-		}
-	}
-	return false
-}
-
-func pairWritesToWriter(pass *analysis.Pass, as *ast.AssignStmt, i int, lhs ast.Expr, x *types.Var) bool {
-	rhs := as.Rhs[0]
-	if len(as.Rhs) == len(as.Lhs) {
-		rhs = as.Rhs[i]
-	}
-	if id, ok := ast.Unparen(rhs).(*ast.Ident); !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-		return false
-	}
-	return pass.TypesInfo.TypeOf(lhs) != nil && isWriterInterface(pass.TypesInfo.TypeOf(lhs))
-}
-
-func valueSpecWritesToWriter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	for cur := range fn.Preorder((*ast.ValueSpec)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		vs := inspection.As[*ast.ValueSpec](cur.Node())
-		if specWritesToWriter(pass, vs, x) {
-			return true
-		}
-	}
-	return false
-}
-
-func specWritesToWriter(pass *analysis.Pass, vs *ast.ValueSpec, x *types.Var) bool {
-	if len(vs.Values) == 0 {
-		return false
-	}
-	for i, name := range vs.Names {
-		v, ok := valueForName(vs, i)
-		if !ok {
-			continue
-		}
-		if specPairWrites(pass, v, name, x) {
-			return true
-		}
-	}
-	return false
-}
-
 func valueForName(vs *ast.ValueSpec, i int) (ast.Expr, bool) {
 	switch {
 	case len(vs.Values) == len(vs.Names):
@@ -539,15 +565,6 @@ func valueForName(vs *ast.ValueSpec, i int) (ast.Expr, bool) {
 	default:
 		return nil, false
 	}
-}
-
-func specPairWrites(pass *analysis.Pass, v ast.Expr, name *ast.Ident, x *types.Var) bool {
-	id, ok := ast.Unparen(v).(*ast.Ident)
-	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-		return false
-	}
-	obj, ok := pass.TypesInfo.Defs[name].(*types.Var)
-	return ok && isWriterInterface(obj.Type())
 }
 
 func isConnection(t types.Type) bool {

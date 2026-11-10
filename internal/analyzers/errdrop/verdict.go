@@ -5,6 +5,8 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"slices"
+	"sort"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
@@ -12,6 +14,77 @@ import (
 
 	"github.com/gosuda/gglint/internal/inspection"
 )
+
+type peekInfo struct {
+	pos  token.Pos
+	recv string
+	n    int64
+	as   *ast.AssignStmt
+}
+
+type callInfo struct {
+	pos     token.Pos
+	selRecv string
+	selName string
+	args    []string
+}
+
+type verdictMemo struct {
+	fn    inspector.Cursor
+	idx   *funcIndex
+	peeks []peekInfo
+	calls []callInfo
+}
+
+func buildVerdictMemo(pass *analysis.Pass, fn inspector.Cursor) *verdictMemo {
+	memo := &verdictMemo{fn: fn, idx: buildFuncIndex(pass, fn)}
+	collectVerdictPeeks(pass, fn, memo)
+	collectVerdictCalls(fn, memo)
+	return memo
+}
+
+func collectVerdictPeeks(pass *analysis.Pass, fn inspector.Cursor, memo *verdictMemo) {
+	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		as := inspection.As[*ast.AssignStmt](cur.Node())
+		if len(as.Rhs) != 1 {
+			continue
+		}
+		call := callOf(as.Rhs[0])
+		if call == nil {
+			continue
+		}
+		sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Peek" || len(call.Args) != 1 {
+			continue
+		}
+		n, ok := constIntArg(pass, call.Args[0])
+		if !ok {
+			continue
+		}
+		memo.peeks = append(memo.peeks, peekInfo{pos: as.Pos(), recv: types.ExprString(sel.X), n: n, as: as})
+	}
+}
+
+func collectVerdictCalls(fn inspector.Cursor, memo *verdictMemo) {
+	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		call := inspection.As[*ast.CallExpr](cur.Node())
+		info := callInfo{pos: call.Pos()}
+		if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
+			info.selRecv = types.ExprString(sel.X)
+			info.selName = sel.Sel.Name
+		}
+		for _, arg := range call.Args {
+			info.args = append(info.args, types.ExprString(arg))
+		}
+		memo.calls = append(memo.calls, info)
+	}
+}
 
 func checkVerdictLists(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
 	sig := fnSignature(pass, fn)
@@ -21,6 +94,7 @@ func checkVerdictLists(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *
 	if !isError(sig.Results().At(sig.Results().Len() - 1).Type()) {
 		return
 	}
+	memo := buildVerdictMemo(pass, fn)
 	for cur := range fn.Preorder((*ast.BlockStmt)(nil), (*ast.CaseClause)(nil), (*ast.CommClause)(nil)) {
 		if owner(cur) != fn {
 			continue
@@ -29,7 +103,7 @@ func checkVerdictLists(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *
 		if len(list) < 2 {
 			continue
 		}
-		checkVerdictPairs(pass, fn, list, f, hash, reported)
+		checkVerdictPairs(pass, memo, list, f, hash, reported)
 	}
 }
 
@@ -50,9 +124,9 @@ type verdictPair struct {
 	idx  int
 }
 
-func checkVerdictPairs(pass *analysis.Pass, fn inspector.Cursor, list []ast.Stmt, f facts, hash *types.Interface, reported map[token.Pos]bool) {
+func checkVerdictPairs(pass *analysis.Pass, memo *verdictMemo, list []ast.Stmt, f facts, hash *types.Interface, reported map[token.Pos]bool) {
 	for i := range len(list) - 1 {
-		call, ok := verdictPairCall(pass, fn, verdictPair{list: list, idx: i}, f, hash, reported)
+		call, ok := verdictPairCall(pass, memo, verdictPair{list: list, idx: i}, f, hash, reported)
 		if !ok {
 			continue
 		}
@@ -61,7 +135,7 @@ func checkVerdictPairs(pass *analysis.Pass, fn inspector.Cursor, list []ast.Stmt
 	}
 }
 
-func verdictPairCall(pass *analysis.Pass, fn inspector.Cursor, p verdictPair, f facts, hash *types.Interface, reported map[token.Pos]bool) (*ast.CallExpr, bool) {
+func verdictPairCall(pass *analysis.Pass, memo *verdictMemo, p verdictPair, f facts, hash *types.Interface, reported map[token.Pos]bool) (*ast.CallExpr, bool) {
 	es, ok := p.list[p.idx].(*ast.ExprStmt)
 	if !ok {
 		return nil, false
@@ -70,7 +144,7 @@ func verdictPairCall(pass *analysis.Pass, fn inspector.Cursor, p verdictPair, f 
 	if call == nil || !isRealCall(pass.TypesInfo, call) {
 		return nil, false
 	}
-	if verdictSuppressed(pass, fn, call, f, hash, reported) {
+	if verdictSuppressed(pass, memo, call, f, hash, reported) {
 		return nil, false
 	}
 	if !verdictNextReturnsNil(pass, p.list[p.idx+1]) {
@@ -79,7 +153,7 @@ func verdictPairCall(pass *analysis.Pass, fn inspector.Cursor, p verdictPair, f 
 	return call, true
 }
 
-func verdictSuppressed(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, f facts, hash *types.Interface, reported map[token.Pos]bool) bool {
+func verdictSuppressed(pass *analysis.Pass, memo *verdictMemo, call *ast.CallExpr, f facts, hash *types.Interface, reported map[token.Pos]bool) bool {
 	if isCloseMethod(pass.TypesInfo, call) || forwardsClose(pass, call, f.decls) {
 		return true
 	}
@@ -95,10 +169,10 @@ func verdictSuppressed(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallE
 	if isStickyCall(pass, call, f.sticky) {
 		return true
 	}
-	if unreadAfterRead(pass, fn, call) {
+	if unreadAfterRead(pass, memo.fn, call) {
 		return true
 	}
-	return discardAfterPeek(pass, fn, call)
+	return discardAfterPeek(pass, call, memo)
 }
 
 func isStickyCall(pass *analysis.Pass, call *ast.CallExpr, stickySet map[*types.Func]bool) bool {
@@ -332,16 +406,16 @@ func hasCall(n ast.Node) bool {
 	return found
 }
 
-func discardAfterPeek(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) bool {
+func discardAfterPeek(pass *analysis.Pass, call *ast.CallExpr, memo *verdictMemo) bool {
 	recv, d, ok := discardTarget(pass, call)
 	if !ok {
 		return false
 	}
-	peek := peekBefore(pass, fn, recv, d, call.Pos())
+	peek := peekBefore(pass, memo, recv, d, call.Pos())
 	if !peek.IsValid() {
 		return false
 	}
-	return windowClean(fn, recv, peek, call.Pos())
+	return windowClean(memo, recv, peek, call.Pos())
 }
 
 func discardTarget(pass *analysis.Pass, call *ast.CallExpr) (recvText string, n int64, ok bool) {
@@ -383,47 +457,22 @@ func constIntArg(pass *analysis.Pass, e ast.Expr) (int64, bool) {
 	return d, true
 }
 
-func peekBefore(pass *analysis.Pass, fn inspector.Cursor, recv string, d int64, before token.Pos) token.Pos {
-	var at token.Pos
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
-		if owner(cur) != fn {
+func peekBefore(pass *analysis.Pass, memo *verdictMemo, recv string, d int64, before token.Pos) token.Pos {
+	for _, p := range slices.Backward(memo.peeks) {
+		if p.pos >= before {
 			continue
 		}
-		as := inspection.As[*ast.AssignStmt](cur.Node())
-		if as.Pos() >= before {
-			break
+		if p.recv != recv || p.n < d {
+			continue
 		}
-		if peekFills(pass, fn, as, recv, d) {
-			at = as.Pos()
+		if peekErrTracked(pass, memo, p.as) {
+			return p.pos
 		}
 	}
-	return at
+	return token.NoPos
 }
 
-func peekFills(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt, recv string, d int64) bool {
-	if len(as.Rhs) != 1 {
-		return false
-	}
-	call := callOf(as.Rhs[0])
-	if call == nil {
-		return false
-	}
-	p, ok := peekCallArg(pass, call, recv)
-	if !ok || p < d {
-		return false
-	}
-	return peekErrTracked(pass, fn, as)
-}
-
-func peekCallArg(pass *analysis.Pass, call *ast.CallExpr, recv string) (int64, bool) {
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Peek" || types.ExprString(sel.X) != recv || len(call.Args) != 1 {
-		return 0, false
-	}
-	return constIntArg(pass, call.Args[0])
-}
-
-func peekErrTracked(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt) bool {
+func peekErrTracked(pass *analysis.Pass, memo *verdictMemo, as *ast.AssignStmt) bool {
 	if len(as.Lhs) < 2 {
 		return false
 	}
@@ -435,54 +484,23 @@ func peekErrTracked(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt
 	if !ok {
 		return false
 	}
-	return usedAfter(pass, fn, obj, as.Pos())
+	_, ok = memo.idx.firstUse(obj, as.Pos())
+	return ok
 }
 
-func usedAfter(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, after token.Pos) bool {
-	for cur := range fn.Preorder((*ast.Ident)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		id := inspection.As[*ast.Ident](cur.Node())
-		if id.Pos() <= after {
-			continue
-		}
-		if pass.TypesInfo.Uses[id] == v {
-			return true
-		}
-	}
-	return false
-}
-
-func windowClean(fn inspector.Cursor, recv string, after, before token.Pos) bool {
-	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		c := inspection.As[*ast.CallExpr](cur.Node())
-		if c.Pos() <= after || c.Pos() >= before {
-			continue
-		}
-		if sameRecvCall(c, recv) {
+func windowClean(memo *verdictMemo, recv string, after, before token.Pos) bool {
+	lo := sort.Search(len(memo.calls), func(i int) bool { return memo.calls[i].pos > after })
+	for i := lo; i < len(memo.calls) && memo.calls[i].pos < before; i++ {
+		if interferes(memo.calls[i], recv) {
 			return false
 		}
-		for _, arg := range c.Args {
-			if types.ExprString(arg) == recv {
-				return false
-			}
-		}
 	}
 	return true
 }
 
-func sameRecvCall(call *ast.CallExpr, recv string) bool {
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || types.ExprString(sel.X) != recv {
-		return false
+func interferes(c callInfo, recv string) bool {
+	if c.selRecv == recv && c.selName != "" && c.selName != "Peek" && c.selName != "Buffered" && c.selName != "Size" {
+		return true
 	}
-	switch sel.Sel.Name {
-	case "Peek", "Buffered", "Size":
-		return false
-	}
-	return true
+	return slices.Contains(c.args, recv)
 }

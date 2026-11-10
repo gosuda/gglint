@@ -5,7 +5,6 @@ import (
 	"go/token"
 	"go/types"
 	"slices"
-	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
@@ -14,16 +13,126 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
+type outMemo struct {
+	fn     inspector.Cursor
+	idx    *funcIndex
+	bare   map[*types.Var]bool
+	valued map[*types.Var]bool
+	takes  map[*types.Var][]token.Pos
+}
+
+func buildOutMemo(pass *analysis.Pass, fn inspector.Cursor) *outMemo {
+	idx := buildFuncIndex(pass, fn)
+	bare, valued := collectBare(pass, fn)
+	takes := collectTakes(pass, fn)
+	return &outMemo{fn: fn, idx: idx, bare: bare, valued: valued, takes: takes}
+}
+
+func collectBare(pass *analysis.Pass, fn inspector.Cursor) (bare, valued map[*types.Var]bool) {
+	bare = map[*types.Var]bool{}
+	valued = map[*types.Var]bool{}
+	for cur := range fn.Preorder((*ast.ValueSpec)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		noteBare(pass, inspection.As[*ast.ValueSpec](cur.Node()), bare, valued)
+	}
+	return bare, valued
+}
+
+func noteBare(pass *analysis.Pass, vs *ast.ValueSpec, bare, valued map[*types.Var]bool) {
+	for _, name := range vs.Names {
+		v, ok := pass.TypesInfo.Defs[name].(*types.Var)
+		if !ok {
+			continue
+		}
+		if len(vs.Values) == 0 {
+			bare[v] = true
+		} else {
+			valued[v] = true
+		}
+	}
+}
+
+func collectTakes(pass *analysis.Pass, fn inspector.Cursor) map[*types.Var][]token.Pos {
+	takes := map[*types.Var][]token.Pos{}
+	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		noteTakes(pass, inspection.As[*ast.CallExpr](cur.Node()), takes)
+	}
+	return takes
+}
+
+func noteTakes(pass *analysis.Pass, call *ast.CallExpr, takes map[*types.Var][]token.Pos) {
+	if v, ok := recvTaker(pass, call); ok {
+		takes[v] = append(takes[v], call.Pos())
+	}
+	for idx, arg := range call.Args {
+		if v, ok := argTaker(pass, call, idx, arg); ok {
+			takes[v] = append(takes[v], call.Pos())
+		}
+	}
+}
+
+func recvTaker(pass *analysis.Pass, call *ast.CallExpr) (*types.Var, bool) {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return nil, false
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if !ok {
+		return nil, false
+	}
+	fn, ok := directMethod(pass, sel)
+	if !ok {
+		return nil, false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return nil, false
+	}
+	if _, isPtr := sig.Recv().Type().(*types.Pointer); !isPtr {
+		return nil, false
+	}
+	return v, true
+}
+
+func argTaker(pass *analysis.Pass, call *ast.CallExpr, idx int, arg ast.Expr) (*types.Var, bool) {
+	u, ok := ast.Unparen(arg).(*ast.UnaryExpr)
+	if !ok || u.Op != token.AND {
+		return nil, false
+	}
+	id, ok := ast.Unparen(u.X).(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if !ok {
+		return nil, false
+	}
+	if !paramTakesPointer(pass, call, idx) {
+		return nil, false
+	}
+	return v, true
+}
+
 func checkOutSites(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
+	memo := buildOutMemo(pass, fn)
 	for cur := range fn.Preorder((*ast.ExprStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		checkOneOutSite(pass, fn, cur, f, hash, reported)
+		checkOneOutSite(pass, cur, memo, f, hash, reported)
 	}
 }
 
-func checkOneOutSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
+func checkOneOutSite(pass *analysis.Pass, cur inspector.Cursor, memo *outMemo, f facts, hash *types.Interface, reported map[token.Pos]bool) {
 	es := inspection.As[*ast.ExprStmt](cur.Node())
 	call := callOf(es.X)
 	if call == nil || !isRealCall(pass.TypesInfo, call) {
@@ -38,7 +147,7 @@ func checkOneOutSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, has
 	if isExempt(pass, call, f, hash) {
 		return
 	}
-	xobj, xname := outCandidate(pass, fn, call)
+	xobj, xname := outCandidate(pass, call, memo)
 	if xobj == nil {
 		return
 	}
@@ -51,7 +160,7 @@ func dropsError(info *types.Info, call *ast.CallExpr) bool {
 	return slices.ContainsFunc(resultTypes(info, call), isError)
 }
 
-func outCandidate(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) (found *types.Var, name string) {
+func outCandidate(pass *analysis.Pass, call *ast.CallExpr, memo *outMemo) (found *types.Var, name string) {
 	for idx, arg := range call.Args {
 		u, ok := ast.Unparen(arg).(*ast.UnaryExpr)
 		if !ok || u.Op != token.AND {
@@ -68,7 +177,7 @@ func outCandidate(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) 
 		if !decodeTarget(pass, call, idx) {
 			continue
 		}
-		if outHolds(pass, fn, call, v) {
+		if outHolds(call, v, memo) {
 			return v, id.Name
 		}
 	}
@@ -80,27 +189,23 @@ func decodeTarget(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
 	if !ok {
 		return false
 	}
-	return !isReaderInterface(pt)
+	if isEmptyInterface(pt) {
+		return true
+	}
+	if isPointerType(pt) {
+		return true
+	}
+	return isWriterInterface(pt)
 }
 
-func isReaderInterface(t types.Type) bool {
+func isEmptyInterface(t types.Type) bool {
 	iface, ok := types.Unalias(t).Underlying().(*types.Interface)
-	if !ok || iface.NumMethods() == 0 {
-		return false
-	}
-	found := false
-	for m := range iface.Methods() {
-		if strings.HasPrefix(m.Name(), "Write") {
-			return false
-		}
-		if m.Name() == "Read" {
-			sig, ok := m.Type().(*types.Signature)
-			if ok && writerSigShape(sig) {
-				found = true
-			}
-		}
-	}
-	return found
+	return ok && iface.NumMethods() == 0
+}
+
+func isPointerType(t types.Type) bool {
+	_, ok := types.Unalias(t).(*types.Pointer)
+	return ok
 }
 
 func callParamType(pass *analysis.Pass, call *ast.CallExpr, idx int) (types.Type, bool) {
@@ -115,81 +220,30 @@ func callParamType(pass *analysis.Pass, call *ast.CallExpr, idx int) (types.Type
 	return paramTypeAt(sig, idx, call)
 }
 
-func outHolds(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, x *types.Var) bool {
-	if !declaredHere(fn, x) {
+func outHolds(call *ast.CallExpr, x *types.Var, memo *outMemo) bool {
+	if !declaredHere(memo.fn, x) {
 		return false
 	}
-	if !isBareVarDecl(pass, fn, x) {
+	if !isBare(memo, x) {
 		return false
 	}
-	if assignsVar(pass, fn, x) {
+	if len(memo.idx.assigns[x]) > 0 {
 		return false
 	}
-	if takenBefore(pass, fn, x, call.Pos()) {
+	if takenBefore(memo, x, call.Pos()) {
 		return false
 	}
-	return mentionedAfter(pass, fn, x, call.End())
+	_, ok := memo.idx.firstUse(x, call.End())
+	return ok
 }
 
-func takenBefore(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, before token.Pos) bool {
-	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		call := inspection.As[*ast.CallExpr](cur.Node())
-		if call.Pos() >= before {
-			break
-		}
-		if callTakesPointer(pass, call, x) {
-			return true
-		}
-	}
-	return false
+func isBare(memo *outMemo, x *types.Var) bool {
+	return memo.bare[x] && !memo.valued[x]
 }
 
-func callTakesPointer(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
-	if methodTakesRecv(pass, call, x) {
-		return true
-	}
-	for i, arg := range call.Args {
-		if takesPointerAt(pass, call, i, arg, x) {
-			return true
-		}
-	}
-	return false
-}
-
-func methodTakesRecv(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	id, ok := ast.Unparen(sel.X).(*ast.Ident)
-	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-		return false
-	}
-	fn, ok := directMethod(pass, sel)
-	if !ok {
-		return false
-	}
-	sig, ok := fn.Type().(*types.Signature)
-	if !ok || sig.Recv() == nil {
-		return false
-	}
-	_, isPtr := sig.Recv().Type().(*types.Pointer)
-	return isPtr
-}
-
-func takesPointerAt(pass *analysis.Pass, call *ast.CallExpr, idx int, arg ast.Expr, x *types.Var) bool {
-	u, ok := ast.Unparen(arg).(*ast.UnaryExpr)
-	if !ok || u.Op != token.AND {
-		return false
-	}
-	id, ok := ast.Unparen(u.X).(*ast.Ident)
-	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-		return false
-	}
-	return paramTakesPointer(pass, call, idx)
+func takenBefore(memo *outMemo, x *types.Var, before token.Pos) bool {
+	list := memo.takes[x]
+	return len(list) > 0 && list[0] < before
 }
 
 func paramTakesPointer(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
@@ -238,52 +292,4 @@ func paramTypeAt(sig *types.Signature, idx int, call *ast.CallExpr) (types.Type,
 		return nil, false
 	}
 	return slice.Elem(), true
-}
-
-func isBareVarDecl(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	found := false
-	none := true
-	for cur := range fn.Preorder((*ast.ValueSpec)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		vs := inspection.As[*ast.ValueSpec](cur.Node())
-		for _, name := range vs.Names {
-			if pass.TypesInfo.Defs[name] == x {
-				found = true
-				if len(vs.Values) != 0 {
-					none = false
-				}
-			}
-		}
-	}
-	return found && none
-}
-
-func assignsVar(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil), (*ast.IncDecStmt)(nil), (*ast.RangeStmt)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		if nodeAssignsVar(pass.TypesInfo, cur.Node(), x) {
-			return true
-		}
-	}
-	return false
-}
-
-func mentionedAfter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, after token.Pos) bool {
-	for cur := range fn.Preorder((*ast.Ident)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		id := inspection.As[*ast.Ident](cur.Node())
-		if id.Pos() <= after {
-			continue
-		}
-		if pass.TypesInfo.Uses[id] == x {
-			return true
-		}
-	}
-	return false
 }
