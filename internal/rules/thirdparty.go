@@ -24,7 +24,7 @@ import (
 	"github.com/gostaticanalysis/forcetypeassert"
 	"github.com/gostaticanalysis/nilerr"
 	"github.com/kkHAIKE/contextcheck"
-	"github.com/ldez/usetesting"
+
 	"github.com/moricho/tparallel"
 	"github.com/nishanths/exhaustive/passes/exhaustive"
 	"github.com/sonatard/noctx"
@@ -81,7 +81,7 @@ func thirdPartyRules() []Rule {
 		{"nilnesserr", standard, origin, "Reports returning a nil error after checking that a different error is non-nil.", ReportEverywhere, construct(newNilnesserr)},
 		{"asasalint", standard, origin, "Reports a []any passed as one element to a variadic ...any parameter.", ReportEverywhere, construct(newAsasalint)},
 		{"musttag", standard, origin, "Requires field tags on structs passed to JSON, XML, YAML, and TOML marshaling functions.", ReportOutsideTests, construct(newMusttag)},
-		{"usetesting", standard, origin, "Reports os.MkdirTemp, os.CreateTemp, and os.Chdir in tests, which have testing package replacements.", ReportWithFix, construct(usetesting.NewAnalyzer)},
+		{"usetesting", standard, origin, "Reports os.MkdirTemp, os.CreateTemp, and os.Chdir in tests, which have testing package replacements.", ReportWithFix, buildUsetesting},
 		{"gofumpt", standard, origin, "Reports files that are not gofumpt-formatted, with a fix that formats them.", ReportWithFix, single(gofumpt.Analyzer)},
 		{"gosec", standard, origin, "Reports security problems found by gosec; standard skips audit and permission checks.", ReportOutsideTests, buildGosec},
 		{"unparam", standard, origin, "Reports unexported function parameters and results that are unused or always the same value.", ReportEverywhere, single(unparam.Analyzer)},
