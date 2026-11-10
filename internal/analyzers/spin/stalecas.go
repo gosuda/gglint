@@ -13,7 +13,7 @@ import (
 
 var stalecasAnalyzer = &analysis.Analyzer{
 	Name:     "stalecas",
-	Doc:      "reports a loop for !v.CompareAndSwap(old, new) (and the other shapes it already recognises) when old is a local, nothing in the loop assigns old, no goto or labeled break or continue leaves the loop, no other literal assigns old or a field or element stored in it, and the address of old or of such a field or element never appears; the last two are function-wide, so such loops are not reported; a path through a pointer does not count; a call of a pointer-receiver method on old counts as its address; spin covers five shapes only",
+	Doc:      "reports a loop for !v.CompareAndSwap(old, new) (and the other shapes it already recognises) when old is a local, nothing in the loop assigns old, no goto or labeled break or continue leaves the loop, no other literal assigns old or a field or element stored in it, and the address of old or of such a field or element never appears; the last two are function-wide, so such loops are not reported; a path through a pointer does not count; a call of a pointer-receiver method on old counts as its address unless the method is reached through a pointer; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runStalecas,
 }
@@ -92,15 +92,7 @@ func noteMethodAddr(info *types.Info, fc *staleFn, call *ast.CallExpr) {
 		return
 	}
 	chosen := info.Selections[sel]
-	if chosen == nil {
-		return
-	}
-	fn, ok := chosen.Obj().(*types.Func)
-	if !ok {
-		return
-	}
-	sig, ok := fn.Type().(*types.Signature)
-	if !ok || sig.Recv() == nil || !isPointerType(sig.Recv().Type()) {
+	if chosen == nil || hopsPointer(chosen) || !hasPtrReceiver(chosen) {
 		return
 	}
 	recv := ast.Unparen(sel.X)
@@ -110,6 +102,15 @@ func noteMethodAddr(info *types.Info, fc *staleFn, call *ast.CallExpr) {
 	if root, ok := storageRoot(info, recv); ok {
 		fc.addrs[root] = true
 	}
+}
+
+func hasPtrReceiver(sel *types.Selection) bool {
+	fn, ok := sel.Obj().(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	return ok && sig.Recv() != nil && isPointerType(sig.Recv().Type())
 }
 
 func noteAddr(info *types.Info, fc *staleFn, t *ast.UnaryExpr) {
@@ -147,7 +148,7 @@ func identRoot(info *types.Info, id *ast.Ident) (*types.Var, bool) {
 }
 
 func selectorRoot(info *types.Info, t *ast.SelectorExpr) (*types.Var, bool) {
-	if sel := info.Selections[t]; sel != nil && sel.Indirect() {
+	if hopsPointer(info.Selections[t]) {
 		return nil, false
 	}
 	inner := ast.Unparen(t.X)
@@ -155,6 +156,10 @@ func selectorRoot(info *types.Info, t *ast.SelectorExpr) (*types.Var, bool) {
 		return nil, false
 	}
 	return storageRoot(info, inner)
+}
+
+func hopsPointer(sel *types.Selection) bool {
+	return sel != nil && sel.Indirect()
 }
 
 func arrayRoot(info *types.Info, x ast.Expr) (*types.Var, bool) {

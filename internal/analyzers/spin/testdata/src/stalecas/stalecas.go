@@ -489,3 +489,29 @@ func stalecasSilentPointerMethod(v *atomic.Value) {
 	}
 	use(old)
 }
+
+func (i *staleInner) reset() { i.f = 0 }
+
+func stalecasReportedEmbeddedPointerMethod(v *atomic.Value) {
+	v.Store(staleOuter{staleInner: &staleInner{f: 1}})
+	old := staleOuter{staleInner: &staleInner{}}
+	for !v.CompareAndSwap(old, staleOuter{staleInner: &staleInner{}}) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		old.reset()
+	}
+	use(old)
+}
+
+type staleVBox struct{ n int }
+
+func (s *staleVBox) reload(v *atomic.Value) { *s = v.Load().(staleVOuter).staleVBox }
+
+type staleVOuter struct{ staleVBox }
+
+func stalecasSilentEmbeddedValueMethod(v *atomic.Value) {
+	v.Store(staleVOuter{staleVBox{n: 1}})
+	old := staleVOuter{}
+	for !v.CompareAndSwap(old, staleVOuter{staleVBox{n: 2}}) {
+		old.reload(v)
+	}
+	use(old)
+}
