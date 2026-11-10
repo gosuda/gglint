@@ -21,7 +21,7 @@ func Analyzers() []*analysis.Analyzer {
 		mk("selfdeadlock", "reports a send and later receive outside select on an owned unbuffered channel no literal mentions", runSelfdeadlock),
 		mk("rangeunclosed", "reports a range over an owned made channel no code closes with no loop exit", runRangeunclosed),
 		mk("orphansend", "reports a spawned send on an owned unbuffered channel drained only by a select that returns elsewhere", runOrphansend),
-		mk("firstresult", "reports more goroutine sends on a channel than the receives and capacity can drain; silent when the loop body receives", runFirstresult),
+		mk("firstresult", "reports sends exceeding receives plus capacity; counts every receive site, so a one-branch leak is not reported", runFirstresult),
 	}
 }
 
@@ -41,7 +41,7 @@ const (
 	msgSelfdeadlock   = "%s is unbuffered and both ends are in this goroutine, so this operation deadlocks: give it capacity 1, or hand one end to another goroutine"
 	msgRangeunclosed  = "no code closes %s, so this range never ends: close it when the senders finish"
 	msgOrphansend     = "when the parent returns through its other select case, this send on %s blocks forever and the goroutine leaks: give %s capacity 1, or select on the same cancellation in the sender"
-	msgFirstresult    = "%d goroutines send on %s and %d values are received with capacity %d, so the others block forever: size the buffer to the fan-out, or receive in a loop"
+	msgFirstresult    = "%d goroutines send on %s and at most %d values are received with capacity %d, so the others block forever: size the buffer to the fan-out, or receive in a loop"
 )
 
 func runNilop(pass *analysis.Pass) (any, error) {
@@ -206,7 +206,7 @@ func firstresultCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 	info := pass.TypesInfo
 	for _, st := range countLoops(fn) {
 		n, ok := loopTrip(info, st)
-		if !ok {
+		if !ok || n < 2 {
 			continue
 		}
 		for _, goStmt := range directGos(loopBody(st)) {
@@ -224,17 +224,7 @@ func firstresultGo(pass *analysis.Pass, info *types.Info, fn ast.Node, loop ast.
 	if !ok {
 		return
 	}
-	kcap, ok := madeCap(info, fn, op.Key)
-	if !ok {
-		return
-	}
-	if makeInLoop(info, fn, loop, op.Key) {
-		return
-	}
-	if !firstresultReady(info, fn, loop, op.Key) {
-		return
-	}
-	r, ok := straightRecvs(info, fn, loop, op.Key)
+	r, kcap, ok := firstresultBound(info, fn, loop, op.Key)
 	if !ok {
 		return
 	}
@@ -243,25 +233,48 @@ func firstresultGo(pass *analysis.Pass, info *types.Info, fn ast.Node, loop ast.
 	}
 }
 
+func firstresultBound(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) (drain, kcap int64, ok bool) {
+	kcap, ok = madeCap(info, fn, k)
+	if !ok {
+		return 0, 0, false
+	}
+	if makeInLoop(info, fn, loop, k) {
+		return 0, 0, false
+	}
+	if hasRange(info, fn, k) {
+		return 0, 0, false
+	}
+	if handsOn(info, fn, k) || channelCopied(info, fn, k) {
+		return 0, 0, false
+	}
+	senders := senderLits(info, loop, k)
+	drain, ok = upperBoundRecvs(info, fn, k, senders)
+	if !ok {
+		return 0, 0, false
+	}
+	return drain, kcap, true
+}
+
+func senderLits(info *types.Info, loop ast.Stmt, k flow.Key) map[*ast.FuncLit]bool {
+	out := map[*ast.FuncLit]bool{}
+	for _, g := range directGos(loopBody(loop)) {
+		lit, ok := ast.Unparen(g.Call.Fun).(*ast.FuncLit)
+		if !ok {
+			continue
+		}
+		if op, ok := loneSend(info, lit); ok && op.Key == k {
+			out[lit] = true
+		}
+	}
+	return out
+}
+
 func makeInLoop(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) bool {
 	call, ok := makeDef(info, fn, k)
 	if !ok {
 		return false
 	}
 	return withinNode(loop, call)
-}
-
-func firstresultReady(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) bool {
-	if hasRange(info, fn, k) {
-		return false
-	}
-	if handsOn(info, fn, k) || channelCopied(info, fn, k) {
-		return false
-	}
-	if spawnDrains(info, fn, k) {
-		return false
-	}
-	return !loopHasRecv(info, loop, k)
 }
 
 func each(pass *analysis.Pass, do func(*analysis.Pass, ast.Node, *flow.Graph)) {
@@ -293,15 +306,40 @@ type machineVisitor struct {
 }
 
 func (v machineVisitor) visitOps(n ast.Node, s chanState) {
-	if d, ok := n.(*ast.DeferStmt); ok {
-		if ck, ok := closeKey(v.info, d.Call); ok && ck == v.key {
-			v.report(v.pass, chanOp{Kind: opClose, Key: ck, Pos: d.Pos(), Expr: d}, s)
-			return
-		}
+	if v.visitSpecial(n, s) {
+		return
 	}
 	if literalTouch(v.info, n, v.key) {
 		return
 	}
+	v.visitEach(n, s)
+}
+
+func (v machineVisitor) visitSpecial(n ast.Node, s chanState) bool {
+	if d, ok := n.(*ast.DeferStmt); ok {
+		return v.visitDefer(d, s)
+	}
+	if g, ok := n.(*ast.GoStmt); ok {
+		return v.visitGo(g)
+	}
+	return false
+}
+
+func (v machineVisitor) visitDefer(d *ast.DeferStmt, s chanState) bool {
+	ck, ok := closeKey(v.info, d.Call)
+	if !ok || ck != v.key {
+		return false
+	}
+	v.report(v.pass, chanOp{Kind: opClose, Key: ck, Pos: d.Pos(), Expr: d}, s)
+	return true
+}
+
+func (v machineVisitor) visitGo(g *ast.GoStmt) bool {
+	ck, ok := closeKey(v.info, g.Call)
+	return ok && ck == v.key
+}
+
+func (v machineVisitor) visitEach(n ast.Node, s chanState) {
 	for _, op := range opsOf(v.info, n, v.key) {
 		if underSelect(v.fn, op.Expr) {
 			op.InSelect = true

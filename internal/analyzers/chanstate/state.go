@@ -25,10 +25,11 @@ func joinState(a, b chanState) chanState {
 }
 
 func stepNode(info *types.Info, fn, n ast.Node, k flow.Key, s chanState) chanState {
-	if d, ok := n.(*ast.DeferStmt); ok {
-		if ck, ok := closeKey(info, d.Call); ok && ck == k {
-			return s
-		}
+	if defersClose(info, n, k) {
+		return s
+	}
+	if goCloses(info, n, k) {
+		return stUnknown
 	}
 	if literalTouch(info, n, k) {
 		return stUnknown
@@ -41,6 +42,24 @@ func stepNode(info *types.Info, fn, n ast.Node, k flow.Key, s chanState) chanSta
 		out = stepOp(op, out)
 	}
 	return out
+}
+
+func defersClose(info *types.Info, n ast.Node, k flow.Key) bool {
+	d, ok := n.(*ast.DeferStmt)
+	if !ok {
+		return false
+	}
+	ck, ok := closeKey(info, d.Call)
+	return ok && ck == k
+}
+
+func goCloses(info *types.Info, n ast.Node, k flow.Key) bool {
+	g, ok := n.(*ast.GoStmt)
+	if !ok {
+		return false
+	}
+	ck, ok := closeKey(info, g.Call)
+	return ok && ck == k
 }
 
 func isRangeAssignTarget(info *types.Info, fn, n ast.Node, k flow.Key) bool {

@@ -13,7 +13,7 @@ func workFirst() {}
 func firstresultReported() int {
 	ch := make(chan int)
 	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 1 values are received with capacity 0`
+		go func() { ch <- i }() // want `3 goroutines send on ch and at most 1 values are received with capacity 0`
 	}
 	return <-ch
 }
@@ -156,18 +156,6 @@ func firstresultSilentScope(c bool) {
 	}
 }
 
-func firstresultReportedIfRecv(c bool) int {
-	ch := make(chan int)
-	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 0 values are received with capacity 0`
-	}
-	if c {
-		<-ch
-		<-ch
-		<-ch
-	}
-	return 0
-}
 
 func firstresultSilentShape() int {
 	ch := make(chan int)
@@ -326,23 +314,11 @@ func firstresultReportedLabeled() int {
 	}
 LFan:
 	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 1 values are received with capacity 0`
+		go func() { ch <- i }() // want `3 goroutines send on ch and at most 1 values are received with capacity 0`
 	}
 	return <-ch
 }
 
-func firstresultReportedShortCircuit(ok bool) int {
-	ch := make(chan int)
-	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 2 values are received with capacity 0`
-	}
-	<-ch
-	<-ch
-	if ok && <-ch == 0 {
-		return 1
-	}
-	return 0
-}
 
 func firstresultSilentIfElseBalanced(c bool) int {
 	ch := make(chan int)
@@ -355,21 +331,6 @@ func firstresultSilentIfElseBalanced(c bool) int {
 		<-ch
 	} else {
 		<-ch
-		<-ch
-		<-ch
-	}
-	return 0
-}
-func firstresultReportedIfElseUnbalanced(c bool) int {
-	ch := make(chan int)
-	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 2 values are received with capacity 0`
-	}
-	if c {
-		<-ch
-		<-ch
-		<-ch
-	} else {
 		<-ch
 		<-ch
 	}
@@ -465,22 +426,6 @@ func firstresultSilentSwitchBalanced(c int) int {
 	return 0
 }
 
-func firstresultReportedSwitchUnbalanced(c int) int {
-	ch := make(chan int)
-	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 2 values are received with capacity 0`
-	}
-	switch c {
-	case 0:
-		<-ch
-		<-ch
-		<-ch
-	default:
-		<-ch
-		<-ch
-	}
-	return 0
-}
 func firstresultSilentSwitchConst() int {
 	ch := make(chan int)
 	for i := 0; i < 3; i++ {
@@ -499,22 +444,6 @@ func firstresultSilentSwitchConst() int {
 	return 0
 }
 
-func firstresultReportedSwitchConst() int {
-	ch := make(chan int)
-	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 2 values are received with capacity 0`
-	}
-	switch 0 {
-	case 0:
-		<-ch
-		<-ch
-	default:
-		<-ch
-		<-ch
-		<-ch
-	}
-	return 0
-}
 
 func firstresultSilentTypeSwitchBalanced(x any) int {
 	ch := make(chan int)
@@ -534,22 +463,6 @@ func firstresultSilentTypeSwitchBalanced(x any) int {
 	return 0
 }
 
-func firstresultReportedTypeSwitchUnbalanced(x any) int {
-	ch := make(chan int)
-	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 2 values are received with capacity 0`
-	}
-	switch x.(type) {
-	case int:
-		<-ch
-		<-ch
-		<-ch
-	default:
-		<-ch
-		<-ch
-	}
-	return 0
-}
 
 func firstresultSilentSelectBalanced() int {
 	ch := make(chan int)
@@ -571,24 +484,6 @@ func firstresultSilentSelectBalanced() int {
 	return 0
 }
 
-func firstresultReportedSelectUnbalanced() int {
-	ch := make(chan int)
-	done := make(chan int)
-	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 2 values are received with capacity 0`
-	}
-	select {
-	case v := <-ch:
-		_ = v
-		<-ch
-		<-ch
-	case v := <-done:
-		_ = v
-		<-ch
-		<-ch
-	}
-	return 0
-}
 
 func firstresultSilentIfElseOsExit() int {
 	ch := make(chan int)
@@ -655,23 +550,6 @@ func firstresultSilentSwitchConstDefaultNoReturn() int {
 	return 0
 }
 
-func firstresultReportedSwitchNoDefault(c int) int {
-	ch := make(chan int)
-	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and 0 values are received with capacity 0`
-	}
-	switch c {
-	case 0:
-		<-ch
-		<-ch
-		<-ch
-	case 1:
-		<-ch
-		<-ch
-		<-ch
-	}
-	return 0
-}
 
 func firstresultSilentDeferRecv() int {
 	ch := make(chan int)
@@ -752,4 +630,55 @@ drain:
 		<-ch
 	}
 	return 0
+}
+
+func firstresultSilentSwitchDefaultCaseRecv() int {
+	ch := make(chan int)
+	for i := 0; i < 1; i++ {
+		go func() { ch <- i }()
+	}
+	switch {
+	case <-ch == 0:
+	default:
+	}
+	return 0
+}
+
+func firstresultSilentSplitIf(c bool) int {
+	ch := make(chan int)
+	if c {
+		for i := 0; i < 2; i++ {
+			go func() { ch <- i }()
+		}
+	}
+	if c {
+		<-ch
+		<-ch
+	}
+	return 0
+}
+
+func firstresultSilentSelectDefaultRecv() int {
+	ch := make(chan int)
+	for i := 0; i < 1; i++ {
+		go func() { ch <- i }()
+	}
+	select {
+	case <-ch:
+	default:
+		<-ch
+	}
+	return 0
+}
+
+func firstresultSilentForwardGoto() int {
+	ch := make(chan int)
+	for i := 0; i < 1; i++ {
+		go func() { ch <- i }()
+	}
+	goto LFirstGoto
+	return 0
+LFirstGoto:
+	<-ch
+	return 1
 }
