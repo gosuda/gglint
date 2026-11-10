@@ -42,7 +42,7 @@ func reportUpgradeOps(pass *analysis.Pass, n ast.Node, key flow.Key, s state) {
 	if _, ok := n.(*ast.DeferStmt); ok {
 		return
 	}
-	if s != readState {
+	if s.kind != readKind {
 		return
 	}
 	for _, op := range opsInNode(pass.TypesInfo, n, key) {

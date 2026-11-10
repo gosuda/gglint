@@ -37,3 +37,11 @@ func upgradeEnclosingSilent() {
 	r.upgradeUnlockR()
 	r.mu.Lock()
 }
+
+func upgradeMethodValueSilent() {
+	var mu sync.RWMutex
+	mu.RLock()
+	runlock := mu.RUnlock
+	runlock()
+	mu.Lock()
+}

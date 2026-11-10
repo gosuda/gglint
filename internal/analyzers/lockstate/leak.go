@@ -89,7 +89,7 @@ func (c *leakCtx) reportOne(r *ast.ReturnStmt) {
 	if !ok {
 		return
 	}
-	if s != writeState && s != readState {
+	if s.kind != writeKind && s.kind != readKind {
 		return
 	}
 	if !c.good(r) && !c.endFree {
@@ -103,7 +103,7 @@ func (c *leakCtx) good(skip *ast.ReturnStmt) bool {
 		if o == skip {
 			continue
 		}
-		if c.before[o] != freeState {
+		if c.before[o].kind != freeKind {
 			continue
 		}
 		if c.reached(o) {
@@ -276,7 +276,17 @@ func isUnlockStmt(info *types.Info, st ast.Stmt, key flow.Key, pre map[ast.Node]
 	if !ok {
 		return false
 	}
-	return preLocked(pre, st, call)
+	_, m, ok := mutexKey(info, call)
+	if !ok {
+		return false
+	}
+	if s, ok := pre[st]; ok {
+		return stepMethod(m, s).kind == freeKind
+	}
+	if s, ok := pre[call]; ok {
+		return stepMethod(m, s).kind == freeKind
+	}
+	return false
 }
 
 func unlockCallOf(info *types.Info, st ast.Stmt, key flow.Key) (*ast.CallExpr, bool) {
@@ -293,16 +303,6 @@ func unlockCallOf(info *types.Info, st ast.Stmt, key flow.Key) (*ast.CallExpr, b
 		return nil, false
 	}
 	return call, true
-}
-
-func preLocked(pre map[ast.Node]state, st ast.Stmt, call *ast.CallExpr) bool {
-	if s, ok := pre[st]; ok {
-		return s == writeState || s == readState
-	}
-	if s, ok := pre[call]; ok {
-		return s == writeState || s == readState
-	}
-	return false
 }
 
 func lockRecv(info *types.Info, fn ast.Node, key flow.Key) string {

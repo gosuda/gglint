@@ -14,50 +14,61 @@ import (
 	"github.com/gosuda/gglint/internal/analyzers/lockstate"
 )
 
-type modState uint8
+type modKind uint8
 
 const (
-	modFree modState = iota
+	modFree modKind = iota
 	modWrite
 	modRead
 	modUnknown
 )
 
+type modState struct {
+	kind  modKind
+	depth int
+}
+
 func modStep(op string, cur modState) modState {
 	switch op {
 	case "Lock":
-		return modWrite
+		return modState{kind: modWrite}
 	case "RLock":
-		if cur == modWrite {
-			return modUnknown
+		if cur.kind == modWrite {
+			return modState{kind: modUnknown}
 		}
-		return modRead
+		if cur.kind == modRead {
+			return modState{kind: modRead, depth: cur.depth + 1}
+		}
+		return modState{kind: modRead, depth: 1}
 	case "Unlock":
-		if cur == modWrite {
-			return modFree
+		if cur.kind == modWrite {
+			return modState{kind: modFree}
 		}
-		return modUnknown
+		return modState{kind: modUnknown}
 	case "RUnlock":
-		if cur == modRead {
-			return modFree
+		if cur.kind == modRead && cur.depth > 1 {
+			return modState{kind: modRead, depth: cur.depth - 1}
 		}
-		return modUnknown
+		if cur.kind == modRead {
+			return modState{kind: modFree}
+		}
+		return modState{kind: modUnknown}
 	}
-	return modUnknown
+	return modState{kind: modUnknown}
 }
 
 func modPairReport(op string, pre modState) bool {
 	if op == "Unlock" {
-		return pre == modRead || pre == modFree
+		return pre.kind == modRead || pre.kind == modFree
 	}
 	if op == "RUnlock" {
-		return pre == modWrite || pre == modFree
+		return pre.kind == modWrite || pre.kind == modFree
 	}
 	return false
 }
 
 func modUpgradeReport(op string, pre modState) bool {
-	return op == "Lock" && pre == modRead
+	return op == "Lock" && pre.kind == modRead
 }
 
 type modelProg interface {
@@ -92,7 +103,7 @@ func (p branchProg) progPre(target int) modState {
 }
 
 func foldModelOps(ops []string) modState {
-	cur := modFree
+	cur := modState{kind: modFree}
 	for _, op := range ops {
 		cur = modStep(op, cur)
 	}

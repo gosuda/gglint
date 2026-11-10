@@ -20,38 +20,43 @@ func runDeferloop(pass *analysis.Pass) (any, error) {
 }
 
 func checkDeferloop(pass *analysis.Pass, fn ast.Node) {
-	for _, list := range loopBodies(fn) {
-		checkLoopList(pass, list)
-	}
+	checkLoopList(pass, loopBodies(fn))
 }
 
-func loopBodies(fn ast.Node) [][]ast.Stmt {
+type loopScope struct {
+	loop ast.Node
+	list []ast.Stmt
+}
+
+func loopBodies(fn ast.Node) []loopScope {
 	var fnLit *ast.FuncLit
 	if l, ok := fn.(*ast.FuncLit); ok {
 		fnLit = l
 	}
-	var out [][]ast.Stmt
+	var out []loopScope
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if l, ok := n.(*ast.FuncLit); ok && l != fnLit {
 			return false
 		}
 		if f, ok := n.(*ast.ForStmt); ok {
-			out = append(out, f.Body.List)
+			out = append(out, loopScope{loop: n, list: f.Body.List})
 		}
 		if r, ok := n.(*ast.RangeStmt); ok {
-			out = append(out, r.Body.List)
+			out = append(out, loopScope{loop: n, list: r.Body.List})
 		}
 		return true
 	})
 	return out
 }
 
-func checkLoopList(pass *analysis.Pass, list []ast.Stmt) {
-	if len(list) == 0 || lastIsExit(list) {
-		return
-	}
-	for i, st := range list {
-		checkLoopDefer(pass, list, i, st)
+func checkLoopList(pass *analysis.Pass, scopes []loopScope) {
+	for _, sc := range scopes {
+		if len(sc.list) == 0 || lastIsExit(sc.list) {
+			continue
+		}
+		for i, st := range sc.list {
+			checkLoopDefer(pass, sc, i, st)
+		}
 	}
 }
 
@@ -66,7 +71,7 @@ func lastIsExit(list []ast.Stmt) bool {
 	return false
 }
 
-func checkLoopDefer(pass *analysis.Pass, list []ast.Stmt, i int, st ast.Stmt) {
+func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt) {
 	ds, ok := st.(*ast.DeferStmt)
 	if !ok {
 		return
@@ -79,27 +84,87 @@ func checkLoopDefer(pass *analysis.Pass, list []ast.Stmt, i int, st ast.Stmt) {
 	if want == "" {
 		return
 	}
-	if rootInLoop(dk, list) {
+	if rootInLoop(pass.TypesInfo, dk, sc) {
 		return
 	}
-	if !loopHasLock(pass, list, i, dk, want) {
+	if !loopHasLock(pass, sc.list, i, dk, want) {
 		return
 	}
 	recv := recvText(pass.TypesInfo, ds.Call)
 	pass.Reportf(ds.Call.Pos(), "the deferred unlock runs at function exit, so the second iteration locks %s while it is held: unlock at the end of each iteration", recv)
 }
 
-func rootInLoop(key flow.Key, list []ast.Stmt) bool {
+func rootInLoop(info *types.Info, key flow.Key, sc loopScope) bool {
 	pos := key.Root.Pos()
-	if !pos.IsValid() || len(list) == 0 {
+	if pos.IsValid() {
+		for _, st := range sc.list {
+			if pos >= st.Pos() && pos <= st.End() {
+				return true
+			}
+		}
+	}
+	return headerDeclares(info, sc.loop, key)
+}
+
+func headerDeclares(info *types.Info, loop ast.Node, key flow.Key) bool {
+	switch n := loop.(type) {
+	case *ast.RangeStmt:
+		return declaresRoot(info, n.Key, key) || declaresRoot(info, n.Value, key)
+	case *ast.ForStmt:
+		return initDeclaresRoot(info, n.Init, key)
+	}
+	return false
+}
+
+func declaresRoot(info *types.Info, e ast.Expr, key flow.Key) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok || id.Name == "_" {
 		return false
 	}
-	for _, st := range list {
-		if pos >= st.Pos() && pos <= st.End() {
+	if v, ok := info.Defs[id]; ok {
+		return v == key.Root
+	}
+	return info.Uses[id] == key.Root
+}
+
+func initDeclaresRoot(info *types.Info, init ast.Stmt, key flow.Key) bool {
+	switch n := init.(type) {
+	case *ast.AssignStmt:
+		return lhsDeclaresRoot(info, n.Lhs, key)
+	case *ast.DeclStmt:
+		return declDeclaresRoot(info, n.Decl, key)
+	}
+	return false
+}
+
+func lhsDeclaresRoot(info *types.Info, lhs []ast.Expr, key flow.Key) bool {
+	for _, e := range lhs {
+		if declaresRoot(info, e, key) {
 			return true
 		}
 	}
 	return false
+}
+
+func declDeclaresRoot(info *types.Info, d ast.Decl, key flow.Key) bool {
+	gd, ok := d.(*ast.GenDecl)
+	if !ok {
+		return false
+	}
+	for _, spec := range gd.Specs {
+		if vs, ok := spec.(*ast.ValueSpec); ok && lhsDeclaresRoot(info, identExprs(vs.Names), key) {
+			return true
+		}
+	}
+	return false
+}
+
+func identExprs(ids []*ast.Ident) []ast.Expr {
+	out := make([]ast.Expr, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id)
+	}
+	return out
 }
 
 func matchLock(deferMethod string) string {

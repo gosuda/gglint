@@ -106,3 +106,15 @@ func leakTextReported(s *embedS, bad bool) error {
 	s.Unlock()
 	return nil
 }
+
+type leakR struct {
+	mu sync.RWMutex
+}
+
+func leakMismatchSilent(r *leakR, bad bool) {
+	r.mu.RLock()
+	if bad {
+		return
+	}
+	r.mu.Unlock()
+}

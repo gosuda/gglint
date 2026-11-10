@@ -46,3 +46,16 @@ func deferloopFreshSilent(n int) {
 		defer mu.Unlock()
 	}
 }
+
+type deferShard struct {
+	mu sync.Mutex
+	n  int
+}
+
+func deferloopRangeVarSilent(shards []*deferShard) {
+	for _, s := range shards {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.n++
+	}
+}

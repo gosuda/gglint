@@ -92,3 +92,54 @@ func literalOtherFieldReported() {
 	_ = f
 	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
 }
+
+func pairMethodValueSilent() {
+	var mu sync.Mutex
+	lock := mu.Lock
+	lock()
+	mu.Unlock()
+}
+
+func pairAliasedPointerSilent() {
+	p := &pairS{}
+	p.mu.Lock()
+	q := p
+	q.mu.Unlock()
+}
+
+func pairCopiedLockSilent() {
+	var mu sync.Mutex
+	mu.Lock()
+	cp := mu
+	cp.Unlock()
+	mu.Unlock()
+}
+
+func pairUnlockNeverLockedReported() int {
+	var s literalS
+	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+	return s.n
+}
+
+func pairDeferTrySilent() {
+	var mu sync.Mutex
+	defer reportDeferTry(mu.TryLock())
+	mu.Unlock()
+}
+
+func reportDeferTry(bool) {}
+
+func pairRecursiveReadSilent() {
+	var mu sync.RWMutex
+	mu.RLock()
+	mu.RLock()
+	mu.RUnlock()
+	mu.RUnlock()
+}
+
+func pairDoubleRUnlockReported() {
+	var mu sync.RWMutex
+	mu.RLock()
+	mu.RUnlock()
+	mu.RUnlock() // want "is not read-locked here, so this RUnlock panics"
+}

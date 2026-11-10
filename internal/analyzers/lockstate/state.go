@@ -2,6 +2,7 @@ package lockstate
 
 import (
 	"go/ast"
+	"go/token"
 	"go/types"
 
 	"golang.org/x/tools/go/types/typeutil"
@@ -9,15 +10,33 @@ import (
 	"github.com/gosuda/gglint/internal/flow"
 )
 
-type state uint8
+type stateKind uint8
 
 const (
-	bottomState state = iota
-	freeState
-	writeState
-	readState
-	unknownState
+	bottomKind stateKind = iota
+	freeKind
+	writeKind
+	readKind
+	unknownKind
 )
+
+type state struct {
+	kind  stateKind
+	depth int
+}
+
+var (
+	bottomState  = state{kind: bottomKind}
+	freeState    = state{kind: freeKind}
+	writeState   = state{kind: writeKind}
+	unknownState = state{kind: unknownKind}
+)
+
+const maxReadDepth = 8
+
+func readState(depth int) state {
+	return state{kind: readKind, depth: depth}
+}
 
 const (
 	methodLock     = "Lock"
@@ -96,10 +115,151 @@ func entryState(info *types.Info, fn ast.Node, key flow.Key) state {
 	if !ok {
 		return unknownState
 	}
-	if flow.IsLocal(info, fn, v) && !flow.Escapes(info, fn, v) {
-		return freeState
+	if !flow.IsLocal(info, fn, v) {
+		return unknownState
 	}
-	return unknownState
+	if _, ok := v.Type().Underlying().(*types.Pointer); ok {
+		return unknownState
+	}
+	if pathHasPointer(v.Type(), key.Path) {
+		return unknownState
+	}
+	if def, ok := flow.DefinedBy(info, fn, v); ok && !emptyLiteral(def) {
+		return unknownState
+	}
+	if lockExposed(info, fn, key) {
+		return unknownState
+	}
+	return freeState
+}
+
+func emptyLiteral(e ast.Expr) bool {
+	lit, ok := ast.Unparen(e).(*ast.CompositeLit)
+	return ok && len(lit.Elts) == 0
+}
+
+func lockExposed(info *types.Info, fn ast.Node, key flow.Key) bool {
+	funs := mutexFunSet(info, fn, key)
+	found := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if exposesAt(info, fn, n, key, funs) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func exposesAt(info *types.Info, fn, n ast.Node, key flow.Key, funs map[ast.Expr]bool) bool {
+	switch n := n.(type) {
+	case *ast.UnaryExpr:
+		return n.Op == token.AND && encloses(info, n.X, key)
+	case *ast.SelectorExpr:
+		return exposesMethodValue(info, n, key, funs)
+	case *ast.CallExpr:
+		return exposesCall(info, n, key)
+	}
+	return exposesStmtAt(info, fn, n, key)
+}
+
+func exposesStmtAt(info *types.Info, fn, n ast.Node, key flow.Key) bool {
+	switch n := n.(type) {
+	case *ast.ReturnStmt:
+		return exposesResults(info, n.Results, key)
+	case *ast.SendStmt:
+		return encloses(info, n.Value, key)
+	case *ast.GoStmt:
+		return takesKey(info, n.Call, key)
+	case *ast.FuncLit:
+		return n != fn && mentionsKey(info, n, key)
+	case *ast.AssignStmt:
+		return storedEscape(info, fn, n, key)
+	}
+	return false
+}
+
+func exposesCall(info *types.Info, call *ast.CallExpr, key flow.Key) bool {
+	if k, _, ok := mutexKey(info, call); ok && k == key {
+		return false
+	}
+	return takesKey(info, call, key)
+}
+
+func exposesResults(info *types.Info, results []ast.Expr, key flow.Key) bool {
+	for _, r := range results {
+		if encloses(info, r, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func exposesMethodValue(info *types.Info, sel *ast.SelectorExpr, key flow.Key, funs map[ast.Expr]bool) bool {
+	if funs[sel] {
+		return false
+	}
+	s := info.Selections[sel]
+	if s == nil || s.Kind() != types.MethodVal || !isLockMethodName(s.Obj().Name()) {
+		return false
+	}
+	return encloses(info, sel.X, key)
+}
+
+func isLockMethodName(m string) bool {
+	switch m {
+	case methodLock, methodRLock, methodUnlock, methodRUnlock, methodTryLock, methodTryRLock:
+		return true
+	}
+	return false
+}
+
+func storedEscape(info *types.Info, fn ast.Node, s *ast.AssignStmt, key flow.Key) bool {
+	if !storedLHS(info, fn, s.Lhs) {
+		return false
+	}
+	for _, rhs := range s.Rhs {
+		if encloses(info, rhs, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func storedLHS(info *types.Info, fn ast.Node, lhs []ast.Expr) bool {
+	for _, e := range lhs {
+		if storedTarget(info, fn, e) {
+			return true
+		}
+	}
+	return false
+}
+
+func storedTarget(info *types.Info, fn ast.Node, lhs ast.Expr) bool {
+	switch l := ast.Unparen(lhs).(type) {
+	case *ast.SelectorExpr, *ast.IndexExpr, *ast.IndexListExpr, *ast.StarExpr:
+		return true
+	case *ast.Ident:
+		v, ok := info.Defs[l].(*types.Var)
+		return ok && (v.Pos() < fn.Pos() || v.Pos() >= fn.End())
+	}
+	return false
+}
+
+func mutexFunSet(info *types.Info, fn ast.Node, key flow.Key) map[ast.Expr]bool {
+	funs := map[ast.Expr]bool{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if k, _, ok := mutexKey(info, call); ok && k == key {
+				funs[ast.Unparen(call.Fun)] = true
+			}
+		}
+		return true
+	})
+	return funs
 }
 
 func takesAddress(info *types.Info, n ast.Node, key flow.Key) bool {
@@ -151,10 +311,10 @@ func collectKeys(info *types.Info, fn ast.Node) []flow.Key {
 }
 
 func joinState(a, b state) state {
-	if a == bottomState {
+	if a.kind == bottomKind {
 		return b
 	}
-	if b == bottomState {
+	if b.kind == bottomKind {
 		return a
 	}
 	if a == b {
@@ -168,20 +328,38 @@ func stepMethod(m string, cur state) state {
 	case methodLock:
 		return writeState
 	case methodRLock:
-		if cur == writeState {
-			return unknownState
-		}
-		return readState
+		return stepRLock(cur)
 	case methodUnlock:
-		if cur == writeState {
-			return freeState
-		}
-		return unknownState
+		return stepUnlock(cur)
 	case methodRUnlock:
-		if cur == readState {
-			return freeState
-		}
+		return stepRUnlock(cur)
+	}
+	return unknownState
+}
+
+func stepRLock(cur state) state {
+	if cur.kind == writeKind {
 		return unknownState
+	}
+	if cur.kind == readKind {
+		return readState(min(cur.depth+1, maxReadDepth))
+	}
+	return readState(1)
+}
+
+func stepUnlock(cur state) state {
+	if cur.kind == writeKind {
+		return freeState
+	}
+	return unknownState
+}
+
+func stepRUnlock(cur state) state {
+	if cur.kind == readKind && cur.depth > 1 {
+		return readState(cur.depth - 1)
+	}
+	if cur.kind == readKind {
+		return freeState
 	}
 	return unknownState
 }
@@ -250,27 +428,49 @@ func applyNode(info *types.Info, key flow.Key, n ast.Node, cur state) state {
 	if cur == bottomState {
 		return bottomState
 	}
-	if _, ok := n.(*ast.DeferStmt); ok {
-		return cur
+	if ds, ok := n.(*ast.DeferStmt); ok {
+		return deferArgs(info, key, ds, cur)
 	}
 	if takesAddress(info, n, key) {
 		return unknownState
 	}
+	skips := mutexFunSet(info, n, key)
 	next := cur
 	ast.Inspect(n, func(x ast.Node) bool {
 		var cont bool
-		next, cont = visitNode(info, key, x, next)
+		next, cont = visitNode(info, key, x, next, skips)
 		return cont
 	})
 	return next
 }
 
-func visitNode(info *types.Info, key flow.Key, x ast.Node, next state) (state, bool) {
+func deferArgs(info *types.Info, key flow.Key, ds *ast.DeferStmt, cur state) state {
+	next := cur
+	for _, arg := range ds.Call.Args {
+		if takesAddress(info, arg, key) {
+			return unknownState
+		}
+		ast.Inspect(arg, func(x ast.Node) bool {
+			var cont bool
+			next, cont = visitNode(info, key, x, next, nil)
+			return cont
+		})
+	}
+	return next
+}
+
+func visitNode(info *types.Info, key flow.Key, x ast.Node, next state, skips map[ast.Expr]bool) (state, bool) {
 	if lit, ok := x.(*ast.FuncLit); ok {
 		if mentionsKey(info, lit, key) {
 			return unknownState, false
 		}
 		return next, false
+	}
+	if sel, ok := x.(*ast.SelectorExpr); ok {
+		if exposesMethodValue(info, sel, key, skips) {
+			return unknownState, false
+		}
+		return next, true
 	}
 	call, ok := x.(*ast.CallExpr)
 	if !ok {
