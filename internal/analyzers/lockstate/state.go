@@ -312,7 +312,7 @@ func handsAddress(info *types.Info, n ast.Node, key flow.Key) bool {
 }
 
 func assignTargetsVar(info *types.Info, as *ast.AssignStmt, v *types.Var) bool {
-	if as.Tok != token.ASSIGN {
+	if as.Tok != token.ASSIGN && as.Tok != token.DEFINE {
 		return false
 	}
 	for _, lhs := range as.Lhs {

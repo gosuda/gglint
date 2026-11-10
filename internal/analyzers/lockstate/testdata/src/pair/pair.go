@@ -227,3 +227,28 @@ func pairShortEmptyThenEmptyReported() {
 	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
 	s = pairS{}
 }
+
+func newLockedPairS2() (pairS, error) {
+	var s pairS
+	s.mu.Lock()
+	return s, nil
+}
+
+func pairShortRedeclSilent() {
+	s := pairS{}
+	s, err := newLockedPairS2()
+	if err != nil {
+		return
+	}
+	s.mu.Unlock()
+}
+
+func pairShortRedeclAfterReported() {
+	s := pairS{}
+	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+	s, err := newLockedPairS2()
+	if err != nil {
+		return
+	}
+	_ = s
+}
