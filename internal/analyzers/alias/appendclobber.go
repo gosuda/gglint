@@ -487,29 +487,6 @@ func indexOf(info *types.Info, idx *ast.IndexExpr, a *types.Var, threshold int) 
 	return ok && k >= threshold
 }
 
-func lenCapIdents(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
-	out := map[*ast.Ident]bool{}
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok || len(call.Args) != 1 {
-			return true
-		}
-		if !isLenCapCall(info, call) {
-			return true
-		}
-		if id, ok := ast.Unparen(call.Args[0]).(*ast.Ident); ok {
-			if v, ok := varOf(info, id); ok && v == a {
-				out[id] = true
-			}
-		}
-		return true
-	})
-	return out
-}
-
 func isLenCapCall(info *types.Info, call *ast.CallExpr) bool {
 	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
 	if !ok {

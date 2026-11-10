@@ -304,13 +304,70 @@ func AppendclobberReportedInPlaceOpAssign() ([]int, int) {
 	return out, xs[0]
 }
 
-func AppendclobberReportedInPlaceTailSlice() ([]int, []int) {
+func AppendclobberSilentInPlaceTailSlice() ([]int, []int) {
 	xs := []int{1, 2, 3, 4}
 	out := xs[:0]
 	for _, x := range xs {
 		if x%2 == 0 {
-			out = append(out, x) // want `out shares its backing array with xs, so this append overwrites elements of xs that are read later`
+			out = append(out, x)
 		}
 	}
 	return out, xs[len(out):]
+}
+
+func AppendclobberSilentNilCompare() bool {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	return a == nil
+}
+
+func AppendclobberSilentNonConstIndex() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	s := 0
+	for i := 0; i < 2; i++ {
+		s += a[i]
+	}
+	return s
+}
+
+func AppendclobberSilentCopyDest(src []int) int {
+	a := make([]int, 3, 8)
+	b := a[:2]
+	b = append(b, 9)
+	copy(a[2:], src)
+	return len(a)
+}
+
+func AppendclobberReportedCallSource() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	dst := make([]int, 4)
+	copy(dst, a)
+	return len(dst)
+}
+
+func AppendclobberReportedSend(ch chan []int) {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	ch <- a
+}
+
+func AppendclobberReportedVarDef() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	var x = a
+	return len(x)
+}
+
+func AppendclobberSilentSliceHigh() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	return a[0:1][0]
 }

@@ -19,7 +19,7 @@ func Analyzers() []*analysis.Analyzer {
 
 var appendclobber = &analysis.Analyzer{
 	Name:     "appendclobber",
-	Doc:      "Reports an append through b := a[:n] that overwrites local a read later; needs constant n and capacity proof.",
+	Doc:      "Reports an append through b := a[:n] that overwrites local a read later; needs constant n and capacity proof. A non-constant index or slice bound never counts as a read.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runAppendclobber,
 }

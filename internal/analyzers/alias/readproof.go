@@ -11,19 +11,18 @@ import (
 )
 
 type clobberQuery struct {
-	graph  *flow.Graph
-	info   *types.Info
-	target *types.Var
-	from   ast.Node
-	after  token.Pos
-	bound  int
-	end    int
-	skip   map[*ast.Ident]bool
-	stores map[*ast.Ident]bool
-	clears map[*ast.Ident]bool
-	bases  map[*ast.Ident]bool
-	writes map[*ast.Ident]bool
-	avoid  func(ast.Node) bool
+	graph       *flow.Graph
+	info        *types.Info
+	target      *types.Var
+	from        ast.Node
+	after       token.Pos
+	bound       int
+	end         int
+	stores      map[*ast.Ident]bool
+	clears      map[*ast.Ident]bool
+	copyDests   map[ast.Node]bool
+	clearSlices map[ast.Node]bool
+	avoid       func(ast.Node) bool
 }
 
 type readSite struct {
@@ -40,18 +39,17 @@ func overwrittenReadAfter(pass *analysis.Pass, fn ast.Node, a *types.Var, site r
 	}
 	info := pass.TypesInfo
 	q := &clobberQuery{
-		graph:  g,
-		info:   info,
-		target: a,
-		from:   site.from,
-		after:  site.after,
-		bound:  site.bound,
-		end:    site.end,
-		skip:   lenCapIdents(info, fn, a),
-		stores: plainStoreBases(info, fn, a),
-		clears: clearArgIdents(info, fn, a),
-		bases:  indexSliceBases(info, fn, a),
-		writes: assignTargetIdents(info, fn, a),
+		graph:       g,
+		info:        info,
+		target:      a,
+		from:        site.from,
+		after:       site.after,
+		bound:       site.bound,
+		end:         site.end,
+		stores:      plainStoreBases(info, fn, a),
+		clears:      clearArgIdents(info, fn, a),
+		copyDests:   copyDestNodes(info, fn),
+		clearSlices: clearSliceNodes(info, fn),
 	}
 	q.avoid = func(n ast.Node) bool {
 		st, ok := n.(*ast.AssignStmt)
@@ -65,17 +63,41 @@ func overwrittenReadAfter(pass *analysis.Pass, fn ast.Node, a *types.Var, site r
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		switch t := n.(type) {
-		case *ast.IndexExpr:
-			hit = q.indexHit(t)
-		case *ast.SliceExpr:
-			hit = q.sliceHit(t)
-		case *ast.Ident:
-			hit = q.identHit(t)
-		}
+		hit = q.checkNode(n)
 		return !hit
 	})
 	return hit
+}
+
+func (q *clobberQuery) checkNode(n ast.Node) bool {
+	switch t := n.(type) {
+	case *ast.IndexExpr:
+		return q.indexHit(t)
+	case *ast.SliceExpr:
+		return q.sliceHit(t)
+	default:
+		return q.wholeNode(n)
+	}
+}
+
+func (q *clobberQuery) wholeNode(n ast.Node) bool {
+	switch t := n.(type) {
+	case *ast.CallExpr:
+		return q.callWholeRead(t)
+	case *ast.ReturnStmt:
+		return q.returnWholeRead(t)
+	case *ast.RangeStmt:
+		return q.rangeWholeRead(t)
+	case *ast.AssignStmt:
+		return q.assignWholeRead(t)
+	case *ast.SendStmt:
+		return q.sendWholeRead(t)
+	case *ast.CompositeLit:
+		return q.literalWholeRead(t)
+	case *ast.ValueSpec:
+		return q.valueWholeRead(t)
+	}
+	return false
 }
 
 func (q *clobberQuery) indexHit(t *ast.IndexExpr) bool {
@@ -105,6 +127,9 @@ func (q *clobberQuery) sliceHit(t *ast.SliceExpr) bool {
 	if !ok || q.clears[id] {
 		return false
 	}
+	if q.copyDests[t] || q.clearSlices[t] {
+		return false
+	}
 	if t.Pos() <= q.after {
 		return false
 	}
@@ -114,23 +139,123 @@ func (q *clobberQuery) sliceHit(t *ast.SliceExpr) bool {
 	return q.graph.Reaches(q.from, t, q.avoid)
 }
 
-func (q *clobberQuery) identHit(id *ast.Ident) bool {
-	if q.info.Uses[id] != q.target {
-		return false
+func (q *clobberQuery) wholeIdent(e ast.Expr) (*ast.Ident, bool) {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return nil, false
 	}
+	if v, ok := varOf(q.info, id); !ok || v != q.target {
+		return nil, false
+	}
+	return id, true
+}
+
+func (q *clobberQuery) reachesIdent(id *ast.Ident) bool {
 	if id.Pos() <= q.after {
-		return false
-	}
-	if q.skip[id] || q.stores[id] || q.clears[id] || q.bases[id] || q.writes[id] {
 		return false
 	}
 	return q.graph.Reaches(q.from, id, q.avoid)
 }
 
+func (q *clobberQuery) callWholeRead(call *ast.CallExpr) bool {
+	if isLenCapCall(q.info, call) || isClearCall(q.info, call) {
+		return false
+	}
+	isCopy := isCopyCall(q.info, call)
+	for i, arg := range call.Args {
+		if isCopy && i == 0 {
+			continue
+		}
+		id, ok := q.wholeIdent(arg)
+		if !ok {
+			continue
+		}
+		if q.reachesIdent(id) {
+			return true
+		}
+	}
+	return false
+}
+
+func (q *clobberQuery) returnWholeRead(st *ast.ReturnStmt) bool {
+	for _, res := range st.Results {
+		id, ok := q.wholeIdent(res)
+		if !ok {
+			continue
+		}
+		if q.reachesIdent(id) {
+			return true
+		}
+	}
+	return false
+}
+
+func (q *clobberQuery) rangeWholeRead(st *ast.RangeStmt) bool {
+	if st.Value == nil {
+		return false
+	}
+	if id, ok := ast.Unparen(st.Value).(*ast.Ident); ok && id.Name == "_" {
+		return false
+	}
+	id, ok := q.wholeIdent(st.X)
+	if !ok {
+		return false
+	}
+	return q.reachesIdent(id)
+}
+
+func (q *clobberQuery) assignWholeRead(st *ast.AssignStmt) bool {
+	for _, rhs := range st.Rhs {
+		id, ok := q.wholeIdent(rhs)
+		if !ok {
+			continue
+		}
+		if q.reachesIdent(id) {
+			return true
+		}
+	}
+	return false
+}
+
+func (q *clobberQuery) sendWholeRead(st *ast.SendStmt) bool {
+	id, ok := q.wholeIdent(st.Value)
+	if !ok {
+		return false
+	}
+	return q.reachesIdent(id)
+}
+
+func (q *clobberQuery) literalWholeRead(lit *ast.CompositeLit) bool {
+	for _, elt := range lit.Elts {
+		if id, ok := q.wholeIdent(elt); ok && q.reachesIdent(id) {
+			return true
+		}
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if id, ok := q.wholeIdent(kv.Value); ok && q.reachesIdent(id) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (q *clobberQuery) valueWholeRead(spec *ast.ValueSpec) bool {
+	for _, val := range spec.Values {
+		id, ok := q.wholeIdent(val)
+		if !ok {
+			continue
+		}
+		if q.reachesIdent(id) {
+			return true
+		}
+	}
+	return false
+}
+
 func (q *clobberQuery) indexOutside(idx *ast.IndexExpr) bool {
 	k, ok := constInt(q.info, idx.Index)
 	if !ok {
-		return false
+		return true
 	}
 	return k < q.bound || k >= q.end
 }
@@ -140,21 +265,69 @@ func (q *clobberQuery) sliceOutside(s *ast.SliceExpr) bool {
 	if s.Low != nil {
 		v, ok := constInt(q.info, s.Low)
 		if !ok {
-			return false
+			return true
 		}
 		low = v
 	}
 	if s.High != nil {
 		h, ok := constInt(q.info, s.High)
 		if !ok {
-			return low >= q.end
+			return true
 		}
 		if h <= q.bound {
 			return true
 		}
 		return low >= q.end
 	}
+	if s.Max != nil {
+		if _, ok := constInt(q.info, s.Max); !ok {
+			return true
+		}
+	}
 	return low >= q.end
+}
+
+func isCopyCall(info *types.Info, call *ast.CallExpr) bool {
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	b, ok := info.Uses[id].(*types.Builtin)
+	return ok && b.Name() == "copy"
+}
+
+func copyDestNodes(info *types.Info, fn ast.Node) map[ast.Node]bool {
+	out := map[ast.Node]bool{}
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isCopyCall(info, call) || len(call.Args) == 0 {
+			return true
+		}
+		out[ast.Unparen(call.Args[0])] = true
+		return true
+	})
+	return out
+}
+
+func clearSliceNodes(info *types.Info, fn ast.Node) map[ast.Node]bool {
+	out := map[ast.Node]bool{}
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isClearCall(info, call) {
+			return true
+		}
+		for _, arg := range call.Args {
+			out[ast.Unparen(arg)] = true
+		}
+		return true
+	})
+	return out
 }
 
 func plainStoreBases(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
@@ -226,55 +399,6 @@ func markClearIdent(info *types.Info, x ast.Node, a *types.Var, out map[*ast.Ide
 	if v, ok := varOf(info, id); ok && v == a {
 		out[id] = true
 	}
-}
-
-func indexSliceBases(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
-	out := map[*ast.Ident]bool{}
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		switch t := n.(type) {
-		case *ast.IndexExpr:
-			markBase(info, t.X, a, out)
-		case *ast.SliceExpr:
-			markBase(info, t.X, a, out)
-		}
-		return true
-	})
-	return out
-}
-
-func markBase(info *types.Info, x ast.Expr, a *types.Var, out map[*ast.Ident]bool) {
-	v, ok := identVar(info, x)
-	if !ok || v != a {
-		return
-	}
-	if id, ok := ast.Unparen(x).(*ast.Ident); ok {
-		out[id] = true
-	}
-}
-
-func assignTargetIdents(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
-	out := map[*ast.Ident]bool{}
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		st, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		for _, lhs := range st.Lhs {
-			if id, ok := ast.Unparen(lhs).(*ast.Ident); ok {
-				if v, ok := varOf(info, id); ok && v == a {
-					out[id] = true
-				}
-			}
-		}
-		return true
-	})
-	return out
 }
 
 func isClearCall(info *types.Info, call *ast.CallExpr) bool {
