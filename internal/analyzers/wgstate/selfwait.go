@@ -28,6 +28,8 @@ func runSelfwait(pass *analysis.Pass) (any, error) {
 }
 
 func checkSelfwait(pass *analysis.Pass, fn ast.Node) {
+	cached := map[*types.Var]bool{}
+	local := map[*types.Var]bool{}
 	eachList(fn, func(list []ast.Stmt) {
 		for i, s := range list {
 			call, ok := directCall(s)
@@ -38,7 +40,7 @@ func checkSelfwait(pass *analysis.Pass, fn ast.Node) {
 			if !ok {
 				continue
 			}
-			checkWait(pass, waitSite{fn, list, i, call, k, text})
+			checkWait(pass, waitSite{fn, list, i, call, k, text}, cached, local)
 		}
 	})
 }
@@ -52,12 +54,12 @@ type waitSite struct {
 	text string
 }
 
-func checkWait(pass *analysis.Pass, w waitSite) {
+func checkWait(pass *analysis.Pass, w waitSite, cached, local map[*types.Var]bool) {
 	v, ok := w.key.Root.(*types.Var)
-	if !ok || !flow.IsLocal(pass.TypesInfo, w.fn, v) {
+	if !ok || !isLocalCached(pass, w.fn, v, local) {
 		return
 	}
-	if isReachable(pass, w.fn, v) {
+	if isReachableCached(pass, w.fn, v, cached) {
 		return
 	}
 	if w.key.Path != "" && sharesRoot(pass.TypesInfo, w.fn, v) {
@@ -70,6 +72,24 @@ func checkWait(pass *analysis.Pass, w waitSite) {
 	if shouldReport(pass.TypesInfo, w.fn, w.key, w.call.Pos(), adds, done) {
 		pass.Reportf(w.call.Pos(), "no goroutine can call Done on %s, so this Wait blocks forever: call Done for every Add, or start the goroutines before Wait", w.text)
 	}
+}
+
+func isLocalCached(pass *analysis.Pass, fn ast.Node, v *types.Var, local map[*types.Var]bool) bool {
+	if known, ok := local[v]; ok {
+		return known
+	}
+	known := flow.IsLocal(pass.TypesInfo, fn, v)
+	local[v] = known
+	return known
+}
+
+func isReachableCached(pass *analysis.Pass, fn ast.Node, v *types.Var, cached map[*types.Var]bool) bool {
+	if known, ok := cached[v]; ok {
+		return known
+	}
+	known := isReachable(pass, fn, v)
+	cached[v] = known
+	return known
 }
 
 func isReachable(pass *analysis.Pass, fn ast.Node, v *types.Var) bool {
@@ -138,9 +158,12 @@ func usesVar(info *types.Info, lit *ast.FuncLit, v *types.Var) bool {
 
 func straightCounts(pass *analysis.Pass, list []ast.Stmt, at int, k flow.Key) (adds, done int64, ok bool) {
 	info := pass.TypesInfo
-	for i, s := range list[:at] {
-		call, ok := directCall(s)
-		if !ok || hasControlBetween(list, i, at) {
+	for i := at - 1; i >= 0; i-- {
+		if isControlStmt(list[i]) {
+			break
+		}
+		call, ok := directCall(list[i])
+		if !ok {
 			continue
 		}
 		a, d, ok := countDelta(info, call, k)
@@ -153,15 +176,13 @@ func straightCounts(pass *analysis.Pass, list []ast.Stmt, at int, k flow.Key) (a
 	return adds, done, true
 }
 
-func hasControlBetween(list []ast.Stmt, from, to int) bool {
-	for _, s := range list[from+1 : to] {
-		if _, ok := s.(*ast.LabeledStmt); ok {
-			return true
-		}
-		switch unwrap(s).(type) {
-		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-			return true
-		}
+func isControlStmt(s ast.Stmt) bool {
+	if _, ok := s.(*ast.LabeledStmt); ok {
+		return true
+	}
+	switch unwrap(s).(type) {
+	case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+		return true
 	}
 	return false
 }

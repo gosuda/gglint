@@ -14,7 +14,7 @@ import (
 
 var doneskipAnalyzer = &analysis.Analyzer{
 	Name:     "doneskip",
-	Doc:      "report a return in a function literal started by go or errgroup Go that skips its direct WaitGroup Done call; helper Done calls and named functions are not checked",
+	Doc:      "report a return in a function literal started by go or errgroup Go that skips its direct WaitGroup Done call; a call that passes the group silences it, as does panic or testing FailNow, Fatal, or Skip, though testing calls still hang in a spawned goroutine; named functions are not checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runDoneskip,
 }
@@ -105,17 +105,31 @@ func reportSkipped(pass *analysis.Pass, lit *ast.FuncLit, before []ast.Stmt, don
 	if failsBefore(pass.TypesInfo, before) {
 		return
 	}
+	doneSet, releaseSet := skippedSets(pass.TypesInfo, lit, ret, before)
 	seen := map[flow.Key]bool{}
 	for _, d := range dones {
 		if d.pos < ret.End() || deferred[d.key] || seen[d.key] {
 			continue
 		}
 		seen[d.key] = true
-		if hasDoneBefore(pass.TypesInfo, lit, ret, before, d.key) {
+		if doneSet[d.key] || releaseSet[d.key] {
 			continue
 		}
 		pass.Reportf(ret.Pos(), "this return skips %s.Done(), so any Wait on it blocks forever: defer the Done call", d.text)
 	}
+}
+
+func skippedSets(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt, before []ast.Stmt) (done, release map[flow.Key]bool) {
+	done = directDoneSet(info, before)
+	release = directReleaseSet(info, before)
+	encDone, encRelease := enclosingSets(info, lit, ret)
+	for k := range encDone {
+		done[k] = true
+	}
+	for k := range encRelease {
+		release[k] = true
+	}
+	return done, release
 }
 
 func failsBefore(info *types.Info, before []ast.Stmt) bool {
@@ -128,6 +142,9 @@ func failsBefore(info *types.Info, before []ast.Stmt) bool {
 			return true
 		}
 		if isTestFail(info, call) {
+			return true
+		}
+		if isExitCall(info, call) {
 			return true
 		}
 	}
@@ -158,48 +175,91 @@ func isTestFail(info *types.Info, call *ast.CallExpr) bool {
 	return false
 }
 
-func hasDoneBefore(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt, before []ast.Stmt, k flow.Key) bool {
-	if hasDirectDone(info, before, k) {
-		return true
+func isExitCall(info *types.Info, call *ast.CallExpr) bool {
+	fn := typeutil.StaticCallee(info, call)
+	if fn == nil || fn.Pkg() == nil {
+		return false
 	}
-	return hasEnclosingDone(info, lit, ret, k)
-}
-
-func hasDirectDone(info *types.Info, before []ast.Stmt, k flow.Key) bool {
-	for _, s := range before {
-		if stmtHasDone(info, s, k) {
-			return true
-		}
+	switch fn.Pkg().Path() + "." + fn.Name() {
+	case "os.Exit", "log.Fatal", "log.Fatalf", "log.Fatalln":
+		return true
 	}
 	return false
 }
 
-func stmtHasDone(info *types.Info, s ast.Stmt, k flow.Key) bool {
-	if b, ok := unwrap(s).(*ast.BlockStmt); ok {
-		for _, inner := range b.List {
-			if stmtHasDone(info, inner, k) {
-				return true
-			}
+func directDoneSet(info *types.Info, before []ast.Stmt) map[flow.Key]bool {
+	out := map[flow.Key]bool{}
+	for _, s := range before {
+		for _, k := range stmtDoneKeys(info, s) {
+			out[k] = true
 		}
-		return false
+	}
+	return out
+}
+
+func stmtDoneKeys(info *types.Info, s ast.Stmt) []flow.Key {
+	if b, ok := unwrap(s).(*ast.BlockStmt); ok {
+		var out []flow.Key
+		for _, inner := range b.List {
+			out = append(out, stmtDoneKeys(info, inner)...)
+		}
+		return out
 	}
 	call, ok := directCall(s)
 	if !ok {
-		return false
+		return nil
 	}
-	dk, _, ok := wgKey(info, call, "Done")
-	return ok && dk == k
+	if k, _, ok := wgKey(info, call, "Done"); ok {
+		return []flow.Key{k}
+	}
+	return nil
 }
 
-func hasEnclosingDone(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt, k flow.Key) bool {
-	if lit.Body == nil {
-		return false
-	}
-	found := false
-	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if found {
-			return false
+func directReleaseSet(info *types.Info, before []ast.Stmt) map[flow.Key]bool {
+	out := map[flow.Key]bool{}
+	for _, s := range before {
+		for _, k := range stmtReleaseKeys(info, s) {
+			out[k] = true
 		}
+	}
+	return out
+}
+
+func stmtReleaseKeys(info *types.Info, s ast.Stmt) []flow.Key {
+	if b, ok := unwrap(s).(*ast.BlockStmt); ok {
+		var out []flow.Key
+		for _, inner := range b.List {
+			out = append(out, stmtReleaseKeys(info, inner)...)
+		}
+		return out
+	}
+	if d, ok := unwrap(s).(*ast.DeferStmt); ok {
+		return callArgKeys(info, d.Call)
+	}
+	call, ok := directCall(s)
+	if !ok {
+		return nil
+	}
+	return callArgKeys(info, call)
+}
+
+func callArgKeys(info *types.Info, call *ast.CallExpr) []flow.Key {
+	var out []flow.Key
+	for _, a := range call.Args {
+		if k, ok := flow.KeyOf(info, a); ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func enclosingSets(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt) (done, release map[flow.Key]bool) {
+	done = map[flow.Key]bool{}
+	release = map[flow.Key]bool{}
+	if lit.Body == nil {
+		return done, release
+	}
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -207,12 +267,43 @@ func hasEnclosingDone(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt, k
 		if !ok {
 			return true
 		}
-		if enclosingHasDone(info, list, ret, k) {
-			found = true
-		}
-		return !found
+		collectEnclosingPrefix(info, list, ret, done, release)
+		return true
 	})
-	return found
+	return done, release
+}
+
+func collectEnclosingPrefix(info *types.Info, list []ast.Stmt, ret *ast.ReturnStmt, done, release map[flow.Key]bool) {
+	for i, s := range list {
+		if unwrap(s) == ast.Stmt(ret) {
+			return
+		}
+		if !containsRet(s, ret) {
+			continue
+		}
+		for _, k := range prefixDoneKeys(info, list[:i]) {
+			done[k] = true
+		}
+		for _, k := range prefixReleaseKeys(info, list[:i]) {
+			release[k] = true
+		}
+	}
+}
+
+func prefixDoneKeys(info *types.Info, prefix []ast.Stmt) []flow.Key {
+	var out []flow.Key
+	for _, s := range prefix {
+		out = append(out, stmtDoneKeys(info, s)...)
+	}
+	return out
+}
+
+func prefixReleaseKeys(info *types.Info, prefix []ast.Stmt) []flow.Key {
+	var out []flow.Key
+	for _, s := range prefix {
+		out = append(out, stmtReleaseKeys(info, s)...)
+	}
+	return out
 }
 
 func stmtList(n ast.Node) ([]ast.Stmt, bool) {
@@ -225,18 +316,6 @@ func stmtList(n ast.Node) ([]ast.Stmt, bool) {
 		return n.Body, true
 	}
 	return nil, false
-}
-
-func enclosingHasDone(info *types.Info, list []ast.Stmt, ret *ast.ReturnStmt, k flow.Key) bool {
-	for i, s := range list {
-		if unwrap(s) == ast.Stmt(ret) {
-			return false
-		}
-		if containsRet(s, ret) && hasDirectDone(info, list[:i], k) {
-			return true
-		}
-	}
-	return false
 }
 
 func containsRet(s ast.Stmt, ret *ast.ReturnStmt) bool {

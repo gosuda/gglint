@@ -36,6 +36,7 @@ func runAddlate(pass *analysis.Pass) (any, error) {
 }
 
 func checkAddlate(pass *analysis.Pass, fn ast.Node) {
+	first := firstAddPositions(pass, fn)
 	eachList(fn, func(list []ast.Stmt) {
 		seen := map[token.Pos]bool{}
 		for i, s := range list {
@@ -43,12 +44,38 @@ func checkAddlate(pass *analysis.Pass, fn ast.Node) {
 			if !ok {
 				continue
 			}
-			checkGoAddlate(pass, fn, g, list, i, seen)
+			checkGoAddlate(pass, g, list, i, seen, first)
 		}
 	})
 }
 
-func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, list []ast.Stmt, goIdx int, seen map[token.Pos]bool) {
+func firstAddPositions(pass *analysis.Pass, fn ast.Node) map[flow.Key]token.Pos {
+	out := map[flow.Key]token.Pos{}
+	body := funcBody(fn)
+	if body == nil {
+		return out
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		ak, _, ok := wgKey(pass.TypesInfo, call, "Add")
+		if !ok {
+			return true
+		}
+		if p, dup := out[ak]; !dup || call.Pos() < p {
+			out[ak] = call.Pos()
+		}
+		return true
+	})
+	return out
+}
+
+func checkGoAddlate(pass *analysis.Pass, g *ast.GoStmt, list []ast.Stmt, goIdx int, seen map[token.Pos]bool, first map[flow.Key]token.Pos) {
 	lit, ok := ast.Unparen(g.Call.Fun).(*ast.FuncLit)
 	if !ok || lit.Body == nil {
 		return
@@ -62,7 +89,7 @@ func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, list []ast.
 	}
 	group := lateGroup{list: list, goIdx: goIdx, seen: seen}
 	for _, k := range sortedDoneKeys(plain, deferred) {
-		if hasAddBefore(pass, fn, g, k) {
+		if hasAddBefore(first, g, k) {
 			continue
 		}
 		reportLateAdds(pass, group, k)
@@ -190,25 +217,7 @@ func collectDonesIn(pass *analysis.Pass, n ast.Node, out map[flow.Key][]token.Po
 	})
 }
 
-func hasAddBefore(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, k flow.Key) bool {
-	info := pass.TypesInfo
-	found := false
-	ast.Inspect(funcBody(fn), func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok || call.Pos() >= g.Pos() {
-			return true
-		}
-		ak, _, ok := wgKey(info, call, "Add")
-		if ok && ak == k {
-			found = true
-		}
-		return true
-	})
-	return found
+func hasAddBefore(first map[flow.Key]token.Pos, g *ast.GoStmt, k flow.Key) bool {
+	p, ok := first[k]
+	return ok && p < g.Pos()
 }

@@ -1,6 +1,7 @@
 package doneskip
 
 import (
+	"log"
 	"sync"
 	"testing"
 )
@@ -46,18 +47,6 @@ func doneskipSilentBefore() {
 		work()
 		wg.Done()
 	}()
-	wg.Wait()
-}
-func doneskipSilentWgGo() {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	wg.Go(func() {
-		if bad() {
-			return
-		}
-		work()
-		wg.Done()
-	})
 	wg.Wait()
 }
 
@@ -117,12 +106,29 @@ func doneskipSilentBlockedDone() {
 	}()
 	wg.Wait()
 }
-func doneskipSilentFatal(t *testing.T) {
+
+func finish(wg *sync.WaitGroup) { wg.Done() }
+
+func doneskipSilentHelper() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		if bad() {
-			t.Fatal(bad())
+			finish(&wg)
+			return
+		}
+		work()
+		wg.Done()
+	}()
+	wg.Wait()
+}
+
+func doneskipSilentLogFatal() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		if bad() {
+			log.Fatal("bad")
 			return
 		}
 		work()
