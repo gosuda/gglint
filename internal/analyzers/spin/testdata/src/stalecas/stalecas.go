@@ -163,9 +163,9 @@ func stalecasSilentNonIf(n *atomic.Int64) {
 	use(old)
 }
 
-func stalecasSilentElse(n *atomic.Int64) {
+func stalecasReportedElse(n *atomic.Int64) {
 	old := n.Load()
-	for {
+	for { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
 		if n.CompareAndSwap(old, old+1) {
 			break
 		} else {
@@ -189,4 +189,28 @@ func stalecasSilentRange(n *atomic.Int64) {
 		for _, old = range olds {
 		}
 	}
+}
+func stalecasReportedCondFallback(n *atomic.Int64, ready bool) {
+	old := n.Load()
+	for !ready { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+		if n.CompareAndSwap(old, old+1) {
+			break
+		}
+	}
+}
+
+func stalecasReportedLoopInit(n *atomic.Int64) {
+	for old := n.Load(); !n.CompareAndSwap(old, old+1); { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	}
+}
+
+func stalecasReportedIfInit(n *atomic.Int64) {
+	old := n.Load()
+	i := 0
+	for { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+		if i = 1; n.CompareAndSwap(old, old+1) {
+			break
+		}
+	}
+	use(i)
 }

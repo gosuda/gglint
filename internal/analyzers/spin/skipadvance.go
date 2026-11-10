@@ -55,7 +55,7 @@ func checkContinues(pass *analysis.Pass, list []ast.Stmt, j int, check *ast.IfSt
 	info := pass.TypesInfo
 	for k, inner := range check.Body.List {
 		branch, ok := inner.(*ast.BranchStmt)
-		if !ok || branch.Tok != token.CONTINUE || branch.Label != nil {
+		if !ok || branch.Tok != token.CONTINUE {
 			continue
 		}
 		if advancedBefore(info, list, j, check, k, vars) {
@@ -107,19 +107,38 @@ func stmtAssigns(info *types.Info, stmt ast.Stmt, vars map[*types.Var]bool) bool
 	walkNoLit(stmt, func(n ast.Node) bool {
 		switch t := n.(type) {
 		case *ast.AssignStmt:
-			for _, lhs := range t.Lhs {
-				if varIn(info, lhs, vars) {
-					hit = true
-				}
-			}
+			hit = assignHits(info, t.Lhs, vars) || hit
 		case *ast.IncDecStmt:
-			if varIn(info, t.X, vars) {
-				hit = true
-			}
+			hit = varIn(info, t.X, vars) || hit
+		case *ast.RangeStmt:
+			hit = rangeAssignHits(info, t, vars) || hit
 		}
 		return !hit
 	})
 	return hit
+}
+
+func assignHits(info *types.Info, lhs []ast.Expr, vars map[*types.Var]bool) bool {
+	for _, e := range lhs {
+		if varIn(info, e, vars) {
+			return true
+		}
+	}
+	return false
+}
+
+func rangeAssignHits(info *types.Info, t *ast.RangeStmt, vars map[*types.Var]bool) bool {
+	if t.Tok != token.ASSIGN {
+		return false
+	}
+	return rangeVar(info, t.Key, vars) || rangeVar(info, t.Value, vars)
+}
+
+func rangeVar(info *types.Info, e ast.Expr, vars map[*types.Var]bool) bool {
+	if e == nil {
+		return false
+	}
+	return varIn(info, e, vars)
 }
 
 func varIn(info *types.Info, e ast.Expr, vars map[*types.Var]bool) bool {

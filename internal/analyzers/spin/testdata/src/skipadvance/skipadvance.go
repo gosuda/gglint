@@ -41,11 +41,11 @@ func skipadvanceReportedStar(p *int, n int) {
 	}
 }
 
-func skipadvanceReportedCustomErr(e *ptrErr) {
+func skipadvanceSilentCustomErr(e *ptrErr) {
 	i := 0
 	for i < len(xs) {
 		if e != nil {
-			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue
 		}
 		i++
 	}
@@ -102,12 +102,12 @@ func skipadvanceSilentBreak() {
 	}
 }
 
-func skipadvanceSilentLabeled() {
+func skipadvanceReportedLabeled() {
 	i := 0
 Outer:
 	for i < len(xs) {
 		if err := doStep(xs[i]); err != nil {
-			continue Outer
+			continue Outer // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
 		}
 		i++
 	}
@@ -149,6 +149,18 @@ func skipadvanceSilentNoAdvance() {
 	for i < len(xs) {
 		if err := doStep(xs[i]); err != nil {
 			continue
+		}
+	}
+}
+
+func skipadvanceReportedRangeAdvance() {
+	i := 0
+	m := []int{1, 2, 3}
+	for i < len(xs) {
+		if err := doStep(xs[i]); err != nil {
+			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+		}
+		for _, i = range m {
 		}
 	}
 }

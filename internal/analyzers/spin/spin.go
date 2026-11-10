@@ -83,15 +83,7 @@ func isErrorType(t types.Type) bool {
 	if t == nil {
 		return false
 	}
-	errObj := types.Universe.Lookup("error")
-	if types.Identical(t, errObj.Type()) {
-		return true
-	}
-	iface, ok := errObj.Type().Underlying().(*types.Interface)
-	if !ok {
-		return false
-	}
-	return types.Implements(t, iface)
+	return types.Identical(t, types.Universe.Lookup("error").Type())
 }
 
 func isPkgMethod(info *types.Info, sel *ast.SelectorExpr, path, name string) bool {
@@ -107,4 +99,16 @@ func forLoops(pass *analysis.Pass, f func(cur inspector.Cursor, loop *ast.ForStm
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.ForStmt)(nil)) {
 		f(cur, inspection.As[*ast.ForStmt](cur.Node()))
 	}
+}
+
+func isCodeCall(info *types.Info, call *ast.CallExpr) bool {
+	if info != nil && info.Types[call.Fun].IsType() {
+		return false
+	}
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return true
+	}
+	b, ok := info.Uses[id].(*types.Builtin)
+	return !ok || (b.Name() != "len" && b.Name() != "cap")
 }

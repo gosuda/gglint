@@ -154,3 +154,34 @@ func closedrecvSilentDelete() {
 	}
 	use(sum)
 }
+
+func closedrecvReportedInitPost() int {
+	ch := make(chan int)
+	go func() { ch <- 1; close(ch) }()
+	sum := 0
+	for i := 0; ; i++ { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
+		sum += <-ch + i
+	}
+}
+
+func closedrecvReportedAfter() int {
+	ch := make(chan int)
+	sum := 0
+	for { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
+		sum += <-ch
+		if sum > 9 {
+			break
+		}
+	}
+	go func() { ch <- 1; close(ch) }()
+	return sum
+}
+
+func closedrecvReportedLen(buf []int) int {
+	ch := make(chan int)
+	go func() { ch <- 1; close(ch) }()
+	sum := 0
+	for { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
+		sum += <-ch + len(buf)
+	}
+}

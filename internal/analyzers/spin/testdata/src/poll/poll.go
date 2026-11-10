@@ -65,12 +65,37 @@ func pollSilentNoDefault(ch chan int) {
 	}
 }
 
-func pollSilentNoComm() {
+func pollReportedNoComm() {
 	n := 0
-	for {
+	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
 		select {
 		default:
 			n++
+		}
+	}
+}
+
+func pollG() int { return 1 }
+
+func pollSilentOverwrite(ch chan int, n int) {
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			n += pollG() + -n
+		}
+	}
+}
+
+func pollReportedLen(ch chan int, xs []int) {
+	n := 0
+	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			n += len(xs)
 		}
 	}
 }

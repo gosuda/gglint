@@ -31,7 +31,7 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 		return
 	}
 	fn := enclosingFunc(cur)
-	if !isLocalVar(fn, old) || old.Pos() >= loop.Pos() {
+	if !isLocalVar(fn, old) || definedInBody(loop, old) {
 		return
 	}
 	if assignsRoot(pass.TypesInfo, loop.Body, old) {
@@ -45,13 +45,12 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 
 func staleShape(pass *analysis.Pass, loop *ast.ForStmt) (*types.Var, bool) {
 	if cond, ok := ast.Unparen(loop.Cond).(*ast.UnaryExpr); ok && cond.Op == token.NOT {
-		return casOld(pass.TypesInfo, cond.X)
+		if old, ok := casOld(pass.TypesInfo, cond.X); ok {
+			return old, true
+		}
 	}
-	if loop.Body == nil || len(loop.Body.List) == 0 {
-		return nil, false
-	}
-	check, ok := loop.Body.List[0].(*ast.IfStmt)
-	if !ok || check.Init != nil || check.Else != nil {
+	check, ok := firstCheck(loop)
+	if !ok {
 		return nil, false
 	}
 	old, ok := casOld(pass.TypesInfo, check.Cond)
@@ -59,6 +58,21 @@ func staleShape(pass *analysis.Pass, loop *ast.ForStmt) (*types.Var, bool) {
 		return nil, false
 	}
 	return old, true
+}
+
+func definedInBody(loop *ast.ForStmt, old *types.Var) bool {
+	return loop.Body != nil && loop.Body.Pos() <= old.Pos() && old.Pos() < loop.Body.End()
+}
+
+func firstCheck(loop *ast.ForStmt) (*ast.IfStmt, bool) {
+	if loop.Body == nil || len(loop.Body.List) == 0 {
+		return nil, false
+	}
+	check, ok := loop.Body.List[0].(*ast.IfStmt)
+	if !ok {
+		return nil, false
+	}
+	return check, true
 }
 
 func exitsLoop(check *ast.IfStmt) bool {
@@ -84,23 +98,8 @@ func casOld(info *types.Info, e ast.Expr) (*types.Var, bool) {
 	if !ok {
 		return nil, false
 	}
-	var old ast.Expr
-	switch len(call.Args) {
-	case 3:
-		fn, ok := info.ObjectOf(sel.Sel).(*types.Func)
-		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "sync/atomic" {
-			return nil, false
-		}
-		if !strings.HasPrefix(fn.Name(), "CompareAndSwap") {
-			return nil, false
-		}
-		old = call.Args[1]
-	case 2:
-		if !isPkgMethod(info, sel, "sync/atomic", "CompareAndSwap") {
-			return nil, false
-		}
-		old = call.Args[0]
-	default:
+	old, ok := casOldArg(info, call, sel)
+	if !ok {
 		return nil, false
 	}
 	id, ok := ast.Unparen(old).(*ast.Ident)
@@ -114,28 +113,69 @@ func casOld(info *types.Info, e ast.Expr) (*types.Var, bool) {
 	return v, true
 }
 
+func casOldArg(info *types.Info, call *ast.CallExpr, sel *ast.SelectorExpr) (ast.Expr, bool) {
+	switch len(call.Args) {
+	case 3:
+		return atomicOld(info, sel, call.Args[1])
+	case 2:
+		if !isPkgMethod(info, sel, "sync/atomic", "CompareAndSwap") {
+			return nil, false
+		}
+		return call.Args[0], true
+	default:
+		return nil, false
+	}
+}
+
+func atomicOld(info *types.Info, sel *ast.SelectorExpr, arg ast.Expr) (ast.Expr, bool) {
+	fn, ok2 := info.ObjectOf(sel.Sel).(*types.Func)
+	if !ok2 || fn.Pkg() == nil || fn.Pkg().Path() != "sync/atomic" {
+		return nil, false
+	}
+	if !strings.HasPrefix(fn.Name(), "CompareAndSwap") {
+		return nil, false
+	}
+	return arg, true
+}
+
 func assignsRoot(info *types.Info, n ast.Node, v *types.Var) bool {
 	hit := false
 	walkNoLit(n, func(x ast.Node) bool {
-		switch t := x.(type) {
-		case *ast.AssignStmt:
-			for _, lhs := range t.Lhs {
-				if hitRoot(info, lhs, v) {
-					hit = true
-				}
-			}
-		case *ast.IncDecStmt:
-			if hitRoot(info, t.X, v) {
-				hit = true
-			}
-		case *ast.RangeStmt:
-			if t.Tok == token.ASSIGN && (hitRoot(info, t.Key, v) || hitRoot(info, t.Value, v)) {
-				hit = true
-			}
+		if assignsNode(info, x, v) {
+			hit = true
 		}
 		return !hit
 	})
 	return hit
+}
+
+func assignsNode(info *types.Info, n ast.Node, v *types.Var) bool {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		return lhsHits(info, t.Lhs, v)
+	case *ast.IncDecStmt:
+		return hitRoot(info, t.X, v)
+	case *ast.RangeStmt:
+		return rangeHits(info, t, v)
+	default:
+		return false
+	}
+}
+
+func lhsHits(info *types.Info, lhs []ast.Expr, v *types.Var) bool {
+	for _, e := range lhs {
+		if hitRoot(info, e, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func rangeHits(info *types.Info, t *ast.RangeStmt, v *types.Var) bool {
+	if t.Tok != token.ASSIGN {
+		return false
+	}
+	return hitRoot(info, t.Key, v) || hitRoot(info, t.Value, v)
 }
 
 func hitRoot(info *types.Info, e ast.Expr, v *types.Var) bool {
