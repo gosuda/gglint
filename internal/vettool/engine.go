@@ -116,6 +116,9 @@ func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysi
 	if !d.Pos.IsValid() {
 		return false
 	}
+	if pass.Fset.File(d.Pos) == nil {
+		return false
+	}
 	filename := realName(pass.Fset, d.Pos)
 	if e.filtered(r, filename, d) || e.excluded(filename, r.Name, check, d.Message) {
 		return false

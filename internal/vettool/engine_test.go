@@ -280,12 +280,21 @@ func TestInvalidPositionDroppedForEveryFilter(t *testing.T) {
 		pos := pass.Files[0].Decls[0].Pos()
 		r := probeRule()
 		r.Reports = reports
-		d := analysis.Diagnostic{Pos: token.NoPos, Message: "probe finding"}
-		if reports == rules.ReportWithFix {
-			d.SuggestedFixes = []analysis.SuggestedFix{{Message: "fix it", TextEdits: []analysis.TextEdit{{Pos: pos, End: pos, NewText: []byte("var Y = 1")}}}}
+		cases := []struct {
+			name string
+			d    analysis.Diagnostic
+		}{
+			{name: "no position", d: analysis.Diagnostic{Pos: token.NoPos, Message: "probe finding"}},
+			{name: "position outside fileset", d: analysis.Diagnostic{Pos: token.Pos(1 << 30), Message: "probe finding"}},
 		}
-		if e.keep(pass, r, "", d) {
-			t.Errorf("reports %v: keep with no position = true, want false", reports)
+		for _, tc := range cases {
+			d := tc.d
+			if reports == rules.ReportWithFix {
+				d.SuggestedFixes = []analysis.SuggestedFix{{Message: "fix it", TextEdits: []analysis.TextEdit{{Pos: pos, End: pos, NewText: []byte("var Y = 1")}}}}
+			}
+			if e.keep(pass, r, "", d) {
+				t.Errorf("reports %v %s: keep = true, want false", reports, tc.name)
+			}
 		}
 	}
 }
