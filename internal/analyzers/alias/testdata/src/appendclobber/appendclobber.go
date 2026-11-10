@@ -396,14 +396,13 @@ func AppendclobberReportedMethodRecv() int {
 	return a.Sum()
 }
 
-func useSlicePtr(p *[]int) {}
+func readThird(p *[]int) int { return (*p)[2] }
 
 func AppendclobberReportedAddrTaken() int {
 	a := []int{1, 2, 3, 4}
 	b := a[:2]
 	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
-	useSlicePtr(&a)
-	return 0
+	return readThird(&a)
 }
 
 func AppendclobberSilentAddrLocal() ([]int, int) {
@@ -436,4 +435,14 @@ func AppendclobberReportedCaptured() {
 	}
 	_ = f
 	_ = keep
+}
+
+type ints []int
+
+func (r ints) clean() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	r = a
+	return len(r)
 }

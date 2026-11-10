@@ -105,9 +105,6 @@ func mapIndex(info *types.Info, e ast.Expr) (string, bool) {
 func collectWholeUses(info *types.Info, fn ast.Node) map[*types.Var]bool {
 	out := map[*types.Var]bool{}
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
 		switch n := n.(type) {
 		case *ast.ReturnStmt:
 			for _, r := range n.Results {

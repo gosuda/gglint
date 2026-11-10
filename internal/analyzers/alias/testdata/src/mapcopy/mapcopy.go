@@ -106,3 +106,9 @@ func MapcopySilentPtrField(m map[string]withPtr, k string) {
 }
 
 func useItem(v item) item { return v }
+
+func MapcopySilentClosure(m map[string]item, k string) {
+	v := m[k]
+	defer func() { useItem(v) }()
+	v.n++
+}

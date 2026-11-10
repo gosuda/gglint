@@ -311,19 +311,29 @@ func scopeLocalAlias(s *appendScope, v *types.Var) bool {
 }
 
 func isParam(info *types.Info, fn ast.Node, v *types.Var) bool {
-	var ft *ast.FuncType
 	switch fn := fn.(type) {
 	case *ast.FuncDecl:
-		if fn.Type != nil {
-			ft = fn.Type
+		if definesVar(info, fn.Recv, v) {
+			return true
 		}
+		if fn.Type == nil {
+			return false
+		}
+		return definesVar(info, fn.Type.Params, v)
 	case *ast.FuncLit:
-		ft = fn.Type
+		if fn.Type == nil {
+			return false
+		}
+		return definesVar(info, fn.Type.Params, v)
 	}
-	if ft == nil || ft.Params == nil {
+	return false
+}
+
+func definesVar(info *types.Info, list *ast.FieldList, v *types.Var) bool {
+	if list == nil {
 		return false
 	}
-	for _, field := range ft.Params.List {
+	for _, field := range list.List {
 		for _, id := range field.Names {
 			if info.Defs[id] == v {
 				return true
