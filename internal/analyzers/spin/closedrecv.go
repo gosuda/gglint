@@ -81,13 +81,17 @@ func closesFor(pass *analysis.Pass, fn ast.Node, cache map[ast.Node]*fnCloses) *
 	if fn == nil {
 		return fc
 	}
-	walkCalledLit(fn, func(n ast.Node) bool {
+	ast.Inspect(fn, func(n ast.Node) bool {
 		switch t := n.(type) {
 		case *ast.AssignStmt:
 			markReassigned(pass.TypesInfo, t, fc.reassigned)
 		case *ast.RangeStmt:
 			markRangeReassigned(pass.TypesInfo, t, fc.reassigned)
-		case *ast.GoStmt:
+		}
+		return true
+	})
+	walkCalledLit(fn, func(n ast.Node) bool {
+		if t, ok := n.(*ast.GoStmt); ok {
 			markGoCloses(pass, t, fc.firstClose)
 		}
 		return true

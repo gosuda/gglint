@@ -294,17 +294,17 @@ func stalecasSilentAddrBefore(n *atomic.Int64) {
 	}
 	use(old)
 }
-func stalecasReportedClosureAfter(n *atomic.Int64) {
+func stalecasSilentClosureAfter(n *atomic.Int64) {
 	old := n.Load()
-	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+	for !n.CompareAndSwap(old, old+1) {
 	}
 	reset := func() { old = 0 }
 	reset()
 }
 
-func stalecasReportedAddrAfter(n *atomic.Int64) {
+func stalecasSilentAddrAfter(n *atomic.Int64) {
 	old := n.Load()
-	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+	for !n.CompareAndSwap(old, old+1) {
 	}
 	use(&old)
 }
@@ -330,11 +330,11 @@ scan:
 	}
 }
 
-func stalecasReportedInRange(n *atomic.Int64, xs []int) {
+func stalecasSilentInRange(n *atomic.Int64, xs []int) {
 	old := n.Load()
 	sink := func(p *int64) { use(*p) }
 	for _, x := range xs {
-		for !n.CompareAndSwap(old, old+int64(x)) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		for !n.CompareAndSwap(old, old+int64(x)) {
 		}
 		sink(&old)
 	}
@@ -376,6 +376,39 @@ again:
 	old = n.Load()
 	for !n.CompareAndSwap(old, old+1) {
 		goto again
+	}
+	use(old)
+}
+func stalecasReportedClosureCall(n *atomic.Int64) {
+	func() {
+		old := n.Load()
+		for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+			use(1)
+		}
+		use(old)
+	}()
+}
+
+func stalecasReportedSelfLabel(n *atomic.Int64) {
+	old := n.Load()
+outer:
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		if oneArg(1) {
+			continue outer
+		}
+	}
+	use(old)
+}
+
+func stalecasReportedInnerGoto(n *atomic.Int64) {
+	old := n.Load()
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		if oneArg(1) {
+			goto skip
+		}
+		use(1)
+	skip:
+		use(2)
 	}
 	use(old)
 }

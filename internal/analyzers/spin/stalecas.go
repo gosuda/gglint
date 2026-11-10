@@ -13,19 +13,26 @@ import (
 
 var stalecasAnalyzer = &analysis.Analyzer{
 	Name:     "stalecas",
-	Doc:      "report a CAS loop retrying with stale old when the loop cannot reload it: no assign, no leaving jump, no called reload; spin covers five shapes only",
+	Doc:      "reports a loop for !v.CompareAndSwap(old, new) (and the other shapes it already recognises) when old is a local, nothing in the loop assigns old, no goto or labeled break or continue leaves the loop, no other literal assigns old, and &old never appears; the last two are function-wide, so such loops are not reported; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runStalecas,
 }
 
 func runStalecas(pass *analysis.Pass) (any, error) {
+	cache := map[ast.Node]*staleFn{}
 	forLoops(pass, func(cur inspector.Cursor, loop *ast.ForStmt) {
-		checkStalecas(pass, cur, loop)
+		checkStalecas(pass, cur, loop, cache)
 	})
 	return nil, nil
 }
 
-func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
+type staleFn struct {
+	addrs  map[*types.Var]bool
+	lits   []*ast.FuncLit
+	labels []*ast.LabeledStmt
+}
+
+func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt, cache map[ast.Node]*staleFn) {
 	old, ok := staleShape(pass, loop)
 	if !ok {
 		return
@@ -37,13 +44,120 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 	if assignsOldInLoop(pass.TypesInfo, loop, old) {
 		return
 	}
-	if loopHasOutsideJump(loop) {
+	fc := staleFnFor(pass.TypesInfo, fn, cache)
+	if loopHasOutsideJump(fc, loop) {
 		return
 	}
-	if (addrTakenInFunc(pass.TypesInfo, fn, old) || funcLitAssignsOld(pass.TypesInfo, fn, old)) && loopCallsOut(pass.TypesInfo, loop) {
+	if fc.addrs[old] {
+		return
+	}
+	if otherLitAssignsOld(pass.TypesInfo, fc, loop, old) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "after one failed swap %s is stale, so retries fail until another goroutine stores %s back: load it again inside the loop", old.Name(), old.Name())
+}
+
+func staleFnFor(info *types.Info, fn ast.Node, cache map[ast.Node]*staleFn) *staleFn {
+	if fc, ok := cache[fn]; ok {
+		return fc
+	}
+	fc := &staleFn{addrs: map[*types.Var]bool{}}
+	cache[fn] = fc
+	if fn == nil {
+		return fc
+	}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		collectStaleNode(info, fc, n)
+		return true
+	})
+	return fc
+}
+
+func collectStaleNode(info *types.Info, fc *staleFn, n ast.Node) {
+	switch t := n.(type) {
+	case *ast.FuncLit:
+		fc.lits = append(fc.lits, t)
+	case *ast.LabeledStmt:
+		fc.labels = append(fc.labels, t)
+	case *ast.UnaryExpr:
+		noteAddr(info, fc, t)
+	}
+}
+
+func noteAddr(info *types.Info, fc *staleFn, t *ast.UnaryExpr) {
+	if t.Op != token.AND {
+		return
+	}
+	id := rootIdent(t.X)
+	if id == nil {
+		return
+	}
+	if v, ok := info.ObjectOf(id).(*types.Var); ok {
+		fc.addrs[v] = true
+	}
+}
+
+func otherLitAssignsOld(info *types.Info, fc *staleFn, loop *ast.ForStmt, old *types.Var) bool {
+	for _, lit := range fc.lits {
+		if lit.Pos() <= loop.Pos() && loop.End() <= lit.End() {
+			continue
+		}
+		if litAssignsOld(info, lit, old) {
+			return true
+		}
+	}
+	return false
+}
+
+func litAssignsOld(info *types.Info, lit *ast.FuncLit, old *types.Var) bool {
+	found := false
+	walkNoLit(lit.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if litNodeAssignsOld(info, n, old) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func litNodeAssignsOld(info *types.Info, n ast.Node, old *types.Var) bool {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		return lhsAssignsOld(info, t, old)
+	case *ast.IncDecStmt:
+		return hitRoot(info, t.X, old)
+	case *ast.RangeStmt:
+		return rangeAssignsOld(info, t, old)
+	default:
+		return false
+	}
+}
+
+func rangeAssignsOld(info *types.Info, t *ast.RangeStmt, old *types.Var) bool {
+	if t.Tok != token.ASSIGN {
+		return false
+	}
+	return hitRoot(info, t.Key, old) || hitRoot(info, t.Value, old)
+}
+
+func lhsAssignsOld(info *types.Info, t *ast.AssignStmt, old *types.Var) bool {
+	for _, e := range t.Lhs {
+		id := rootIdent(e)
+		if id == nil {
+			continue
+		}
+		if info.ObjectOf(id) != types.Object(old) {
+			continue
+		}
+		if t.Tok == token.DEFINE && id.Pos() == old.Pos() {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func assignsOldInLoop(info *types.Info, loop *ast.ForStmt, old *types.Var) bool {
@@ -56,49 +170,78 @@ func assignsOldInLoop(info *types.Info, loop *ast.ForStmt, old *types.Var) bool 
 	return loop.Post != nil && assignsRoot(info, loop.Post, old)
 }
 
-func isAddrOfOld(info *types.Info, e ast.Expr, old *types.Var) bool {
-	u, ok := ast.Unparen(e).(*ast.UnaryExpr)
-	if !ok || u.Op != token.AND {
-		return false
-	}
-	return hitRoot(info, u.X, old)
-}
-
-func addrTakenInFunc(info *types.Info, fn ast.Node, old *types.Var) bool {
-	found := false
-	if fn == nil {
-		return false
-	}
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if u, ok := n.(*ast.UnaryExpr); ok && isAddrOfOld(info, u, old) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func loopHasOutsideJump(loop *ast.ForStmt) bool {
+func loopHasOutsideJump(fc *staleFn, loop *ast.ForStmt) bool {
 	if loop.Body == nil {
 		return false
 	}
 	inside := loopLabels(loop.Body)
-	jumps := false
-	walkNoLit(loop.Body, func(n ast.Node) bool {
-		if jumps {
+	includeLoopLabels(fc, loop, inside)
+	enclosing := enclosingLabels(fc, loop)
+	return scanLeaves(loop.Body, inside, enclosing)
+}
+
+func includeLoopLabels(fc *staleFn, loop *ast.ForStmt, inside map[string]bool) {
+	for _, lab := range fc.labels {
+		if labelsLoop(lab, loop) {
+			inside[lab.Label.Name] = true
+		}
+	}
+}
+
+func enclosingLabels(fc *staleFn, loop *ast.ForStmt) map[string]bool {
+	out := map[string]bool{}
+	for _, lab := range fc.labels {
+		if labelsLoop(lab, loop) {
+			continue
+		}
+		if lab.Pos() <= loop.Pos() && loop.End() <= lab.End() {
+			out[lab.Label.Name] = true
+		}
+	}
+	return out
+}
+
+func scanLeaves(body ast.Node, inside, enclosing map[string]bool) bool {
+	leaves := false
+	walkNoLit(body, func(n ast.Node) bool {
+		if leaves {
 			return false
 		}
-		if leavesLoop(n, inside) {
-			jumps = true
-			return false
+		if branchLeaves(n, inside, enclosing) {
+			leaves = true
 		}
-		return true
+		return !leaves
 	})
-	return jumps
+	return leaves
+}
+
+func branchLeaves(n ast.Node, inside, enclosing map[string]bool) bool {
+	b, ok := n.(*ast.BranchStmt)
+	if !ok {
+		return false
+	}
+	if b.Tok == token.GOTO {
+		return b.Label != nil && !inside[b.Label.Name]
+	}
+	if b.Tok == token.BREAK || b.Tok == token.CONTINUE {
+		return b.Label != nil && enclosing[b.Label.Name]
+	}
+	return false
+}
+
+func labelsLoop(lab *ast.LabeledStmt, loop *ast.ForStmt) bool {
+	s := lab.Stmt
+	for s != nil {
+		if f, ok := s.(*ast.ForStmt); ok && f == loop {
+			return true
+		}
+		n, ok := s.(*ast.LabeledStmt)
+		if !ok {
+			return false
+		}
+		s = n.Stmt
+	}
+	return false
 }
 
 func loopLabels(body ast.Node) map[string]bool {
@@ -110,74 +253,6 @@ func loopLabels(body ast.Node) map[string]bool {
 		return true
 	})
 	return inside
-}
-
-func leavesLoop(n ast.Node, inside map[string]bool) bool {
-	b, ok := n.(*ast.BranchStmt)
-	if !ok {
-		return false
-	}
-	if b.Tok == token.GOTO {
-		return true
-	}
-	return b.Label != nil && (b.Tok == token.BREAK || b.Tok == token.CONTINUE) && !inside[b.Label.Name]
-}
-
-func loopCallsOut(info *types.Info, loop *ast.ForStmt) bool {
-	found := false
-	walkLoopParts(loop, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if _, ok := casOld(info, call); ok {
-			return true
-		}
-		if info.Types[call.Fun].IsType() {
-			return true
-		}
-		if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok {
-			if _, ok := info.ObjectOf(id).(*types.Builtin); ok {
-				return true
-			}
-		}
-		found = true
-		return false
-	})
-	return found
-}
-
-func walkLoopParts(loop *ast.ForStmt, f func(ast.Node) bool) {
-	if loop.Cond != nil {
-		walkNoLit(loop.Cond, f)
-	}
-	if loop.Body != nil {
-		walkNoLit(loop.Body, f)
-	}
-	if loop.Post != nil {
-		walkNoLit(loop.Post, f)
-	}
-}
-
-func funcLitAssignsOld(info *types.Info, fn ast.Node, old *types.Var) bool {
-	found := false
-	if fn == nil {
-		return false
-	}
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if lit, ok := n.(*ast.FuncLit); ok && assignsRoot(info, lit, old) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
 }
 
 func staleShape(pass *analysis.Pass, loop *ast.ForStmt) (*types.Var, bool) {
