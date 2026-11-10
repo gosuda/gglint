@@ -112,6 +112,7 @@ func captureStderr(t *testing.T, run func()) string {
 }
 
 func TestMainReportsMissingConfigAsInternalError(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	unit := writeFile(t, "unit.cfg", []byte(`{"VetxOnly":false}`))
 	code := 0
