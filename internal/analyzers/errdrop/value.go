@@ -35,7 +35,7 @@ func checkOneValueSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, h
 	if reported[call.Pos()] {
 		return
 	}
-	if isExempt(pass, call, f.never, hash) {
+	if isExempt(pass, call, f, hash) {
 		return
 	}
 	if !valueHolds(pass, fn, as, vobj, f.safe) {
@@ -140,9 +140,6 @@ func valueHolds(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt, v 
 }
 
 func firstUseAfter(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, after token.Pos) (inspector.Cursor, bool) {
-	var best inspector.Cursor
-	bestPos := token.NoPos
-	found := false
 	for cur := range fn.Preorder((*ast.Ident)(nil)) {
 		if owner(cur) != fn {
 			continue
@@ -154,13 +151,9 @@ func firstUseAfter(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, after
 		if pass.TypesInfo.Uses[id] != v {
 			continue
 		}
-		if !found || id.Pos() < bestPos {
-			best = cur
-			bestPos = id.Pos()
-			found = true
-		}
+		return cur, true
 	}
-	return best, found
+	return inspector.Cursor{}, false
 }
 
 func skipParens(cur inspector.Cursor) inspector.Cursor {
@@ -292,10 +285,13 @@ func interveningNilCheck(pass *analysis.Pass, fn inspector.Cursor, v *types.Var,
 			continue
 		}
 		b := inspection.As[*ast.BinaryExpr](cur.Node())
+		if b.Pos() >= to {
+			break
+		}
 		if b.Op != token.EQL && b.Op != token.NEQ {
 			continue
 		}
-		if b.Pos() <= from || b.Pos() >= to {
+		if b.Pos() <= from {
 			continue
 		}
 		if nilCompareWith(pass.TypesInfo, b, v) {
@@ -329,6 +325,9 @@ func interveningAssign(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, f
 	for cur := range fn.Preorder((*ast.AssignStmt)(nil), (*ast.IncDecStmt)(nil), (*ast.RangeStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
+		}
+		if cur.Node().Pos() >= to {
+			break
 		}
 		if nodeInWindow(cur.Node(), from, to) && nodeAssignsVar(pass.TypesInfo, cur.Node(), v) {
 			return true

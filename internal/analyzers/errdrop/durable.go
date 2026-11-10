@@ -2,6 +2,7 @@ package errdrop
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"strings"
@@ -39,13 +40,13 @@ func checkOneDurableSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts,
 	if !isExactlyError(pass.TypesInfo, call) {
 		return
 	}
-	if isExempt(pass, call, f.never, hash) {
+	if isExempt(pass, call, f, hash) {
 		return
 	}
-	if !durableHolds(pass, fn, xobj) {
+	if !durableHolds(pass, fn, cur, xobj) {
 		return
 	}
-	pass.Reportf(call.Pos(), "%s is opened for writing in this function and the error of %s.Close is dropped, so a failed Close can lose written data: return or check the Close error", xname, xname)
+	pass.Reportf(call.Pos(), "%s is written in this function and the error of %s.Close is dropped, so a failed Close can lose written data: return or check the Close error", xname, xname)
 	reported[call.Pos()] = true
 }
 
@@ -82,17 +83,28 @@ func isExactlyError(info *types.Info, call *ast.CallExpr) bool {
 	return t != nil && isError(t)
 }
 
-func durableHolds(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+func durableHolds(pass *analysis.Pass, fn, closeCur inspector.Cursor, x *types.Var) bool {
 	if !isLocalPtrStruct(fn, x) {
 		return false
 	}
 	if isConnection(x.Type()) {
 		return false
 	}
-	if !writtenInFunc(pass, fn, x) {
+	guard := guardWriteCall(pass, fn, closeCur, x)
+	if !writtenExcept(pass, fn, x, guard) {
 		return false
 	}
 	return !hasUsedCloseSync(pass, fn, x)
+}
+
+func writtenExcept(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, ignore *ast.CallExpr) bool {
+	if writtenByMethodExcept(pass, fn, x, ignore) {
+		return true
+	}
+	if writtenByArgExcept(pass, fn, x, ignore) {
+		return true
+	}
+	return assignedAfterOpen(pass, fn, x)
 }
 
 func isLocalPtrStruct(fn inspector.Cursor, x *types.Var) bool {
@@ -107,32 +119,164 @@ func isLocalPtrStruct(fn inspector.Cursor, x *types.Var) bool {
 	return ok
 }
 
-func writtenInFunc(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	return writtenByMethod(pass, fn, x) || writtenByAnyArgWriter(pass, fn, x) || assignedToWriterInterface(pass, fn, x)
+func guardWriteCall(pass *analysis.Pass, fn, closeCur inspector.Cursor, x *types.Var) *ast.CallExpr {
+	ifStmt, ok := enclosingFailureIf(closeCur)
+	if !ok {
+		return nil
+	}
+	errVar, errOk := failureErrVar(pass, ifStmt)
+	if !errOk {
+		return nil
+	}
+	if call, initOk := initWriteCall(pass, ifStmt.Init, errVar, x); initOk {
+		return call
+	}
+	call, prevOk := prevWriteCall(pass, fn, ifStmt, errVar, x)
+	if !prevOk {
+		return nil
+	}
+	return call
 }
 
-func writtenByMethod(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+func enclosingFailureIf(closeCur inspector.Cursor) (*ast.IfStmt, bool) {
+	pos := closeCur.Node().Pos()
+	for cur := closeCur.Parent(); cur.Node() != nil; cur = cur.Parent() {
+		ifStmt, ok := cur.Node().(*ast.IfStmt)
+		if !ok {
+			continue
+		}
+		if ifStmt.Body != nil && ifStmt.Body.Pos() <= pos && pos < ifStmt.Body.End() {
+			return ifStmt, true
+		}
+	}
+	return nil, false
+}
+
+func failureErrVar(pass *analysis.Pass, ifStmt *ast.IfStmt) (*types.Var, bool) {
+	cond, ok := ast.Unparen(ifStmt.Cond).(*ast.BinaryExpr)
+	if !ok || cond.Op != token.NEQ {
+		return nil, false
+	}
+	if id, ok := errIdent(pass, cond.X, cond.Y); ok {
+		return id, true
+	}
+	return errIdent(pass, cond.Y, cond.X)
+}
+
+func errIdent(pass *analysis.Pass, e, other ast.Expr) (*types.Var, bool) {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok || !isNilIdent(pass.TypesInfo, other) {
+		return nil, false
+	}
+	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if !ok {
+		return nil, false
+	}
+	return v, true
+}
+
+func initWriteCall(pass *analysis.Pass, init ast.Stmt, errVar, x *types.Var) (*ast.CallExpr, bool) {
+	as, ok := init.(*ast.AssignStmt)
+	if !ok {
+		return nil, false
+	}
+	return assignWriteCall(pass, as, errVar, x)
+}
+
+func prevWriteCall(pass *analysis.Pass, fn inspector.Cursor, ifStmt *ast.IfStmt, errVar, x *types.Var) (*ast.CallExpr, bool) {
+	block, ok := enclosingBlock(fn, ifStmt)
+	if !ok {
+		return nil, false
+	}
+	for i, stmt := range block {
+		if stmt.Pos() != ifStmt.Pos() {
+			continue
+		}
+		if i == 0 {
+			return nil, false
+		}
+		as, ok := block[i-1].(*ast.AssignStmt)
+		if !ok {
+			return nil, false
+		}
+		return assignWriteCall(pass, as, errVar, x)
+	}
+	return nil, false
+}
+
+func assignWriteCall(pass *analysis.Pass, as *ast.AssignStmt, errVar, x *types.Var) (*ast.CallExpr, bool) {
+	for i, lhs := range as.Lhs {
+		id, ok := ast.Unparen(lhs).(*ast.Ident)
+		if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(errVar) {
+			continue
+		}
+		rhs := as.Rhs[0]
+		if len(as.Rhs) == len(as.Lhs) {
+			rhs = as.Rhs[i]
+		}
+		call, ok := ast.Unparen(rhs).(*ast.CallExpr)
+		if !ok || !isWriteEvidence(pass, call, x) {
+			continue
+		}
+		return call, true
+	}
+	return nil, false
+}
+
+func enclosingBlock(fn inspector.Cursor, target *ast.IfStmt) ([]ast.Stmt, bool) {
+	for cur := range fn.Preorder((*ast.BlockStmt)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		block := inspection.As[*ast.BlockStmt](cur.Node())
+		for _, stmt := range block.List {
+			if stmt.Pos() == target.Pos() {
+				return block.List, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func isWriteEvidence(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
+	if isWriteMethodOn(pass, call, x) {
+		return true
+	}
+	return callWritesViaWriter(pass, call, x)
+}
+
+func isWriteMethodOn(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || len(call.Args) == 0 || !isWriteMethodName(sel.Sel.Name) {
+		return false
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	return ok && pass.TypesInfo.ObjectOf(id) == types.Object(x)
+}
+
+func writtenByMethodExcept(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, ignore *ast.CallExpr) bool {
 	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
 		call := inspection.As[*ast.CallExpr](cur.Node())
-		sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-		if !ok {
+		if ignore != nil && call.Pos() == ignore.Pos() {
 			continue
 		}
-		id, ok := ast.Unparen(sel.X).(*ast.Ident)
-		if !ok {
-			continue
-		}
-		if pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-			continue
-		}
-		if len(call.Args) > 0 && isWriteMethodName(sel.Sel.Name) {
+		if isMethodWriteOn(pass, call, x) {
 			return true
 		}
 	}
 	return false
+}
+
+func isMethodWriteOn(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || len(call.Args) == 0 || !isWriteMethodName(sel.Sel.Name) {
+		return false
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	return ok && pass.TypesInfo.ObjectOf(id) == types.Object(x)
 }
 
 func isWriteMethodName(name string) bool {
@@ -212,12 +356,16 @@ func resultUsed(cur inspector.Cursor) bool {
 	return true
 }
 
-func writtenByAnyArgWriter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+func writtenByArgExcept(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, ignore *ast.CallExpr) bool {
 	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		if callWritesViaWriter(pass, inspection.As[*ast.CallExpr](cur.Node()), x) {
+		call := inspection.As[*ast.CallExpr](cur.Node())
+		if ignore != nil && call.Pos() == ignore.Pos() {
+			continue
+		}
+		if callWritesViaWriter(pass, call, x) {
 			return true
 		}
 	}
@@ -250,8 +398,71 @@ func argIsWriter(pass *analysis.Pass, sig *types.Signature, idx int, call *ast.C
 	return ok && isWriterInterface(pt)
 }
 
-func assignedToWriterInterface(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+func assignedAfterOpen(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	if !openedForWriting(pass, fn, x) {
+		return false
+	}
 	return assignStmtWritesToWriter(pass, fn, x) || valueSpecWritesToWriter(pass, fn, x)
+}
+
+func openedForWriting(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		as := inspection.As[*ast.AssignStmt](cur.Node())
+		if assignedFromWritableOpen(pass, as, x) {
+			return true
+		}
+	}
+	return false
+}
+
+func assignedFromWritableOpen(pass *analysis.Pass, as *ast.AssignStmt, x *types.Var) bool {
+	for i, lhs := range as.Lhs {
+		id, ok := ast.Unparen(lhs).(*ast.Ident)
+		if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
+			continue
+		}
+		rhs := as.Rhs[0]
+		if len(as.Rhs) == len(as.Lhs) {
+			rhs = as.Rhs[i]
+		}
+		if openWrites(pass, rhs) {
+			return true
+		}
+	}
+	return false
+}
+
+func openWrites(pass *analysis.Pass, e ast.Expr) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fn == nil {
+		return false
+	}
+	switch fn.FullName() {
+	case "os.Create", "os.CreateTemp":
+		return true
+	case "os.OpenFile":
+		return openFlagWritable(pass, call)
+	}
+	return false
+}
+
+func openFlagWritable(pass *analysis.Pass, call *ast.CallExpr) bool {
+	if len(call.Args) < 2 {
+		return false
+	}
+	tv, ok := pass.TypesInfo.Types[call.Args[1]]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.Int {
+		return false
+	}
+	flag, exact := constant.Int64Val(tv.Value)
+	return exact && flag&3 != 0
 }
 
 func assignStmtWritesToWriter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {

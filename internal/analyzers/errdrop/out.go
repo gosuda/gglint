@@ -34,14 +34,11 @@ func checkOneOutSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, has
 	if !dropsError(pass.TypesInfo, call) {
 		return
 	}
-	if isExempt(pass, call, f.never, hash) {
+	if isExempt(pass, call, f, hash) {
 		return
 	}
 	xobj, xname := outCandidate(pass, fn, call)
 	if xobj == nil {
-		return
-	}
-	if outSinkExempt(pass, call, xobj, f.never) {
 		return
 	}
 	callee := types.ExprString(call.Fun)
@@ -54,7 +51,7 @@ func dropsError(info *types.Info, call *ast.CallExpr) bool {
 }
 
 func outCandidate(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) (found *types.Var, name string) {
-	for _, arg := range call.Args {
+	for idx, arg := range call.Args {
 		u, ok := ast.Unparen(arg).(*ast.UnaryExpr)
 		if !ok || u.Op != token.AND {
 			continue
@@ -67,11 +64,50 @@ func outCandidate(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) 
 		if !ok {
 			continue
 		}
+		if !decodeTarget(pass, call, idx) {
+			continue
+		}
 		if outHolds(pass, fn, call, v) {
 			return v, id.Name
 		}
 	}
 	return nil, ""
+}
+
+func decodeTarget(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
+	pt, ok := callParamType(pass, call, idx)
+	if !ok {
+		return false
+	}
+	if isEmptyInterface(pt) {
+		return true
+	}
+	if isPointerType(pt) {
+		return true
+	}
+	return isWriterInterface(pt)
+}
+
+func isEmptyInterface(t types.Type) bool {
+	iface, ok := types.Unalias(t).Underlying().(*types.Interface)
+	return ok && iface.NumMethods() == 0
+}
+
+func isPointerType(t types.Type) bool {
+	_, ok := types.Unalias(t).(*types.Pointer)
+	return ok
+}
+
+func callParamType(pass *analysis.Pass, call *ast.CallExpr, idx int) (types.Type, bool) {
+	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fnobj == nil {
+		return nil, false
+	}
+	sig, ok := fnobj.Type().(*types.Signature)
+	if !ok || sig.Params() == nil {
+		return nil, false
+	}
+	return paramTypeAt(sig, idx, call)
 }
 
 func outHolds(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, x *types.Var) bool {
@@ -97,7 +133,7 @@ func takenBefore(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, before 
 		}
 		call := inspection.As[*ast.CallExpr](cur.Node())
 		if call.Pos() >= before {
-			continue
+			break
 		}
 		if callTakesPointer(pass, call, x) {
 			return true
@@ -245,118 +281,4 @@ func mentionedAfter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, afte
 		}
 	}
 	return false
-}
-
-func outSinkExempt(pass *analysis.Pass, call *ast.CallExpr, x *types.Var, set map[*types.Func]bool) bool {
-	for idx, arg := range call.Args {
-		if sinkArgExempt(pass, idx, call, arg, x, set) {
-			return true
-		}
-	}
-	return false
-}
-
-func sinkArgExempt(pass *analysis.Pass, idx int, call *ast.CallExpr, arg ast.Expr, x *types.Var, set map[*types.Func]bool) bool {
-	if !isAddrOf(pass, arg, x) {
-		return false
-	}
-	sig, ok := sinkSignatureFor(pass, call)
-	if !ok {
-		return false
-	}
-	pt, ok := paramTypeAt(sig, idx, call)
-	if !ok || !isInterfaceType(pt) {
-		return false
-	}
-	dst := sinkDestType(pass, arg, x)
-	if sinkWantsWrite(pt) {
-		if writeHasFact(pass, dst, set) {
-			return true
-		}
-	}
-	if sinkWantsWriteString(pt) {
-		if writeStringHasFact(pass, dst, set) {
-			return true
-		}
-	}
-	return false
-}
-
-func sinkWantsWrite(pt types.Type) bool {
-	obj, _, _ := types.LookupFieldOrMethod(pt, false, nil, "Write")
-	fn, ok := obj.(*types.Func)
-	if !ok {
-		return false
-	}
-	sig, ok := fn.Type().(*types.Signature)
-	if !ok {
-		return false
-	}
-	return writerSigShape(sig)
-}
-
-func sinkWantsWriteString(pt types.Type) bool {
-	sig := writeStringSig(pt)
-	if sig == nil {
-		return false
-	}
-	return writeStringParams(sig) && writeStringResults(sig)
-}
-
-func writeStringSig(pt types.Type) *types.Signature {
-	obj, _, _ := types.LookupFieldOrMethod(pt, false, nil, "WriteString")
-	fn, ok := obj.(*types.Func)
-	if !ok {
-		return nil
-	}
-	sig, ok := fn.Type().(*types.Signature)
-	if !ok {
-		return nil
-	}
-	return sig
-}
-
-func writeStringParams(sig *types.Signature) bool {
-	if sig.Params() == nil || sig.Params().Len() != 1 {
-		return false
-	}
-	s, ok := types.Unalias(sig.Params().At(0).Type()).(*types.Basic)
-	return ok && s.Kind() == types.String
-}
-
-func writeStringResults(sig *types.Signature) bool {
-	if sig.Results() == nil || sig.Results().Len() != 2 {
-		return false
-	}
-	return types.Identical(sig.Results().At(0).Type(), types.Typ[types.Int]) && isError(sig.Results().At(1).Type())
-}
-
-func sinkSignatureFor(pass *analysis.Pass, call *ast.CallExpr) (*types.Signature, bool) {
-	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
-	if !ok || fnobj == nil {
-		return nil, false
-	}
-	sig, ok := fnobj.Type().(*types.Signature)
-	return sig, ok
-}
-
-func isAddrOf(pass *analysis.Pass, arg ast.Expr, x *types.Var) bool {
-	u, ok := ast.Unparen(arg).(*ast.UnaryExpr)
-	if !ok || u.Op != token.AND {
-		return false
-	}
-	id, ok := ast.Unparen(u.X).(*ast.Ident)
-	return ok && pass.TypesInfo.ObjectOf(id) == types.Object(x)
-}
-
-func isInterfaceType(t types.Type) bool {
-	_, ok := types.Unalias(t).Underlying().(*types.Interface)
-	return ok
-}
-
-func sinkDestType(pass *analysis.Pass, arg ast.Expr, x *types.Var) types.Type {
-	if dst := pass.TypesInfo.TypeOf(arg); dst != nil {
-		return dst
-	}
-	return x.Type()
 }

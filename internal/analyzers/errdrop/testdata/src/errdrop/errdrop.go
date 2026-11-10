@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
+	"errdrop/dep"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -21,8 +22,6 @@ import (
 	"strings"
 	"syscall"
 	"text/template"
-
-	"errdrop/dep"
 )
 
 type Config struct {
@@ -66,9 +65,9 @@ func outReported(b []byte) Config {
 	return c
 }
 
-func outSilentTemplate(tmpl *template.Template, d string) string {
+func outReportedTemplate(tmpl *template.Template, d string) string {
 	var buf bytes.Buffer
-	tmpl.Execute(&buf, d)
+	tmpl.Execute(&buf, d) // want "is read after the error of tmpl.Execute is dropped"
 	return buf.String()
 }
 
@@ -95,7 +94,7 @@ func durableReported(p string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close() // want "is opened for writing in this function and the error of f.Close is dropped"
+	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
 	_, err = f.Write(b)
 	return err
 }
@@ -248,12 +247,22 @@ func outReportedCloseOut(n int, b []byte) int {
 	return m + n
 }
 
-type writeOnly interface {
+type WriteOnly interface {
 	Write([]byte) (int, error)
 }
 
-func verdictReportedSingleWrite(w writeOnly, b []byte) error {
+func verdictReportedSingleWrite(w WriteOnly, b []byte) error {
 	w.Write(b) // want "the error of w.Write is dropped and the next statement returns nil"
+	return nil
+}
+
+type transcriptLike interface {
+	Write([]byte) (int, error)
+}
+
+func verdictSilentSingleWrite(h hash.Hash) error {
+	var w transcriptLike = h
+	w.Write(nil)
 	return nil
 }
 
@@ -293,7 +302,7 @@ func closeForwarder(c io.Closer) error {
 }
 
 func verdictSilentForwarder(c io.Closer) error {
-	_ = closeForwarder(c)
+	closeForwarder(c)
 	return nil
 }
 
@@ -379,7 +388,7 @@ func durableSilentWriteTo(p string, w io.Writer) error {
 
 func valueReportedParen(p string) string {
 	f, _ := os.Open(p) // want "is used after the error of os.Open is dropped"
-	return (f).Name()
+	return f.Name()
 }
 
 type nilNode struct {
@@ -409,6 +418,7 @@ func valueSilentNilSafeDep(s string) int {
 	n, _ := dep.FindSafe(s)
 	return n.Len()
 }
+
 type nilRight struct{ n int }
 
 func (t *nilRight) Len() int {
@@ -477,7 +487,7 @@ func (f *recordFile) Close() error { return f.err }
 
 func durableReportedWriteRecord(b []byte, err error) error {
 	f := &recordFile{err: err}
-	defer f.Close() // want "is opened for writing in this function and the error of f.Close is dropped"
+	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
 	return f.WriteRecord(b)
 }
 
@@ -674,6 +684,7 @@ func durableSilentGetter() bool {
 	defer j.Close()
 	return j.WriteEnabled()
 }
+
 type errdropWriter interface {
 	WriteString(string) (int, error)
 }
@@ -701,28 +712,28 @@ func outSilentWriteTo(src *bytes.Buffer) []byte {
 	return out.Bytes()
 }
 
-func outSilentFormatNode(fset *token.FileSet, d ast.Decl) string {
+func outReportedFormatNode(fset *token.FileSet, d ast.Decl) string {
 	var buf bytes.Buffer
 	if d == nil {
 		return ""
 	}
-	format.Node(&buf, fset, &ast.BasicLit{Kind: token.INT, Value: "1"})
+	format.Node(&buf, fset, &ast.BasicLit{Kind: token.INT, Value: "1"}) // want "is read after the error of format.Node is dropped"
 	_ = d
 	return buf.String()
 }
 
-func outSilentStar(fset *token.FileSet, arg ast.Expr) string {
+func outReportedStar(fset *token.FileSet, arg ast.Expr) string {
 	var buf bytes.Buffer
-	format.Node(&buf, fset, &ast.StarExpr{X: arg})
+	format.Node(&buf, fset, &ast.StarExpr{X: arg}) // want "is read after the error of format.Node is dropped"
 	return buf.String()
 }
 
-func outSilentPrinterFprint(fset *token.FileSet, n ast.Node) string {
+func outReportedPrinterFprint(fset *token.FileSet, n ast.Node) string {
 	var buf strings.Builder
 	if n == nil {
 		return ""
 	}
-	printer.Fprint(&buf, fset, &ast.BasicLit{Kind: token.INT, Value: "1"})
+	printer.Fprint(&buf, fset, &ast.BasicLit{Kind: token.INT, Value: "1"}) // want "is read after the error of printer.Fprint is dropped"
 	_ = n
 	return buf.String()
 }
@@ -789,4 +800,45 @@ func outReportedWire(data []byte) string {
 	var w wireOut
 	json.Unmarshal(data, &w) // want "is read after the error of json.Unmarshal is dropped"
 	return w.Name
+}
+
+func readInto(r io.Reader, p []byte) error {
+	_, err := r.Read(p)
+	return err
+}
+
+func outSilentReaderBound(p []byte) string {
+	var buf bytes.Buffer
+	readInto(&buf, p)
+	return buf.String()
+}
+
+func durableSilentFailureBranch(p string, start func(io.Writer) error) (*os.File, error) {
+	f, err := os.Create(p)
+	if err != nil {
+		return nil, err
+	}
+	if err := start(f); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func durableReportedSuccessPath(p string, start func(io.Writer) error) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	if err := start(f); err != nil {
+		_ = f.Close()
+		return err
+	}
+	_, err = f.Write([]byte{1})
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
+	return nil
 }

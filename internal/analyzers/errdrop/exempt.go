@@ -56,7 +56,29 @@ func isHashWrite(pass *analysis.Pass, hash *types.Interface, call *ast.CallExpr)
 	if hash != nil && implementsHash(recv, hash) {
 		return true
 	}
+	if isSingleWriteIface(recv) {
+		return true
+	}
 	return hashShape(pass, recv)
+}
+
+func isSingleWriteIface(recv types.Type) bool {
+	named, ok := types.Unalias(recv).(*types.Named)
+	if !ok || ast.IsExported(named.Obj().Name()) {
+		return false
+	}
+	iface, ok := named.Underlying().(*types.Interface)
+	if !ok || iface.NumMethods() != 1 {
+		return false
+	}
+	if iface.Method(0).Name() != writeMethodName {
+		return false
+	}
+	sig, ok := iface.Method(0).Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	return writerSigShape(sig)
 }
 
 func implementsHash(recv types.Type, hash *types.Interface) bool {
@@ -125,12 +147,12 @@ func isHashSizeSig(sig *types.Signature) bool {
 	return types.Identical(sig.Results().At(0).Type(), types.Typ[types.Int])
 }
 
-func isExempt(pass *analysis.Pass, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
+func isExempt(pass *analysis.Pass, call *ast.CallExpr, f facts, hash *types.Interface) bool {
 	info := pass.TypesInfo
 	if isHashWrite(pass, hash, call) {
 		return true
 	}
-	if callee := calleeOrigin(pass, call); callee != nil && hasFact(pass, callee, set) {
+	if callee := calleeOrigin(pass, call); callee != nil && hasFact(pass, callee, f.never) {
 		return true
 	}
 	if isErrorSink(pass, call) {
@@ -140,51 +162,137 @@ func isExempt(pass *analysis.Pass, call *ast.CallExpr, set map[*types.Func]bool,
 	if !ok || fn == nil {
 		return false
 	}
-	if isBenignStdoutWrite(pass, info, fn, call, set, hash) {
-		return true
-	}
-	return isBenignCopy(pass, info, fn, call, set, hash)
+	return writerThrough(pass, info, fn, call, f, hash)
 }
 
-func isBenignStdoutWrite(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
+func writerThrough(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, f facts, hash *types.Interface) bool {
+	if tableWriterAtZero(pass, info, fn, call) {
+		return dstInfallible(pass, info, call, 0, f.never, hash)
+	}
+	callee := calleeOrigin(pass, call)
+	if callee == nil {
+		return false
+	}
+	q, ok := writerFact(pass, callee, f.writer)
+	if !ok {
+		return false
+	}
+	return dstInfallible(pass, info, call, q, f.never, hash)
+}
+
+func tableWriterAtZero(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr) bool {
 	switch fn.FullName() {
-	case "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "io.WriteString":
-		return firstArgHasWriteFact(pass, info, call, set, hash)
+	case "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "io.WriteString", "encoding/xml.EscapeText":
+		return true
+	}
+	if isReplacerWriteString(pass, call) {
+		return true
+	}
+	if isMemoryWriteTo(pass, call) {
+		return true
+	}
+	if fn.FullName() == "io.Copy" {
+		return copySourceInMemory(info, call)
 	}
 	return false
 }
 
-func firstArgHasWriteFact(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
-	if len(call.Args) == 0 {
+func dstInfallible(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, q int, set map[*types.Func]bool, hash *types.Interface) bool {
+	if q >= len(call.Args) {
 		return false
 	}
-	t0 := info.TypeOf(call.Args[0])
-	if t0 == nil {
+	t := info.TypeOf(call.Args[q])
+	if t == nil {
 		return false
 	}
-	if _, ok := types.Unalias(t0).Underlying().(*types.Interface); ok {
-		return hash != nil && types.Implements(t0, hash)
+	if _, ok := types.Unalias(t).Underlying().(*types.Interface); ok {
+		return hash != nil && types.Implements(t, hash)
 	}
-	return writeHasFact(pass, t0, set)
+	return writeHasFact(pass, t, set) || writeStringHasFact(pass, t, set) || typeIsHash(pass, t, hash)
 }
 
-func isBenignCopy(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
-	if fn.FullName() != "io.Copy" {
-		return false
+func writeStringHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) bool {
+	if obj, _, _ := types.LookupFieldOrMethod(t, true, pass.Pkg, "WriteString"); obj != nil {
+		if fn, ok := obj.(*types.Func); ok && hasFact(pass, originOf(fn), set) {
+			return true
+		}
 	}
-	return copyNeverFails(pass, info, call, set, hash)
+	if _, isPtr := t.Underlying().(*types.Pointer); !isPtr {
+		ptr := types.NewPointer(t)
+		if obj, _, _ := types.LookupFieldOrMethod(ptr, true, pass.Pkg, "WriteString"); obj != nil {
+			if fn, ok := obj.(*types.Func); ok && hasFact(pass, originOf(fn), set) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
-func copyNeverFails(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
+func isReplacerWriteString(pass *analysis.Pass, call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "WriteString" {
+		return false
+	}
+	return isReplacerRecv(pass.TypesInfo.TypeOf(sel.X))
+}
+
+func isReplacerRecv(recv types.Type) bool {
+	if recv == nil {
+		return false
+	}
+	if isReplacerNamed(types.Unalias(recv)) {
+		return true
+	}
+	ptr, ok := types.Unalias(recv).(*types.Pointer)
+	if !ok {
+		return false
+	}
+	return isReplacerNamed(types.Unalias(ptr.Elem()))
+}
+
+func isReplacerNamed(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Pkg().Path() == "strings" && named.Obj().Name() == "Replacer"
+}
+
+func isMemoryWriteTo(pass *analysis.Pass, call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "WriteTo" {
+		return false
+	}
+	recv := pass.TypesInfo.TypeOf(sel.X)
+	return isInMemoryReader(recv) || isInMemoryValue(recv)
+}
+
+func copySourceInMemory(info *types.Info, call *ast.CallExpr) bool {
 	if len(call.Args) < 2 {
 		return false
 	}
-	dst := info.TypeOf(call.Args[0])
 	src := info.TypeOf(call.Args[1])
-	if dst == nil || src == nil || !isInMemoryReader(src) {
-		return false
+	if src != nil && isInMemoryReader(src) {
+		return true
 	}
-	return writeHasFact(pass, dst, set) || typeIsHash(pass, dst, hash)
+	inner, ok := limitReaderInner(info, call.Args[1])
+	return ok && isInMemoryReader(inner)
+}
+
+func limitReaderInner(info *types.Info, e ast.Expr) (types.Type, bool) {
+	c, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	fn, ok := typeutil.Callee(info, c).(*types.Func)
+	if !ok || fn == nil || fn.FullName() != "io.LimitReader" || len(c.Args) < 1 {
+		return nil, false
+	}
+	t := info.TypeOf(c.Args[0])
+	if t == nil {
+		return nil, false
+	}
+	return t, true
 }
 
 func isInMemoryReader(t types.Type) bool {
@@ -192,7 +300,18 @@ func isInMemoryReader(t types.Type) bool {
 	if !ok {
 		return false
 	}
-	named, ok := types.Unalias(ptr.Elem()).(*types.Named)
+	return isInMemoryNamed(types.Unalias(ptr.Elem()))
+}
+
+func isInMemoryValue(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	return isInMemoryNamed(types.Unalias(t))
+}
+
+func isInMemoryNamed(t types.Type) bool {
+	named, ok := t.(*types.Named)
 	if !ok || named.Obj().Pkg() == nil {
 		return false
 	}
@@ -219,23 +338,6 @@ func writeHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) b
 	if _, isPtr := t.Underlying().(*types.Pointer); !isPtr {
 		ptr := types.NewPointer(t)
 		if obj, _, _ := types.LookupFieldOrMethod(ptr, true, pass.Pkg, "Write"); obj != nil {
-			if fn, ok := obj.(*types.Func); ok && hasFact(pass, originOf(fn), set) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func writeStringHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) bool {
-	if obj, _, _ := types.LookupFieldOrMethod(t, true, pass.Pkg, "WriteString"); obj != nil {
-		if fn, ok := obj.(*types.Func); ok && hasFact(pass, originOf(fn), set) {
-			return true
-		}
-	}
-	if _, isPtr := t.Underlying().(*types.Pointer); !isPtr {
-		ptr := types.NewPointer(t)
-		if obj, _, _ := types.LookupFieldOrMethod(ptr, true, pass.Pkg, "WriteString"); obj != nil {
 			if fn, ok := obj.(*types.Func); ok && hasFact(pass, originOf(fn), set) {
 				return true
 			}
