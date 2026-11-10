@@ -173,7 +173,35 @@ func nocontextSilentScopedLocal(db *sql.DB, ok bool) error {
 	return err
 }
 
-func DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+type nocontextDialerSilent struct{}
+
+type nocontextDialerReported struct{}
+
+func (nocontextDialerSilent) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	type dialResult struct {
+		conn net.Conn
+		err  error
+	}
+	ch := make(chan dialResult, 1)
+	go func() {
+		conn, err := net.Dial(network, address)
+		ch <- dialResult{conn, err}
+	}()
+	select {
+	case <-ctx.Done():
+		go func() {
+			r := <-ch
+			if r.err == nil {
+				r.conn.Close()
+			}
+		}()
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.conn, r.err
+	}
+}
+
+func (nocontextDialerReported) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	_ = ctx
-	return net.Dial(network, address)
+	return net.Dial(network, address) // want "net\\.Dial cannot be cancelled"
 }

@@ -216,16 +216,15 @@ func samePackage(pass *analysis.Pass, call *ast.CallExpr) bool {
 }
 
 func usesContextParam(pass *analysis.Pass, fn, cur inspector.Cursor) bool {
-	for c := range fn.Preorder((*ast.Ident)(nil)) {
-		id, ok := c.Node().(*ast.Ident)
+	for c := range fn.Preorder((*ast.CallExpr)(nil)) {
+		call, ok := c.Node().(*ast.CallExpr)
 		if !ok {
 			continue
 		}
-		if _, isDef := pass.TypesInfo.Defs[id]; isDef {
-			continue
-		}
-		if v, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && v != nil && isContextParam(pass, cur, v) {
-			return true
+		for _, v := range callVars(pass, call) {
+			if isContextParam(pass, cur, v) {
+				return true
+			}
 		}
 	}
 	return false
