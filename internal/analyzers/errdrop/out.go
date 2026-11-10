@@ -236,7 +236,7 @@ func outHolds(call *ast.CallExpr, x *types.Var, memo *outMemo) bool {
 	if takenBefore(memo, x, call.Pos()) {
 		return false
 	}
-	_, ok := memo.idx.firstUse(x, call.End())
+	_, ok := memo.idx.firstRead(x, call.End())
 	return ok
 }
 

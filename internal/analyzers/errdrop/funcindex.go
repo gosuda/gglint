@@ -237,6 +237,55 @@ func (idx *funcIndex) firstUse(v *types.Var, after token.Pos) (inspector.Cursor,
 	return list[i].cur, true
 }
 
+func (idx *funcIndex) firstRead(v *types.Var, after token.Pos) (inspector.Cursor, bool) {
+	list := idx.uses[v]
+	start := sort.Search(len(list), func(i int) bool { return list[i].pos > after })
+	for i := start; i < len(list); i++ {
+		if !isFieldStore(list[i].cur) {
+			return list[i].cur, true
+		}
+	}
+	return inspector.Cursor{}, false
+}
+
+func isFieldStore(cur inspector.Cursor) bool {
+	child := cur.Node()
+	up := cur
+	seen := false
+	for {
+		parent := skipParens(up.Parent())
+		if sel, ok := parent.Node().(*ast.SelectorExpr); ok {
+			if ast.Unparen(sel.X) != child {
+				return false
+			}
+			seen = true
+			child = parent.Node()
+			up = parent
+			continue
+		}
+		as, ok := parent.Node().(*ast.AssignStmt)
+		if !ok {
+			return false
+		}
+		if !seen {
+			return false
+		}
+		return lhsStoresField(as, child)
+	}
+}
+
+func lhsStoresField(as *ast.AssignStmt, child ast.Node) bool {
+	if as.Tok != token.ASSIGN {
+		return false
+	}
+	for _, lhs := range as.Lhs {
+		if ast.Unparen(lhs) == child {
+			return true
+		}
+	}
+	return false
+}
+
 func (idx *funcIndex) hasAssignIn(v *types.Var, from, to token.Pos) bool {
 	return hasPosIn(idx.assigns[v], from, to)
 }

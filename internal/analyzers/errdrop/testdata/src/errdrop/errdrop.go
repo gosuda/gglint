@@ -985,3 +985,10 @@ func durableSilentSyncUsed(p string, b []byte) error {
 	defer f.Close()
 	return f.Sync()
 }
+
+func outSilentFieldStoreOnly(b []byte) error {
+	var c Config
+	json.Unmarshal(b, &c)
+	c.Port = 80
+	return nil
+}
