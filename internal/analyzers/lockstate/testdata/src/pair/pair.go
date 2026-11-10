@@ -203,3 +203,27 @@ func pairVarEmptyThenReassignedReported() {
 	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
 	s = newLockedPairS()
 }
+
+func pairVarLockedThenReassignedSilent() {
+	var s pairS = newLockedPairS()
+	s.mu.Unlock()
+	s = pairS{}
+}
+
+func pairShortLockedThenReassignedSilent() {
+	s := newLockedPairS()
+	s.mu.Unlock()
+	s = pairS{}
+}
+
+func pairVarEmptyThenEmptyReported() {
+	var s pairS = pairS{}
+	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+	s = pairS{}
+}
+
+func pairShortEmptyThenEmptyReported() {
+	s := pairS{}
+	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+	s = pairS{}
+}

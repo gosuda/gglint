@@ -127,7 +127,7 @@ func entryState(info *types.Info, fn ast.Node, key flow.Key) state {
 	if pathHasPointer(v.Type(), key.Path) {
 		return unknownState
 	}
-	if def, ok := definingRHS(info, fn, v); ok && !emptyLiteral(def) {
+	if def, ok := declValue(info, fn, v); ok && !emptyLiteral(def) {
 		return unknownState
 	}
 	if lockExposed(info, fn, key) {
@@ -136,58 +136,48 @@ func entryState(info *types.Info, fn ast.Node, key flow.Key) state {
 	return freeState
 }
 
-func definingRHS(info *types.Info, fn ast.Node, v *types.Var) (ast.Expr, bool) {
-	if def, ok := flow.DefinedBy(info, fn, v); ok {
-		return def, true
-	}
-	return varDefValue(info, fn, v)
-}
-
-func varDefValue(info *types.Info, fn ast.Node, v *types.Var) (ast.Expr, bool) {
+func declValue(info *types.Info, fn ast.Node, v *types.Var) (ast.Expr, bool) {
 	body := flow.Body(fn)
 	if info == nil || body == nil || v == nil {
 		return nil, false
 	}
-	found, rhs := findVarSpec(info, fn, body, v)
-	if found == nil || rhs == nil {
-		return nil, false
+	if e, ok := defineIn(info, fn, body, v); ok {
+		return e, true
 	}
-	if laterAssign(info, fn, v, found.Pos()) {
-		return nil, false
-	}
-	return rhs, true
+	return varIn(info, fn, body, v)
 }
 
-func laterAssign(info *types.Info, fn ast.Node, v *types.Var, after token.Pos) bool {
-	body := flow.Body(fn)
-	if body == nil {
-		return false
-	}
-	hit := false
+func defineIn(info *types.Info, fn ast.Node, body *ast.BlockStmt, v *types.Var) (ast.Expr, bool) {
+	var out ast.Expr
+	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
-		if hit {
+		if found {
 			return false
 		}
 		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
 			return false
 		}
 		as, ok := n.(*ast.AssignStmt)
-		if !ok || as.Pos() <= after {
+		if !ok {
 			return true
 		}
-		if assignTargetsVar(info, as, v) {
-			hit = true
+		e, ok := defineValue(info, as, v)
+		if !ok {
+			return true
 		}
-		return !hit
+		out = e
+		found = true
+		return false
 	})
-	return hit
+	return out, found
 }
 
-func findVarSpec(info *types.Info, fn ast.Node, body *ast.BlockStmt, v *types.Var) (*ast.ValueSpec, ast.Expr) {
-	var found *ast.ValueSpec
-	var rhs ast.Expr
+func varIn(info *types.Info, fn ast.Node, body *ast.BlockStmt, v *types.Var) (ast.Expr, bool) {
+	var out ast.Expr
+	matched := false
+	seen := false
 	ast.Inspect(body, func(n ast.Node) bool {
-		if found != nil {
+		if seen {
 			return false
 		}
 		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
@@ -197,15 +187,39 @@ func findVarSpec(info *types.Info, fn ast.Node, body *ast.BlockStmt, v *types.Va
 		if !ok {
 			return true
 		}
-		e, ok := varValueFor(vs, info, v)
-		if !ok {
+		if !declaresVar(info, vs, v) {
 			return true
 		}
-		found = vs
-		rhs = e
+		seen = true
+		e, ok := varValueFor(vs, info, v)
+		if !ok {
+			return false
+		}
+		out = e
+		matched = true
 		return false
 	})
-	return found, rhs
+	return out, matched
+}
+
+func defineValue(info *types.Info, as *ast.AssignStmt, v *types.Var) (ast.Expr, bool) {
+	if as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		return nil, false
+	}
+	id, ok := as.Lhs[0].(*ast.Ident)
+	if !ok || id.Name == "_" || info.Defs[id] != v {
+		return nil, false
+	}
+	return as.Rhs[0], true
+}
+
+func declaresVar(info *types.Info, vs *ast.ValueSpec, v *types.Var) bool {
+	for _, name := range vs.Names {
+		if name.Name != "_" && info.Defs[name] == v {
+			return true
+		}
+	}
+	return false
 }
 
 func varValueFor(vs *ast.ValueSpec, info *types.Info, v *types.Var) (ast.Expr, bool) {
