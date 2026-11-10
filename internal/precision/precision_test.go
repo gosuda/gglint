@@ -3,6 +3,7 @@ package precision_test
 import (
 	"bytes"
 	json "encoding/json/v2"
+	"errors"
 	"maps"
 	"os"
 	"os/exec"
@@ -250,6 +251,19 @@ func gorootSrc(t *testing.T) string {
 	return filepath.Join(goroot, "src")
 }
 
+func goBuildCache(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "go", "env", "GOCACHE").Output()
+	if err != nil {
+		t.Fatalf("go env GOCACHE failed: %v", err)
+	}
+	cache := strings.TrimSpace(string(out))
+	if cache == "" {
+		t.Fatal("go env GOCACHE printed empty output")
+	}
+	return cache
+}
+
 func runCorpus(t *testing.T, bin, cfg, src string) []finding {
 	t.Helper()
 	args := make([]string, 0, len(corpus)+5)
@@ -257,12 +271,18 @@ func runCorpus(t *testing.T, bin, cfg, src string) []finding {
 	args = append(args, corpus...)
 	cmd := exec.CommandContext(t.Context(), bin, args...)
 	cmd.Dir = src
-	cmd.Env = append(os.Environ(), "GO111MODULE=on", "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off", "CGO_ENABLED=0", "GOWORK=off", "XDG_CACHE_HOME="+filepath.Join(filepath.Dir(cfg), "cache"))
+	cmd.Env = append(os.Environ(), "GO111MODULE=on", "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off", "CGO_ENABLED=0", "GOWORK=off", "XDG_CACHE_HOME="+filepath.Join(filepath.Dir(cfg), "cache"), "GOCACHE="+goBuildCache(t))
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
+	if runErr != nil {
+		exitErr, ok := errors.AsType[*exec.ExitError](runErr)
+		if !ok || exitErr.ExitCode() != 1 {
+			t.Fatalf("gglint run failed: %v\nstdout:\n%s\nstderr:\n%s", runErr, stdout.String(), stderr.String())
+		}
+	}
 	var doc document
 	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
 		t.Fatalf("gglint run failed: %v: output is not JSON: %v\nstdout:\n%s\nstderr:\n%s", runErr, err, stdout.String(), stderr.String())
