@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/template"
 
 	"errdrop/dep"
@@ -205,4 +206,32 @@ func durableSilent4(p string, b []byte) error {
 	defer f.Close()
 	_, err = f.Write(b)
 	return f.Close()
+}
+
+type FieldWriter struct {
+	Write func([]byte) (int, error)
+}
+
+func verdictReportedFieldWrite(s FieldWriter, b []byte) error {
+	s.Write(b) // want "the error of s.Write is dropped and the next statement returns nil"
+	return nil
+}
+
+func verdictReportedSyscallClose(fd int) error {
+	syscall.Close(fd) // want "the error of syscall.Close is dropped and the next statement returns nil"
+	return nil
+}
+
+type CloseFile struct{}
+
+func (*CloseFile) Write(b []byte) (int, error) { return len(b), nil }
+
+func (*CloseFile) Close(n *int) error { return errors.New("close failed") }
+
+func outReportedCloseOut(n int, b []byte) int {
+	var m int
+	f := &CloseFile{}
+	f.Write(b)
+	f.Close(&m) // want "is read after the error of f.Close is dropped"
+	return m + n
 }

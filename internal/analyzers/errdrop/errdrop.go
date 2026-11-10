@@ -538,9 +538,9 @@ func owner(cur inspector.Cursor) inspector.Cursor {
 
 func processFunc(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface) {
 	reported := map[token.Pos]bool{}
-	checkValueSites(pass, fn, set, hash)
+	checkValueSites(pass, fn, set, hash, reported)
 	checkOutSites(pass, fn, set, hash, reported)
-	checkDurableSites(pass, fn, set, hash)
+	checkDurableSites(pass, fn, set, hash, reported)
 	checkVerdictLists(pass, fn, set, hash, reported)
 }
 
@@ -585,30 +585,39 @@ func declaredHere(fn inspector.Cursor, v *types.Var) bool {
 	return body.Pos() <= v.Pos() && v.Pos() < body.End()
 }
 
-func checkValueSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface) {
+func checkValueSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
 	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		as := inspection.As[*ast.AssignStmt](cur.Node())
-		if as.Tok != token.DEFINE && as.Tok != token.ASSIGN {
-			continue
-		}
-		if allBlank(as.Lhs) {
-			continue
-		}
-		call, vobj, vname := valueSite(pass, as)
-		if call == nil {
-			continue
-		}
-		if isExempt(pass, call, set, hash) {
-			continue
-		}
-		if valueHolds(pass, fn, as, vobj) {
-			callee := types.ExprString(call.Fun)
-			pass.Reportf(call.Pos(), "%s is used after the error of %s is dropped, and it is nil when the call fails: check the error, or test %s for nil first", vname, callee, vname)
-		}
+		checkOneValueSite(pass, fn, cur, set, hash, reported)
 	}
+}
+
+func checkOneValueSite(pass *analysis.Pass, fn, cur inspector.Cursor, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
+	as := inspection.As[*ast.AssignStmt](cur.Node())
+	if as.Tok != token.DEFINE && as.Tok != token.ASSIGN {
+		return
+	}
+	if allBlank(as.Lhs) {
+		return
+	}
+	call, vobj, vname := valueSite(pass, as)
+	if call == nil {
+		return
+	}
+	if reported[call.Pos()] {
+		return
+	}
+	if isExempt(pass, call, set, hash) {
+		return
+	}
+	if !valueHolds(pass, fn, as, vobj) {
+		return
+	}
+	callee := types.ExprString(call.Fun)
+	pass.Reportf(call.Pos(), "%s is used after the error of %s is dropped, and it is nil when the call fails: check the error, or test %s for nil first", vname, callee, vname)
+	reported[call.Pos()] = true
 }
 
 func allBlank(lhs []ast.Expr) bool {
@@ -870,6 +879,9 @@ func checkOutSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func
 		if call == nil || !isRealCall(pass.TypesInfo, call) {
 			continue
 		}
+		if reported[call.Pos()] {
+			continue
+		}
 		if !dropsError(pass.TypesInfo, call) {
 			continue
 		}
@@ -979,30 +991,38 @@ func mentionedAfter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, afte
 
 const closeMethodName = "Close"
 
-func checkDurableSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface) {
+func checkDurableSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
 	for cur := range fn.Preorder((*ast.ExprStmt)(nil), (*ast.DeferStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		call := durableCall(cur)
-		if call == nil || !isRealCall(pass.TypesInfo, call) {
-			continue
-		}
-		xobj, xname := closeReceiver(pass, call)
-		if xobj == nil {
-			continue
-		}
-		if !isExactlyError(pass.TypesInfo, call) {
-			continue
-		}
-		if isExempt(pass, call, set, hash) {
-			continue
-		}
-		if !durableHolds(pass, fn, xobj) {
-			continue
-		}
-		pass.Reportf(call.Pos(), "%s is written in this function and the error of %s.Close is dropped, so a failed Close loses data: return or check the Close error", xname, xname)
+		checkOneDurableSite(pass, fn, cur, set, hash, reported)
 	}
+}
+
+func checkOneDurableSite(pass *analysis.Pass, fn, cur inspector.Cursor, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
+	call := durableCall(cur)
+	if call == nil || !isRealCall(pass.TypesInfo, call) {
+		return
+	}
+	if reported[call.Pos()] {
+		return
+	}
+	xobj, xname := closeReceiver(pass, call)
+	if xobj == nil {
+		return
+	}
+	if !isExactlyError(pass.TypesInfo, call) {
+		return
+	}
+	if isExempt(pass, call, set, hash) {
+		return
+	}
+	if !durableHolds(pass, fn, xobj) {
+		return
+	}
+	pass.Reportf(call.Pos(), "%s is written in this function and the error of %s.Close is dropped, so a failed Close loses data: return or check the Close error", xname, xname)
+	reported[call.Pos()] = true
 }
 
 func durableCall(cur inspector.Cursor) *ast.CallExpr {
@@ -1194,6 +1214,9 @@ func isWriterInterface(t types.Type) bool {
 }
 
 func writerSigShape(sig *types.Signature) bool {
+	if sig == nil {
+		return false
+	}
 	if sig.Params() == nil || sig.Params().Len() != 1 {
 		return false
 	}
@@ -1296,7 +1319,7 @@ func verdictPairCall(pass *analysis.Pass, list []ast.Stmt, i int, set map[*types
 	if call == nil || !isRealCall(pass.TypesInfo, call) {
 		return nil, false
 	}
-	if isCloseMethod(call) {
+	if isCloseMethod(pass.TypesInfo, call) {
 		return nil, false
 	}
 	if !dropsError(pass.TypesInfo, call) {
@@ -1322,7 +1345,15 @@ func verdictNextReturnsNil(pass *analysis.Pass, stmt ast.Stmt) bool {
 	return isNilIdent(pass.TypesInfo, ret.Results[len(ret.Results)-1])
 }
 
-func isCloseMethod(call *ast.CallExpr) bool {
+func isCloseMethod(info *types.Info, call *ast.CallExpr) bool {
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == closeMethodName
+	if !ok || sel.Sel.Name != closeMethodName {
+		return false
+	}
+	if id, ok := ast.Unparen(sel.X).(*ast.Ident); ok {
+		if _, ok := info.ObjectOf(id).(*types.PkgName); ok {
+			return false
+		}
+	}
+	return true
 }
