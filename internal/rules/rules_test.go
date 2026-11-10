@@ -552,6 +552,8 @@ func TestReadmeTokensPrintFromUpstreamAnalyzerNames(t *testing.T) {
 		{"modernize", "rangeint", "modernize:rangeint"},
 		{"modernize", "waitgroupgo", "modernize:waitgroupgo"},
 		{"gosimple", "S1005", "gosimple:S1005"},
+		{"lockstate", "pair", "lockstate:pair"},
+		{"spin", "busywait", "spin:busywait"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.wantToken, func(t *testing.T) {

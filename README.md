@@ -209,11 +209,12 @@ Large files and deeply nested functions exceed what a reader or an agent can hol
 | Hazard | Rules |
 |---|---|
 | Unjoined, unstructured, or unbounded goroutines | `goroutine` (a join in `standard`; errgroup or `WaitGroup.Go` only, exit paths, and bounded fan-out in `strict`), `testinggoroutine`, `staticcheck:SA2002` |
-| Goroutines blocked forever on channels | `chanblock` (`strict`), and the exit-path and empty-select checks of `goroutine` |
+| Goroutines blocked forever on channels | `chanstate`, `chanblock` (`strict`), and the exit-path and empty-select checks of `goroutine` |
 | Lost or misused contexts | `lostcancel`, `fatcontext`, `noctx`, and in `strict` `contextcheck` and `containedctx` |
-| Data races | `capturerace`, `checklocks` (guards, `+checkatomic`, inferred guards in `strict`), `copylocks`, `atomic`, `atomicalign`, `checkaligned`, `staticcheck:SA2000` to `SA2003` |
-| `sync.WaitGroup` misuse | `waitgroup`, `modernize:waitgroupgo`, `staticcheck:SA2000` |
-| Deadlock by re-entry | `reentrant_withlock_deadlock`, `checklocks` double-acquire check |
+| Data races | `gorace`, `checklocks` (guards, `+checkatomic`, inferred guards in `strict`), `copylocks`, `atomic`, `atomicalign`, `staticcheck:SA2000` to `SA2003` |
+| `sync.WaitGroup` misuse | `wgstate`, `waitgroup`, `modernize:waitgroupgo`, `staticcheck:SA2000` |
+| Deadlock by re-entry | `lockstate`, `reentrant_withlock_deadlock`, `checklocks` double-acquire check |
+| Loops that spin without progress | `spin` |
 | Timer churn and leaks | `timeafter`, `staticcheck:SA1015` |
 
 ## Suppressing findings
@@ -243,7 +244,7 @@ The `nolint` rule checks the directives themselves and reports at the directive:
 
 ## Rules
 
-The catalog has 95 rules. `basic` runs 51 of them, `standard` runs 83, and `strict` runs all 95. Run `gglint rules` for the list that matches your build.
+The catalog has 104 rules. `basic` runs 51 of them, `standard` runs 92, and `strict` runs all 104. Run `gglint rules` for the list that matches your build.
 
 | Origin | Source |
 |---|---|
@@ -313,20 +314,26 @@ The catalog has 95 rules. `basic` runs 51 of them, `standard` runs 83, and `stri
 
 | Rule | Origin | Description |
 |---|---|---|
+| `alias` | gglint | Reports four shapes of append and copy whose writes land in memory still read, or in a dropped copy. |
 | `asasalint` | third-party | Reports a []any passed as one element to a variadic ...any parameter. |
 | `atomicalign` | go/analysis | check for non-64-bits-aligned arguments to sync/atomic functions |
 | `bodyclose` | third-party | Reports HTTP response bodies that are never closed. |
+| `chanstate` | gglint | Reports channel operations that panic, deadlock, or strand a sender. |
+| `ctxflow` | gglint | Reports contexts that drop the caller's cancellation or are cancelled before use. |
 | `deepequalerrors` | go/analysis | check for calls of reflect.DeepEqual on error values |
 | `durationcheck` | third-party | Reports multiplication of two time.Duration values. |
 | `err_chain_reset` | logos | Reports fmt.Errorf calls that format an error with a verb other than %w or pass err.Error(). |
+| `errdrop` | gglint | Reports a dropped error only when later code depends on the call having succeeded. |
 | `fatcontext` | third-party | Reports contexts nested in loops and closures, which grow the context chain each iteration. |
 | `gochecksumtype` | third-party | Requires type switches on sealed sum-type interfaces to cover every variant. |
 | `gocritic` | third-party | Runs go-critic diagnostic checkers plus deferInLoop. |
 | `gofumpt` | third-party | Reports files that are not gofumpt-formatted, with a fix that formats them. |
+| `gorace` | gglint | Reports variables that goroutines of one function access with a write and no ordering. |
 | `gosec` | third-party | Reports security problems found by gosec; standard skips audit and permission checks. |
 | `gosimple` | staticcheck | Staticcheck S simplifications that carry a fix. |
 | `httpmux` | go/analysis | report using Go 1.22 enhanced ServeMux patterns in older Go versions |
 | `inline` | go/analysis | apply fixes based on 'go:fix inline' comment directives |
+| `lockstate` | gglint | Reports lock misuse that panics, deadlocks, or guards nothing. |
 | `makezero` | third-party | Reports append to a slice created with a non-zero length. |
 | `misspell` | third-party | Reports commonly misspelled English words, with a fix that corrects them. |
 | `modernize` | go/analysis | Suggests modern Go replacements for outdated idioms and library calls. |
@@ -337,14 +344,17 @@ The catalog has 95 rules. `basic` runs 51 of them, `standard` runs 83, and `stri
 | `placeholder` | logos | Reports placeholder panics; strict also reports comments that start with TODO or FIXME. |
 | `reassign` | third-party | Reports assignments to variables of other packages, such as io.EOF. |
 | `reflectvaluecompare` | go/analysis | check for comparing reflect.Value values with == or reflect.DeepEqual |
+| `resstate` | gglint | Reports values used after Close, Put, or free, and buffer views kept past their invalidation. |
 | `scannererr` | go/analysis | scannererr: report failure to check bufio.Scanner.Err |
 | `sortslice` | go/analysis | check the argument type of sort.Slice |
+| `spin` | gglint | Reports five shapes of loop that keep running without making progress. |
 | `sqlrowserr` | go/analysis | sqlrowserr: report failure to check sql.Rows.Err |
 | `timeafter` | logos | Reports time.After inside a loop, which allocates a timer per iteration. |
 | `tparallel` | third-party | Reports t.Parallel used in subtests but not the top-level test, or the reverse. |
 | `unparam` | third-party | Reports unexported function parameters and results that are unused or always the same value. |
 | `unusedwrite` | go/analysis | checks for unused writes |
 | `usetesting` | third-party | Reports os.MkdirTemp, os.CreateTemp, and os.Chdir in tests, which have testing package replacements. |
+| `wgstate` | gglint | Reports WaitGroup and errgroup use that hangs Wait or lets it return early. |
 
 ### Added in strict
 

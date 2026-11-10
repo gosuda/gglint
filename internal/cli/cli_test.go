@@ -426,6 +426,7 @@ func assertConcerns(t *testing.T, dir string, reports map[config.Mode]jsonReport
 		{"complexity", config.Standard, "f/f.go", "func Branchy", "function Branchy is too complex: cyclomatic complexity 17 exceeds 15"},
 		{"chanblock", config.Strict, "g/g.go", "ch <- 1", "channel send can block forever: select on ctx.Done() or use a buffered channel"},
 		{"placeholder", config.Standard, "h/h.go", "panic(", "placeholder panic: implement this path"},
+		{"gorace", config.Standard, "e/e.go", "go func()", "s is read by this goroutine and written at line 8 before the goroutine is joined: pass it as an argument, or wait for the goroutine first"},
 	}
 	for _, c := range concerns {
 		line, _ := position(t, dir, c.file, c.needle)
@@ -443,7 +444,7 @@ func assertConcerns(t *testing.T, dir string, reports map[config.Mode]jsonReport
 
 var (
 	modeNames   = []string{"basic", "standard", "strict"}
-	catalogSize = [...]int{51, 83, 95}
+	catalogSize = [...]int{51, 92, 104}
 	origins     = []string{"go/analysis", "staticcheck", "third-party", "gvisor", "logos", "gglint"}
 )
 
