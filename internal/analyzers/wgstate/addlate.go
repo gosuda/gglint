@@ -17,7 +17,7 @@ import (
 
 var addlateAnalyzer = &analysis.Analyzer{
 	Name:     "addlate",
-	Doc:      "report a WaitGroup Add that runs after the counted goroutine has started; a goroutine that receives from a channel or waits on a mutex, a WaitGroup, or a Cond is not reported, because that wait can order the Add",
+	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it; a literal that receives, ranges over a channel, or locks or waits is not reported, because that wait can order the Add",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runAddlate,
 }
@@ -157,7 +157,7 @@ func reportLateAdds(pass *analysis.Pass, group lateGroup, k flow.Key) {
 			continue
 		}
 		group.seen[call.Pos()] = true
-		pass.Reportf(call.Pos(), "this Add runs after the goroutine it counts has started, so Wait can return early: call %s.Add before the go statement", text)
+		pass.Reportf(call.Pos(), "this Add runs after the goroutine it counts has started, so its Done can run first and panic with a negative WaitGroup counter, or a Wait before this Add can return early: call %s.Add before the go statement", text)
 	}
 }
 

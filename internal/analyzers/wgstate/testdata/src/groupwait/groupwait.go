@@ -26,7 +26,8 @@ func groupwaitSilentNested() error {
 		fn := func() error {
 			return g.Wait()
 		}
-		return fn()
+		_ = fn
+		return work()
 	})
 	return g.Wait()
 }

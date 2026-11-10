@@ -79,28 +79,25 @@ func selfwaitSilentBranchDone(bad bool) {
 
 func selfwaitSilentNestedAdd(n int, c bool) {
 	var wg sync.WaitGroup
-	wg.Add(1)
-	if c {
+	if c && n > 0 {
 		wg.Add(n)
+		for range n {
+			wg.Done()
+		}
 	}
-	wg.Wait()
-}
-func selfwaitSilentHiddenDone(c bool) {
-	var wg sync.WaitGroup
-	if c {
-		wg.Done()
-	}
-	wg.Add(2)
-	wg.Done()
 	wg.Wait()
 }
 
 func selfwaitSilentHiddenAdd(c bool, n int) {
 	var wg sync.WaitGroup
-	if c {
+	if c && n > 0 {
 		wg.Add(n)
+		for range n {
+			wg.Done()
+		}
 	}
 	wg.Add(2)
+	wg.Done()
 	wg.Done()
 	wg.Wait()
 }

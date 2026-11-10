@@ -10,7 +10,7 @@ func addlateReported() {
 		defer wg.Done()
 		work()
 	}()
-	wg.Add(1) // want "so Wait can return early"
+	wg.Add(1) // want "negative WaitGroup counter"
 	wg.Wait()
 }
 
@@ -33,7 +33,7 @@ func addlateReportedLabeled() {
 		work()
 	}()
 L:
-	wg.Add(1) // want "so Wait can return early"
+	wg.Add(1) // want "negative WaitGroup counter"
 	wg.Wait()
 }
 func addlateReportedDouble() {
@@ -46,7 +46,7 @@ func addlateReportedDouble() {
 		defer wg.Done()
 		work()
 	}()
-	wg.Add(2) // want "so Wait can return early"
+	wg.Add(2) // want "negative WaitGroup counter"
 	wg.Wait()
 }
 func addlateSilentChanGate() {
@@ -73,18 +73,6 @@ func addlateSilentMutexGate() {
 	}()
 	wg.Add(1)
 	mu.Unlock()
-	wg.Wait()
-}
-func addlateSilentDeferredGate() {
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	go func() {
-		defer wg.Done()
-		<-start
-		work()
-	}()
-	wg.Add(1)
-	close(start)
 	wg.Wait()
 }
 func addlateSilentRWMutexParent() {
@@ -162,5 +150,28 @@ func addlateSilentCondGate() {
 	ready = true
 	mu.Unlock()
 	cond.Broadcast()
+	wg.Wait()
+}
+func addlateReportedWaitFirst() {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Wait()
+	wg.Add(1) // want "can return early"
+}
+func addlateSilentRLockGoroutine() {
+	var wg sync.WaitGroup
+	var mu sync.RWMutex
+	mu.Lock()
+	go func() {
+		mu.RLock()
+		defer wg.Done()
+		mu.RUnlock()
+		work()
+	}()
+	wg.Add(1)
+	mu.Unlock()
 	wg.Wait()
 }

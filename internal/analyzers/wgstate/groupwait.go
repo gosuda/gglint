@@ -13,7 +13,7 @@ import (
 
 var groupwaitAnalyzer = &analysis.Analyzer{
 	Name:     "groupwait",
-	Doc:      "report an errgroup Wait inside a function of the same group",
+	Doc:      "report an errgroup Wait inside a function literal passed to Go or TryGo of the same group; a named function passed to Go is not checked, and a Wait in a nested function literal or go statement is not reported",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runGroupwait,
 }
@@ -74,7 +74,7 @@ func findGroupWaits(pass *analysis.Pass, lit *ast.FuncLit, k flow.Key) {
 		if !ok || !isGroupWait(info, call, k) {
 			return true
 		}
-		pass.Reportf(call.Pos(), "this Wait runs inside a function of the same group, so it waits for itself: return the error instead")
+		pass.Reportf(call.Pos(), "this Wait runs inside a function of the same group, so it waits for itself and never returns: move the Wait to the goroutine that started the group, and return this function's error instead")
 		return true
 	})
 }

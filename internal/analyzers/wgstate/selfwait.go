@@ -15,7 +15,7 @@ import (
 
 var selfwaitAnalyzer = &analysis.Analyzer{
 	Name:     "selfwait",
-	Doc:      "report a WaitGroup Wait that no goroutine can release",
+	Doc:      "report a Wait on a WaitGroup declared in the function and not shared with any goroutine, closure, helper, or pointer, when constant Adds in the Wait's own block before it exceed the Done calls there; silent for parameters, fields of parameters, package variables, non-constant Adds, and any Done earlier in the function",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runSelfwait,
 }

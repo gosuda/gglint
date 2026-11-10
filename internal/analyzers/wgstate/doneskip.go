@@ -14,7 +14,7 @@ import (
 
 var doneskipAnalyzer = &analysis.Analyzer{
 	Name:     "doneskip",
-	Doc:      "report a return in a spawned function that skips its WaitGroup Done call",
+	Doc:      "report a return in a function literal started by go or errgroup Go that skips its direct WaitGroup Done call; helper Done calls and named functions are not checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runDoneskip,
 }
@@ -114,7 +114,7 @@ func reportSkipped(pass *analysis.Pass, lit *ast.FuncLit, before []ast.Stmt, don
 		if hasDoneBefore(pass.TypesInfo, lit, ret, before, d.key) {
 			continue
 		}
-		pass.Reportf(ret.Pos(), "this return skips %s.Done(), so Wait blocks forever: defer the Done call", d.text)
+		pass.Reportf(ret.Pos(), "this return skips %s.Done(), so any Wait on it blocks forever: defer the Done call", d.text)
 	}
 }
 
