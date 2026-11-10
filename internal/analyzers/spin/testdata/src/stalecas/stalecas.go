@@ -226,3 +226,82 @@ func stalecasSilentElseReturn(n *atomic.Int64) int {
 	}
 	return 1
 }
+
+func stalecasSilentClosure(n *atomic.Int64) {
+	old := n.Load()
+	for !n.CompareAndSwap(old, old+1) {
+		reload := func() { old = n.Load() }
+		reload()
+	}
+	use(old)
+}
+
+func loadOld(p *int64, n *atomic.Int64) { *p = n.Load() }
+
+func stalecasSilentAddr(n *atomic.Int64) {
+	old := n.Load()
+	for !n.CompareAndSwap(old, old+1) {
+		loadOld(&old, n)
+	}
+	use(old)
+}
+
+func stalecasReportedReadCapture(n *atomic.Int64) {
+	old := n.Load()
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+		show := func() { use(old) }
+		show()
+	}
+	use(old)
+}
+
+func stalecasSilentElseIf(n *atomic.Int64, c bool) int {
+	old := n.Load()
+	for {
+		if n.CompareAndSwap(old, old+1) {
+			break
+		} else if c {
+			return 0
+		} else {
+			return 1
+		}
+	}
+	return 2
+}
+
+func stalecasSilentElseBreak(n *atomic.Int64) {
+	old := n.Load()
+	for {
+		if n.CompareAndSwap(old, old+1) {
+			break
+		} else {
+			break
+		}
+	}
+	use(old)
+}
+
+func stalecasSilentElsePanic(n *atomic.Int64) {
+	old := n.Load()
+	for {
+		if n.CompareAndSwap(old, old+1) {
+			break
+		} else {
+			panic("stale")
+		}
+	}
+}
+
+func stalecasSilentElseBlock(n *atomic.Int64) int {
+	old := n.Load()
+	for {
+		if n.CompareAndSwap(old, old+1) {
+			break
+		} else {
+			{
+				return 0
+			}
+		}
+	}
+	return 1
+}

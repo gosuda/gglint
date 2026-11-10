@@ -43,6 +43,9 @@ func checkClosedrecv(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStm
 	if !closesBefore(pass, fn, loop, v) {
 		return
 	}
+	if loopExits(pass.TypesInfo, cur, loop) {
+		return
+	}
 	pass.Reportf(loop.Pos(), "after close, this receive from %s returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false", v.Name())
 }
 
@@ -148,7 +151,7 @@ func isChan(t types.Type) bool {
 
 func closesBefore(pass *analysis.Pass, fn ast.Node, loop *ast.ForStmt, v *types.Var) bool {
 	closed := false
-	ast.Inspect(fn, func(n ast.Node) bool {
+	walkNoLit(fn, func(n ast.Node) bool {
 		if closed {
 			return false
 		}
@@ -196,12 +199,158 @@ func litCloses(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
 
 func closesVar(pass *analysis.Pass, x ast.Node, v *types.Var) bool {
 	c, ok := x.(*ast.CallExpr)
-	if !ok || !pass.TypesInfo.Types[c.Fun].IsBuiltin() {
+	if !ok || len(c.Args) != 1 {
 		return false
 	}
-	if len(c.Args) != 1 {
+	id, ok := ast.Unparen(c.Fun).(*ast.Ident)
+	if !ok {
 		return false
 	}
-	id, ok := ast.Unparen(c.Args[0]).(*ast.Ident)
-	return ok && pass.TypesInfo.ObjectOf(id) == types.Object(v)
+	b, ok := pass.TypesInfo.ObjectOf(id).(*types.Builtin)
+	if !ok || b.Name() != "close" {
+		return false
+	}
+	arg, ok := ast.Unparen(c.Args[0]).(*ast.Ident)
+	return ok && pass.TypesInfo.ObjectOf(arg) == types.Object(v)
+}
+
+type exitQuery struct {
+	info  *types.Info
+	label string
+	inner map[string]bool
+}
+
+func loopExits(info *types.Info, cur inspector.Cursor, loop *ast.ForStmt) bool {
+	if loop.Body == nil {
+		return false
+	}
+	q := exitQuery{info: info, label: loopLabel(cur), inner: innerLabelSet(loop.Body)}
+	return stmtsExit(q, loop.Body.List, 0)
+}
+
+func innerLabelSet(body *ast.BlockStmt) map[string]bool {
+	labels := map[string]bool{}
+	walkNoLit(body, func(n ast.Node) bool {
+		if ls, ok := n.(*ast.LabeledStmt); ok {
+			labels[ls.Label.Name] = true
+		}
+		return true
+	})
+	return labels
+}
+
+func stmtsExit(q exitQuery, list []ast.Stmt, depth int) bool {
+	for _, stmt := range list {
+		if stmtExits(q, stmt, depth) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtExits(q exitQuery, stmt ast.Stmt, depth int) bool {
+	switch t := stmt.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.BranchStmt:
+		return branchExits(q, t, depth)
+	case *ast.ExprStmt:
+		return isPanicCall(q.info, t.X)
+	case *ast.BlockStmt:
+		return stmtsExit(q, t.List, depth)
+	case *ast.IfStmt:
+		return ifExits(q, t, depth)
+	case *ast.LabeledStmt:
+		return stmtExits(q, t.Stmt, depth)
+	default:
+		return nestedExits(q, stmt, depth)
+	}
+}
+
+func branchExits(q exitQuery, b *ast.BranchStmt, depth int) bool {
+	if b.Tok == token.GOTO {
+		return true
+	}
+	if b.Tok == token.BREAK {
+		if b.Label == nil {
+			return depth == 0
+		}
+		if b.Label.Name == q.label {
+			return true
+		}
+		return !q.inner[b.Label.Name]
+	}
+	if b.Tok == token.CONTINUE {
+		if b.Label == nil || b.Label.Name == q.label {
+			return false
+		}
+		return !q.inner[b.Label.Name]
+	}
+	return false
+}
+
+func ifExits(q exitQuery, t *ast.IfStmt, depth int) bool {
+	if t.Body != nil && stmtsExit(q, t.Body.List, depth) {
+		return true
+	}
+	switch e := t.Else.(type) {
+	case *ast.BlockStmt:
+		return stmtsExit(q, e.List, depth)
+	case *ast.IfStmt:
+		return ifExits(q, e, depth)
+	default:
+		return false
+	}
+}
+
+func nestedExits(q exitQuery, stmt ast.Stmt, depth int) bool {
+	switch t := stmt.(type) {
+	case *ast.ForStmt:
+		return loopBodyExits(q, t.Body, depth)
+	case *ast.RangeStmt:
+		return loopBodyExits(q, t.Body, depth)
+	case *ast.SelectStmt:
+		return selectExits(q, t, depth)
+	case *ast.SwitchStmt:
+		return casesExit(q, t.Body, depth)
+	case *ast.TypeSwitchStmt:
+		return casesExit(q, t.Body, depth)
+	default:
+		return false
+	}
+}
+
+func loopBodyExits(q exitQuery, body *ast.BlockStmt, depth int) bool {
+	if body == nil {
+		return false
+	}
+	return stmtsExit(q, body.List, depth+1)
+}
+
+func selectExits(q exitQuery, t *ast.SelectStmt, depth int) bool {
+	if t.Body == nil {
+		return false
+	}
+	for _, s := range t.Body.List {
+		if c, ok := s.(*ast.CommClause); ok && stmtsExit(q, c.Body, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+func casesExit(q exitQuery, body *ast.BlockStmt, depth int) bool {
+	if body == nil {
+		return false
+	}
+	for _, stmt := range body.List {
+		clause, ok := stmt.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		if stmtsExit(q, clause.Body, depth+1) {
+			return true
+		}
+	}
+	return false
 }

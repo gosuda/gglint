@@ -1,5 +1,7 @@
 package skipadvance
 
+import "time"
+
 var xs = []int{1, 2, 3}
 
 var stepErr error
@@ -175,5 +177,16 @@ Outer:
 			}
 			i++
 		}
+	}
+}
+
+func skipadvanceReportedSleep() {
+	i := 0
+	for i < len(xs) {
+		if err := doStep(xs[i]); err != nil {
+			time.Sleep(time.Second)
+			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+		}
+		i++
 	}
 }

@@ -40,6 +40,9 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 	if loop.Post != nil && assignsRoot(pass.TypesInfo, loop.Post, old) {
 		return
 	}
+	if staleUnknown(pass.TypesInfo, loop, old) {
+		return
+	}
 	pass.Reportf(loop.Pos(), "after one failed swap %s is stale, so every retry fails: load it again inside the loop", old.Name())
 }
 
@@ -244,4 +247,64 @@ func hitRoot(info *types.Info, e ast.Expr, v *types.Var) bool {
 		return false
 	}
 	return info.ObjectOf(id) == types.Object(v)
+}
+
+func staleUnknown(info *types.Info, loop *ast.ForStmt, old *types.Var) bool {
+	if capturedByLit(info, loop.Body, old) {
+		return true
+	}
+	if loop.Post != nil && capturedByLit(info, loop.Post, old) {
+		return true
+	}
+	if addrTaken(info, loop.Body, old) {
+		return true
+	}
+	return loop.Post != nil && addrTaken(info, loop.Post, old)
+}
+
+func capturedByLit(info *types.Info, n ast.Node, v *types.Var) bool {
+	hit := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if hit {
+			return false
+		}
+		lit, ok := x.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		return !litMentions(info, lit, v, &hit)
+	})
+	return hit
+}
+
+func litMentions(info *types.Info, lit *ast.FuncLit, v *types.Var, hit *bool) bool {
+	ast.Inspect(lit.Body, func(y ast.Node) bool {
+		if *hit {
+			return false
+		}
+		if assignsNode(info, y, v) {
+			*hit = true
+		}
+		return !*hit
+	})
+	return *hit
+}
+
+func addrTaken(info *types.Info, n ast.Node, v *types.Var) bool {
+	hit := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if hit {
+			return false
+		}
+		u, ok := x.(*ast.UnaryExpr)
+		if !ok || u.Op != token.AND {
+			return true
+		}
+		id := rootIdent(u.X)
+		if id != nil && info.ObjectOf(id) == types.Object(v) {
+			hit = true
+		}
+		return !hit
+	})
+	return hit
 }

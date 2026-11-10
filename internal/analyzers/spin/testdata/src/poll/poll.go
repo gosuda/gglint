@@ -185,3 +185,88 @@ func pollSilentDefaultRange(ch chan int) {
 		}
 	}
 }
+
+func pollSilentBounded(ch chan int) {
+	n := 0
+	for i := 0; i < 3; i++ {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			n++
+		}
+	}
+	use(n)
+}
+
+func pollSilentDefaultGoto(ch chan int) {
+	n := 0
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			n++
+			goto Done
+		}
+	}
+Done:
+	use(n)
+}
+
+func pollSilentDefaultBreakOuter(ch chan int) {
+	n := 0
+Outer:
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			n++
+			break Outer
+		}
+	}
+	use(n)
+}
+
+func pollReportedDefaultSelectBreak(ch chan int) {
+	n := 0
+	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			n++
+			break
+		}
+	}
+	use(n)
+}
+
+func pollSilentDefaultBlock(ch chan int) {
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			{
+				return
+			}
+		}
+	}
+}
+
+func pollSilentDefaultIfElse(ch chan int, n int) {
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			if n > 0 {
+				return
+			} else {
+				return
+			}
+		}
+	}
+}
