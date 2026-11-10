@@ -16,6 +16,15 @@ type neverFails struct{}
 
 func (*neverFails) AFact() {}
 
+type nilSafe struct{}
+
+func (*nilSafe) AFact() {}
+
+type facts struct {
+	never map[*types.Func]bool
+	safe  map[*types.Func]bool
+}
+
 const writeMethodName = "Write"
 
 // Analyzer reports dropped errors that later code depends on.
@@ -26,7 +35,7 @@ var Analyzer = &analysis.Analyzer{
 The neverFails fact is derived from the file set of the current build, so a function with build-tagged variants has the fact of the variant that is built.`,
 	Requires:  []*analysis.Analyzer{inspect.Analyzer},
 	Run:       run,
-	FactTypes: []analysis.Fact{(*neverFails)(nil)},
+	FactTypes: []analysis.Fact{(*neverFails)(nil), (*nilSafe)(nil)},
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -34,9 +43,13 @@ func run(pass *analysis.Pass) (any, error) {
 	for origin := range set {
 		pass.ExportObjectFact(origin, &neverFails{})
 	}
+	safe := computeNilSafe(pass)
+	for origin := range safe {
+		pass.ExportObjectFact(origin, &nilSafe{})
+	}
 	hash := hashInterface(pass.Pkg)
 	for fn := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		processFunc(pass, fn, set, hash)
+		processFunc(pass, fn, set, safe, hash)
 	}
 	return nil, nil
 }
@@ -96,9 +109,9 @@ func owner(cur inspector.Cursor) inspector.Cursor {
 	return inspector.Cursor{}
 }
 
-func processFunc(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface) {
+func processFunc(pass *analysis.Pass, fn inspector.Cursor, set, safe map[*types.Func]bool, hash *types.Interface) {
 	reported := map[token.Pos]bool{}
-	checkValueSites(pass, fn, set, hash, reported)
+	checkValueSites(pass, fn, set, safe, hash, reported)
 	checkOutSites(pass, fn, set, hash, reported)
 	checkDurableSites(pass, fn, set, hash, reported)
 	checkVerdictLists(pass, fn, set, hash, reported)

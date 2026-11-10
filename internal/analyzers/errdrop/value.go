@@ -11,16 +11,16 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
-func checkValueSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
+func checkValueSites(pass *analysis.Pass, fn inspector.Cursor, set, safe map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
 	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		checkOneValueSite(pass, fn, cur, set, hash, reported)
+		checkOneValueSite(pass, fn, cur, facts{never: set, safe: safe}, hash, reported)
 	}
 }
 
-func checkOneValueSite(pass *analysis.Pass, fn, cur inspector.Cursor, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
+func checkOneValueSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
 	as := inspection.As[*ast.AssignStmt](cur.Node())
 	if as.Tok != token.DEFINE && as.Tok != token.ASSIGN {
 		return
@@ -35,10 +35,10 @@ func checkOneValueSite(pass *analysis.Pass, fn, cur inspector.Cursor, set map[*t
 	if reported[call.Pos()] {
 		return
 	}
-	if isExempt(pass, call, set, hash) {
+	if isExempt(pass, call, f.never, hash) {
 		return
 	}
-	if !valueHolds(pass, fn, as, vobj) {
+	if !valueHolds(pass, fn, as, vobj, f.safe) {
 		return
 	}
 	callee := types.ExprString(call.Fun)
@@ -125,12 +125,12 @@ func qualifyingValueType(t types.Type) bool {
 	return false
 }
 
-func valueHolds(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt, v *types.Var) bool {
+func valueHolds(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt, v *types.Var, safe map[*types.Func]bool) bool {
 	first, ok := firstUseAfter(pass, fn, v, as.End())
 	if !ok {
 		return false
 	}
-	if !isDeref(first, v) {
+	if !isDeref(pass, first, v, safe) {
 		return false
 	}
 	if interveningNilCheck(pass, fn, v, as.End(), first.Node().Pos()) {
@@ -172,7 +172,7 @@ func skipParens(cur inspector.Cursor) inspector.Cursor {
 	}
 }
 
-func isDeref(cur inspector.Cursor, v *types.Var) bool {
+func isDeref(pass *analysis.Pass, cur inspector.Cursor, v *types.Var, safe map[*types.Func]bool) bool {
 	id, ok := cur.Node().(*ast.Ident)
 	if !ok {
 		return false
@@ -180,7 +180,10 @@ func isDeref(cur inspector.Cursor, v *types.Var) bool {
 	up := skipParens(cur.Parent())
 	switch p := up.Node().(type) {
 	case *ast.SelectorExpr:
-		return unparenIdentEquals(p.X, id)
+		if !unparenIdentEquals(p.X, id) {
+			return false
+		}
+		return !isNilSafeCall(pass, up, p, safe)
 	case *ast.StarExpr:
 		return unparenIdentEquals(p.X, id)
 	case *ast.CallExpr:
@@ -190,6 +193,33 @@ func isDeref(cur inspector.Cursor, v *types.Var) bool {
 		return isMapStoreAssign(up, p, v, id)
 	}
 	return false
+}
+
+func isNilSafeCall(pass *analysis.Pass, up inspector.Cursor, sel *ast.SelectorExpr, safe map[*types.Func]bool) bool {
+	gp := skipParens(up.Parent())
+	call, ok := gp.Node().(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	if ast.Unparen(call.Fun) != up.Node() {
+		return false
+	}
+	choice, ok := pass.TypesInfo.Selections[sel]
+	if !ok || choice == nil {
+		return false
+	}
+	fn, ok := choice.Obj().(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	if _, isPtr := sig.Recv().Type().(*types.Pointer); !isPtr {
+		return false
+	}
+	return hasNilSafe(pass, originOf(fn), safe)
 }
 
 func unparenIdentEquals(e ast.Expr, id *ast.Ident) bool {

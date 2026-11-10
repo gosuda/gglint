@@ -383,3 +383,31 @@ func valueReportedParen(p string) string {
 	f, _ := os.Open(p) // want "is used after the error of os.Open is dropped"
 	return (f).Name()
 }
+
+type nilNode struct {
+	next *nilNode
+}
+
+func (n *nilNode) Len() int {
+	if n == nil {
+		return 0
+	}
+	return 1
+}
+
+func findNode(s string) (*nilNode, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &nilNode{}, nil
+}
+
+func valueSilentNilSafe(s string) int {
+	n, _ := findNode(s)
+	return n.Len()
+}
+
+func valueSilentNilSafeDep(s string) int {
+	n, _ := dep.FindSafe(s)
+	return n.Len()
+}

@@ -25,3 +25,21 @@ func FlushHashLike(b []byte) error {
 	h.Write(b)
 	return nil
 }
+
+type Safe struct {
+	n int
+}
+
+func (s *Safe) Len() int {
+	if s == nil || s.n == 0 {
+		return 0
+	}
+	return s.n
+}
+
+func FindSafe(s string) (*Safe, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &Safe{}, nil
+}
