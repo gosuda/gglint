@@ -493,6 +493,12 @@ func resolvesCall(info *types.Info, c *ast.CallExpr, out map[*types.Var]bool) bo
 	if !info.Types[c.Fun].IsType() || len(c.Args) != 1 {
 		return false
 	}
+	if !isArrayType(info.TypeOf(c)) && !isRef(info.TypeOf(c)) {
+		return false
+	}
+	if !isArrayType(info.TypeOf(c.Args[0])) && !isRef(info.TypeOf(c.Args[0])) {
+		return false
+	}
 	return resolvesTo(info, c.Args[0], out)
 }
 
@@ -935,7 +941,11 @@ func (e *escaper) recv(c *ast.CallExpr) bool {
 		return false
 	}
 	if e.implicitAddr(sel) {
-		return true
+		prev := e.addr
+		e.addr = true
+		r := e.expr(sel.X, true)
+		e.addr = prev
+		return r
 	}
 	return e.expr(sel.X, e.captured)
 }

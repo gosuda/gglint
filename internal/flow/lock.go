@@ -99,7 +99,11 @@ func lockTransfer(info *types.Info, n ast.Node, k Key, h bool) bool {
 }
 
 func transferStep(info *types.Info, scope ast.Node, k Key, x ast.Node, out *bool) bool {
-	if lit, ok := x.(*ast.FuncLit); ok && !calledInPlace(scope, lit) {
+	if lit, ok := x.(*ast.FuncLit); ok && calledInPlace(scope, lit) {
+		*out = inPlaceEffect(info, lit, k, *out)
+		return false
+	}
+	if _, ok := x.(*ast.FuncLit); ok {
 		return false
 	}
 	switch x.(type) {
@@ -122,10 +126,10 @@ func transferCall(info *types.Info, k Key, x ast.Node, out *bool) bool {
 	if !ok || ck != k {
 		return true
 	}
-	switch m {
-	case "Lock", "RLock":
+	if m == opLock || m == opRLock {
 		*out = true
-	case "Unlock", "RUnlock":
+	}
+	if m == opUnlock || m == opRUnlock {
 		*out = false
 	}
 	return true
@@ -137,17 +141,91 @@ func mutexMethod(fn *types.Func) string {
 	}
 	switch fn.FullName() {
 	case "(*sync.Mutex).Lock", "(*sync.RWMutex).Lock":
-		return "Lock"
+		return opLock
 	case "(*sync.RWMutex).RLock":
-		return "RLock"
+		return opRLock
 	case "(*sync.Mutex).Unlock", "(*sync.RWMutex).Unlock":
-		return "Unlock"
+		return opUnlock
 	case "(*sync.RWMutex).RUnlock":
-		return "RUnlock"
+		return opRUnlock
 	case "(*sync.Mutex).TryLock", "(*sync.RWMutex).TryLock":
-		return "TryLock"
+		return opTryLock
 	case "(*sync.RWMutex).TryRLock":
-		return "TryRLock"
+		return opTryRLock
 	}
 	return ""
+}
+
+const (
+	opLock     = "Lock"
+	opRLock    = "RLock"
+	opUnlock   = "Unlock"
+	opRUnlock  = "RUnlock"
+	opTryLock  = "TryLock"
+	opTryRLock = "TryRLock"
+)
+
+func inPlaceEffect(info *types.Info, lit *ast.FuncLit, k Key, incoming bool) bool {
+	if lit.Body == nil {
+		return incoming
+	}
+	found := scanLitOps(info, lit, k)
+	if found.unlock {
+		return false
+	}
+	if found.lock && !found.branch {
+		return true
+	}
+	return incoming
+}
+
+type litOps struct {
+	lock   bool
+	unlock bool
+	branch bool
+}
+
+func scanLitOps(info *types.Info, lit *ast.FuncLit, k Key) litOps {
+	var found litOps
+	ast.Inspect(lit.Body, func(x ast.Node) bool {
+		return visitLitNode(info, lit, k, x, &found)
+	})
+	return found
+}
+
+func visitLitNode(info *types.Info, lit *ast.FuncLit, k Key, x ast.Node, found *litOps) bool {
+	if _, ok := x.(*ast.FuncLit); ok {
+		return x == lit
+	}
+	if _, ok := x.(*ast.GoStmt); ok {
+		return false
+	}
+	switch x.(type) {
+	case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+		found.branch = true
+		return true
+	}
+	call, ok := x.(*ast.CallExpr)
+	if !ok {
+		return true
+	}
+	noteMutexOp(info, call, k, found)
+	return true
+}
+
+func noteMutexOp(info *types.Info, call *ast.CallExpr, k Key, found *litOps) {
+	m := mutexMethod(typeutil.StaticCallee(info, call))
+	if m == "" {
+		return
+	}
+	ck, ok := MethodKey(info, call)
+	if !ok || ck != k {
+		return
+	}
+	if m == opLock || m == opRLock {
+		found.lock = true
+	}
+	if m == opUnlock || m == opRUnlock {
+		found.unlock = true
+	}
 }

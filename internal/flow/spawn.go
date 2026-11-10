@@ -345,40 +345,6 @@ func Joined(pass *analysis.Pass, g *Graph, s Spawn, at ast.Node) bool {
 	return !g.reach(f, t, func(n ast.Node) bool { return joins[n] })
 }
 
-func (g *Graph) opaqueJoin(pass *analysis.Pass, s Spawn, at ast.Node) bool {
-	info := pass.TypesInfo
-	if s.Group.zero() && s.Body == nil {
-		return false
-	}
-	sigs := g.signaledKeys(pass, s)
-	waits := g.closureWaits(info, s.Group)
-	recvs := g.closureRecvs(info, sigs)
-	found := false
-	ast.Inspect(g.fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		c, ok := n.(*ast.CallExpr)
-		if !ok || !betweenSites(s.Site, at, c) {
-			return true
-		}
-		if g.callMentionsGroup(info, c, s.Group, waits) {
-			found = true
-			return false
-		}
-		if g.callMentionsSignal(info, c, sigs, recvs) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func betweenSites(site, at ast.Node, c *ast.CallExpr) bool {
-	return c.Pos() > site.End() && c.Pos() <= at.End()
-}
-
 func (g *Graph) signaledKeys(pass *analysis.Pass, s Spawn) []Key {
 	if s.Body == nil {
 		return nil
@@ -386,32 +352,15 @@ func (g *Graph) signaledKeys(pass *analysis.Pass, s Spawn) []Key {
 	return signaled(pass, s.Body)
 }
 
-func (g *Graph) closureWaits(info *types.Info, group Key) map[*types.Var]bool {
-	out := map[*types.Var]bool{}
-	if group.zero() {
-		return out
-	}
-	g.collectClosures(info, out, nil, group, nil)
-	return out
-}
-
-func (g *Graph) closureRecvs(info *types.Info, sigs []Key) map[*types.Var]bool {
-	out := map[*types.Var]bool{}
-	if len(sigs) == 0 {
-		return out
-	}
-	g.collectClosures(info, nil, out, Key{}, sigs)
-	return out
-}
-
 func (g *Graph) collectClosures(info *types.Info, waits, recvs map[*types.Var]bool, group Key, sigs []Key) {
+	vars := g.cachedClosureVars(info)
 	ast.Inspect(g.fn, func(n ast.Node) bool {
 		lit, ok := n.(*ast.FuncLit)
 		if !ok {
 			return true
 		}
-		v := g.closureVar(info, lit)
-		if v == nil {
+		v, ok := vars[lit]
+		if !ok || v == nil {
 			return true
 		}
 		if waits != nil && g.litWaits(info, lit, group) {
@@ -424,89 +373,113 @@ func (g *Graph) collectClosures(info *types.Info, waits, recvs map[*types.Var]bo
 	})
 }
 
-func (g *Graph) closureVar(info *types.Info, lit *ast.FuncLit) *types.Var {
-	var out *types.Var
-	ast.Inspect(g.fn, func(n ast.Node) bool {
-		if out != nil {
-			return false
-		}
-		if v := assignClosureVar(info, n, lit); v != nil {
-			out = v
-			return false
-		}
-		if v := specClosureVar(info, n, lit); v != nil {
-			out = v
-			return false
-		}
-		return true
+func (g *Graph) cachedClosureVars(info *types.Info) map[*ast.FuncLit]*types.Var {
+	g.closureOnce.Do(func() {
+		m := map[*ast.FuncLit]*types.Var{}
+		ast.Inspect(g.fn, func(n ast.Node) bool {
+			recordClosureAssign(info, n, m)
+			recordClosureValue(info, n, m)
+			return true
+		})
+		g.closureVars = m
 	})
-	return out
+	return g.closureVars
 }
 
-func assignClosureVar(info *types.Info, n ast.Node, lit *ast.FuncLit) *types.Var {
+func recordClosureAssign(info *types.Info, n ast.Node, m map[*ast.FuncLit]*types.Var) {
 	s, ok := n.(*ast.AssignStmt)
 	if !ok || len(s.Lhs) != 1 || len(s.Rhs) != 1 {
-		return nil
+		return
 	}
-	if ast.Unparen(s.Rhs[0]) != lit {
-		return nil
+	lit, ok := ast.Unparen(s.Rhs[0]).(*ast.FuncLit)
+	if !ok {
+		return
 	}
 	id, ok := ast.Unparen(s.Lhs[0]).(*ast.Ident)
 	if !ok {
-		return nil
+		return
 	}
 	if v, ok := info.Defs[id].(*types.Var); ok {
-		return v
+		m[lit] = v
 	}
-	return nil
 }
 
-func specClosureVar(info *types.Info, n ast.Node, lit *ast.FuncLit) *types.Var {
+func recordClosureValue(info *types.Info, n ast.Node, m map[*ast.FuncLit]*types.Var) {
 	s, ok := n.(*ast.ValueSpec)
 	if !ok || len(s.Names) != 1 || len(s.Values) != 1 {
-		return nil
+		return
 	}
-	if ast.Unparen(s.Values[0]) != lit {
-		return nil
+	lit, ok := ast.Unparen(s.Values[0]).(*ast.FuncLit)
+	if !ok {
+		return
 	}
 	if v, ok := info.Defs[s.Names[0]].(*types.Var); ok {
-		return v
+		m[lit] = v
 	}
-	return nil
 }
 
 func (g *Graph) litWaits(info *types.Info, lit *ast.FuncLit, group Key) bool {
-	hit := false
-	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if hit {
-			return false
+	if lit.Body == nil || group.zero() {
+		return false
+	}
+	for _, s := range lit.Body.List {
+		if stmtHasWait(info, s, group) {
+			return true
 		}
-		if c, ok := n.(*ast.CallExpr); ok && isGroupWait(info, c, group) {
-			hit = true
-			return false
-		}
-		return true
-	})
-	return hit
+	}
+	return false
 }
 
 func (g *Graph) litRecvs(info *types.Info, lit *ast.FuncLit, sigs []Key) bool {
-	hit := false
-	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if hit {
-			return false
-		}
-		u, ok := n.(*ast.UnaryExpr)
-		if !ok || u.Op != token.ARROW {
+	if lit.Body == nil || len(sigs) == 0 {
+		return false
+	}
+	for _, s := range lit.Body.List {
+		if stmtHasRecv(info, s, sigs) {
 			return true
 		}
-		if k, ok := KeyOf(info, u.X); ok && hasKey(sigs, k) {
-			hit = true
+	}
+	return false
+}
+
+func stmtHasWait(info *types.Info, s ast.Node, group Key) bool {
+	found := false
+	ast.Inspect(s, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch n.(type) {
+		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt, *ast.CaseClause, *ast.CommClause, *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+			return false
+		}
+		if c, ok := n.(*ast.CallExpr); ok && isGroupWait(info, c, group) {
+			found = true
 			return false
 		}
 		return true
 	})
-	return hit
+	return found
+}
+
+func stmtHasRecv(info *types.Info, s ast.Node, sigs []Key) bool {
+	found := false
+	ast.Inspect(s, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch n.(type) {
+		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt, *ast.CaseClause, *ast.CommClause, *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+			return false
+		}
+		if u, ok := n.(*ast.UnaryExpr); ok && u.Op == token.ARROW {
+			if k, ok := KeyOf(info, u.X); ok && hasKey(sigs, k) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 func hasKey(keys []Key, k Key) bool {

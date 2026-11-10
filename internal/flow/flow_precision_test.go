@@ -255,3 +255,145 @@ mu.Unlock()
 		t.Fatalf("in-place lock not held: %v", got)
 	}
 }
+
+func localNamed(info *types.Info, decl *ast.FuncDecl, name string) *types.Var {
+	var out *types.Var
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		if out != nil {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if v, ok := info.Defs[id].(*types.Var); ok && v.Name() == name {
+			out = v
+			return false
+		}
+		return true
+	})
+	return out
+}
+
+func TestEscapesUnrelatedPointerCall(t *testing.T) {
+	t.Parallel()
+	src := `package p
+import "bytes"
+func f() {
+var ch chan int
+ch = make(chan int)
+var b bytes.Buffer
+b.WriteString("x")
+_ = ch
+_ = b
+}
+`
+	f, info := checkTypes(t, src)
+	decl := findDecl(f, "f")
+	if decl == nil {
+		t.Fatalf("f missing")
+	}
+	ch := localNamed(info, decl, "ch")
+	b := localNamed(info, decl, "b")
+	if ch == nil || b == nil {
+		t.Fatalf("locals missing")
+	}
+	if !Escapes(info, decl, b) {
+		t.Fatalf("b should escape through Register")
+	}
+	if Escapes(info, decl, ch) {
+		t.Fatalf("unrelated ch escapes through b.WriteString")
+	}
+}
+
+func TestEscapesConversionRefType(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		src   string
+		fn    string
+		param string
+		want  bool
+	}{
+		{"sliceToString", "package p\nfunc copyStr(buf []byte) string { s := string(buf); return s }\n", "copyStr", "buf", false},
+		{"chanConvert", "package p\ntype Ch chan int\nfunc convAlias(ch chan int) Ch { return Ch(ch) }\n", "convAlias", "ch", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := escapeOf(t, tc.src, tc.fn, tc.param); got != tc.want {
+				t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHeldAtIIFEDeferredUnlock(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, `package p
+import "sync"
+func f() {
+var mu sync.Mutex
+_ = func() int { mu.Lock(); defer mu.Unlock(); return 1 }()
+m := 1
+_ = m
+}
+`)
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	held := HeldAt(pass, NewGraph(pass, fd))
+	got := held(fd.Body.List[2])
+	if len(got) != 0 {
+		t.Fatalf("deferred unlock in IIFE still held: %v", got)
+	}
+}
+
+func TestOpaqueJoinNegatives(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"builtinLen", "package p\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\nif len(done) > 0 { println(\"pending\") }\ns = \"b\"\nreturn s\n}\n"},
+		{"noopFunc", "package p\nimport \"sync\"\nfunc noop(wg *sync.WaitGroup) {}\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nnoop(&wg)\ns = \"b\"\nreturn s\n}\n"},
+		{"condClosure", "package p\nimport \"sync\"\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nwait := func() { if s != \"\" { wg.Wait() } }\nwait()\ns = \"b\"\nreturn s\n}\n"},
+		{"signalNoop", "package p\nfunc watch(ch chan struct{}) {}\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\nwatch(done)\ns = \"b\"\nreturn s\n}\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			pass := ctrlPass(t, pkg)
+			var fd *ast.FuncDecl
+			for _, d := range pkg.Syntax[0].Decls {
+				if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+					fd = f
+				}
+			}
+			if fd == nil {
+				t.Fatalf("f missing")
+			}
+			var target ast.Node
+			for _, s := range fd.Body.List {
+				if a, ok := s.(*ast.AssignStmt); ok && len(a.Lhs) == 1 {
+					if id, ok := a.Lhs[0].(*ast.Ident); ok && id.Name == "s" {
+						target = s
+					}
+				}
+			}
+			if target == nil {
+				t.Fatalf("target missing")
+			}
+			sp := Spawns(pass, fd)[0]
+			g := NewGraph(pass, fd)
+			if Joined(pass, g, sp, target) {
+				t.Fatalf("%s: opaque call joins", tc.name)
+			}
+		})
+	}
+}

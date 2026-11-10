@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"sync"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/ctrlflow"
@@ -111,6 +112,9 @@ type Graph struct {
 	blocks []*cfg.Block
 	index  map[ast.Node]*cfg.Block
 	rep    map[ast.Node]ast.Node
+
+	closureOnce sync.Once
+	closureVars map[*ast.FuncLit]*types.Var
 }
 
 func newGraph(fn ast.Node, c *cfg.CFG) *Graph {
