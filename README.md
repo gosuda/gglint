@@ -211,9 +211,9 @@ Large files and deeply nested functions exceed what a reader or an agent can hol
 | Unjoined, unstructured, or unbounded goroutines | `goroutine` (`strict`: join, errgroup or `WaitGroup.Go` only, exit paths, and bounded fan-out), `testinggoroutine`, `staticcheck:SA2002` |
 | Goroutines blocked forever on channels | `chanstate`, `chanblock` (`strict`), and the exit-path and empty-select checks of `goroutine` |
 | Lost or misused contexts | `lostcancel`, `fatcontext`, `noctx`, and in `strict` `contextcheck` |
-| Data races | `gorace`, `checklocks` (guards, `+checkatomic`, inferred guards in `strict`), `copylocks`, `atomic`, `atomicalign`, `staticcheck:SA2000` to `SA2003` |
+| Data races | `gorace`, `checklocks` (`strict`: guards, `+checkatomic`, inferred guards), `copylocks`, `atomic`, `atomicalign`, `staticcheck:SA2000` to `SA2003` |
 | `sync.WaitGroup` misuse | `wgstate`, `waitgroup`, `modernize:waitgroupgo`, `staticcheck:SA2000` |
-| Deadlock by re-entry | `lockstate`, `reentrant_withlock_deadlock`, `checklocks` double-acquire check |
+| Deadlock by re-entry | `lockstate`, `reentrant_withlock_deadlock`, `checklocks` (`strict`: double-acquire check) |
 | Loops that spin without progress | `spin` |
 | Timer churn and leaks | `timeafter`, `staticcheck:SA1015` |
 
