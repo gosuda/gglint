@@ -62,7 +62,11 @@ func pollingLoop(cur inspector.Cursor) (*ast.ForStmt, bool) {
 func labelsOf(cur inspector.Cursor) map[string]*ast.LabeledStmt {
 	out := map[string]*ast.LabeledStmt{}
 	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		ast.Inspect(fn.Node(), func(n ast.Node) bool {
+		root := fn.Node()
+		ast.Inspect(root, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.FuncLit); ok && lit != root {
+				return false
+			}
 			if l, ok := n.(*ast.LabeledStmt); ok && l.Label != nil {
 				if _, dup := out[l.Label.Name]; !dup {
 					out[l.Label.Name] = l

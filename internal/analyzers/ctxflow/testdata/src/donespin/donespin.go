@@ -314,3 +314,44 @@ func donespinReportedGotoInner(ctx context.Context) {
 		}
 	}
 }
+
+func donespinSilentShadowLoop(ctx context.Context) {
+	helper := func() {
+	loop:
+		for i := 0; i < 3; i++ {
+			break loop
+		}
+	}
+	helper()
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			break loop
+		}
+	}
+}
+
+func donespinReportedShadowSkip(ctx context.Context, n int) {
+	_ = func() {
+	skip:
+		for range 1 {
+			break skip
+		}
+	}
+	for {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return
+		default:
+			if n > 0 {
+				goto skip
+			}
+			n++
+		skip:
+			n--
+		}
+	}
+}
