@@ -2,6 +2,7 @@ package ctxflow
 
 import (
 	"go/ast"
+	"go/token"
 	"go/types"
 	"slices"
 	"strings"
@@ -18,31 +19,40 @@ const httpDoReplacement = "http.NewRequestWithContext and (*http.Client).Do"
 
 var nocontextAnalyzer = &analysis.Analyzer{
 	Name:     "nocontext",
-	Doc:      "report the table calls that cannot be cancelled where a named context is lexically visible; a request passed with its context to a helper that may apply it is not reported",
+	Doc:      "report the table calls that cannot be cancelled where a named context PARAMETER or LOCAL VARIABLE that is visible at the call exists; a request passed with its context to a helper that may apply it is not reported",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runNocontext,
 }
 
 func runNocontext(pass *analysis.Pass) (any, error) {
+	cache := &nocontextCache{
+		locals: map[ast.Node][]*types.Var{},
+		uses:   map[ast.Node]map[*types.Var]token.Pos{},
+	}
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.CallExpr)(nil)) {
-		checkNocontext(pass, cur)
+		checkNocontext(pass, cur, cache)
 	}
 	return nil, nil
 }
 
-func checkNocontext(pass *analysis.Pass, cur inspector.Cursor) {
+type nocontextCache struct {
+	locals map[ast.Node][]*types.Var
+	uses   map[ast.Node]map[*types.Var]token.Pos
+}
+
+func checkNocontext(pass *analysis.Pass, cur inspector.Cursor, cache *nocontextCache) {
 	call, ok := cur.Node().(*ast.CallExpr)
 	if !ok {
 		return
 	}
 	left, right, ok := nocontextTarget(pass.TypesInfo, call)
-	if !ok || !nocontextInScope(pass, cur, call) {
+	if !ok || !nocontextInScope(pass, cur, call, cache) {
 		return
 	}
 	if isWrapper(pass, cur, call, right) {
 		return
 	}
-	if left == "http.NewRequest" && newRequestGetsContext(pass, cur, call) {
+	if left == "http.NewRequest" && newRequestGetsContext(pass, cur, call, cache) {
 		return
 	}
 	pass.Report(analysis.Diagnostic{
@@ -221,12 +231,12 @@ func usesContextParam(pass *analysis.Pass, fn, cur inspector.Cursor) bool {
 	return false
 }
 
-func nocontextInScope(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) bool {
+func nocontextInScope(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, cache *nocontextCache) bool {
 	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
 		if hasNamedContextParam(pass.TypesInfo, fn.Node()) {
 			return true
 		}
-		if hasContextLocalBefore(pass, fn, call) {
+		if hasContextLocalBefore(pass, fn, call, cache) {
 			return true
 		}
 	}
@@ -251,7 +261,7 @@ func hasNamedContextParam(info *types.Info, fn ast.Node) bool {
 	return false
 }
 
-func hasContextLocalBefore(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) bool {
+func hasContextLocalBefore(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, cache *nocontextCache) bool {
 	pkgScope := pass.Pkg.Scope()
 	if pkgScope == nil {
 		return false
@@ -260,26 +270,36 @@ func hasContextLocalBefore(pass *analysis.Pass, fn inspector.Cursor, call *ast.C
 	if fnNode == nil {
 		return false
 	}
-	for _, obj := range pass.TypesInfo.Defs {
-		if v, ok := obj.(*types.Var); ok && visibleContextVar(pkgScope, v, fnNode, call) {
+	for _, v := range contextLocals(pass, fnNode, cache) {
+		if v.Pos() < call.Pos() && scopeHolds(pkgScope, v, call) {
 			return true
 		}
 	}
 	return false
 }
 
-func visibleContextVar(pkgScope *types.Scope, v *types.Var, fnNode ast.Node, call *ast.CallExpr) bool {
-	return declaredBefore(v, fnNode, call) && scopeHolds(pkgScope, v, call)
+func contextLocals(pass *analysis.Pass, fnNode ast.Node, cache *nocontextCache) []*types.Var {
+	if vs, ok := cache.locals[fnNode]; ok {
+		return vs
+	}
+	var vs []*types.Var
+	for _, obj := range pass.TypesInfo.Defs {
+		if v, ok := obj.(*types.Var); ok && isLocalContextVar(v, fnNode) {
+			vs = append(vs, v)
+		}
+	}
+	cache.locals[fnNode] = vs
+	return vs
 }
 
-func declaredBefore(v *types.Var, fnNode ast.Node, call *ast.CallExpr) bool {
-	if v == nil || v.IsField() || v.Name() == "" || v.Name() == "_" {
+func isLocalContextVar(v *types.Var, fnNode ast.Node) bool {
+	if v.IsField() || v.Name() == "" || v.Name() == "_" {
 		return false
 	}
 	if !isNamedContextType(v.Type()) {
 		return false
 	}
-	return v.Pos() < call.Pos() && v.Pos() >= fnNode.Pos() && v.Pos() <= fnNode.End()
+	return v.Pos() >= fnNode.Pos() && v.Pos() <= fnNode.End()
 }
 
 func scopeHolds(pkgScope *types.Scope, v *types.Var, call *ast.CallExpr) bool {
@@ -308,7 +328,7 @@ func isContextValueType(info *types.Info, e ast.Expr) bool {
 	return isNamedContextType(info.TypeOf(e))
 }
 
-func newRequestGetsContext(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) bool {
+func newRequestGetsContext(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, cache *nocontextCache) bool {
 	v := requestResultVar(pass, cur, call)
 	if v == nil {
 		return false
@@ -317,7 +337,7 @@ func newRequestGetsContext(pass *analysis.Pass, cur inspector.Cursor, call *ast.
 	if fn.Node() == nil {
 		return false
 	}
-	return getsContextBeforeSend(pass, fn, call, v)
+	return getsContextBeforeSend(pass, fn, call, v, cache)
 }
 
 func requestResultVar(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) *types.Var {
@@ -351,17 +371,54 @@ func firstResultVar(pass *analysis.Pass, lhs, rhs []ast.Expr, call *ast.CallExpr
 	return varOf(pass.TypesInfo, id)
 }
 
-func getsContextBeforeSend(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, v *types.Var) bool {
+func getsContextBeforeSend(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, v *types.Var, cache *nocontextCache) bool {
+	return latestContextUse(pass, fn, cache)[v] >= call.End()
+}
+
+func latestContextUse(pass *analysis.Pass, fn inspector.Cursor, cache *nocontextCache) map[*types.Var]token.Pos {
+	if done, ok := cache.uses[fn.Node()]; ok {
+		return done
+	}
+	done := map[*types.Var]token.Pos{}
 	for cc := range fn.Preorder((*ast.CallExpr)(nil)) {
-		c, ok := cc.Node().(*ast.CallExpr)
-		if !ok || c == call || c.Pos() < call.End() {
-			continue
-		}
-		if withContextOn(pass, cc, c, v) || passedWithContext(pass, c, v) {
-			return true
+		if c, ok := cc.Node().(*ast.CallExpr); ok {
+			recordContextUse(pass, cc, c, done)
 		}
 	}
-	return false
+	cache.uses[fn.Node()] = done
+	return done
+}
+
+func recordContextUse(pass *analysis.Pass, cc inspector.Cursor, c *ast.CallExpr, done map[*types.Var]token.Pos) {
+	for _, v := range callVars(pass, c) {
+		if withContextOn(pass, cc, c, v) || passedWithContext(pass, c, v) {
+			if pos := c.Pos(); pos > done[v] {
+				done[v] = pos
+			}
+		}
+	}
+}
+
+func callVars(pass *analysis.Pass, c *ast.CallExpr) []*types.Var {
+	var out []*types.Var
+	seen := map[*types.Var]bool{}
+	add := func(e ast.Expr) {
+		id, ok := stripParens(e).(*ast.Ident)
+		if !ok {
+			return
+		}
+		if v := varOf(pass.TypesInfo, id); v != nil && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	if sel, ok := stripParens(c.Fun).(*ast.SelectorExpr); ok {
+		add(sel.X)
+	}
+	for _, arg := range c.Args {
+		add(arg)
+	}
+	return out
 }
 
 func withContextOn(pass *analysis.Pass, cc inspector.Cursor, c *ast.CallExpr, v *types.Var) bool {

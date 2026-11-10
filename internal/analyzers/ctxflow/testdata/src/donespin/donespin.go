@@ -6,7 +6,11 @@ func use(...any) {}
 
 type doneT struct{}
 
-func (doneT) Done(int) chan int { return nil }
+func (doneT) Done(int) chan int {
+	ch := make(chan int)
+	close(ch)
+	return ch
+}
 
 func donespinReported(ctx context.Context) {
 	for {
@@ -279,6 +283,34 @@ func donespinReportedCond(ctx context.Context, cond bool) {
 		case <-ctx.Done():
 			return
 		default:
+		}
+	}
+}
+func donespinReportedInnerBreak(ctx context.Context, xs []int) {
+	for {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return
+		default:
+		inner:
+			for _, x := range xs {
+				if x > 0 {
+					break inner
+				}
+			}
+		}
+	}
+}
+
+func donespinReportedGotoInner(ctx context.Context) {
+	for {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return
+		default:
+			goto next
+		next:
+			_ = 1
 		}
 	}
 }

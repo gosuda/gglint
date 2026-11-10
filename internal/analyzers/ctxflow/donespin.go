@@ -34,28 +34,45 @@ func checkDonespin(pass *analysis.Pass, cur inspector.Cursor) {
 		return
 	}
 	comm, dflt, ok := splitDonespin(sel)
-	if !ok || !receivesDone(pass.TypesInfo, comm.Comm) || defaultBlocks(pass.TypesInfo, dflt) {
+	if !ok || !receivesDone(pass.TypesInfo, comm.Comm) {
 		return
 	}
-	if !directlyInFor(cur) {
+	loop, ok := pollingLoop(cur)
+	if !ok {
+		return
+	}
+	if defaultBlocks(pass.TypesInfo, dflt, loop, labelsOf(cur)) {
 		return
 	}
 	pass.Report(analysis.Diagnostic{Pos: sel.Pos(), End: sel.End(), Message: donespinMessage})
 }
 
-func directlyInFor(cur inspector.Cursor) bool {
+func pollingLoop(cur inspector.Cursor) (*ast.ForStmt, bool) {
 	block, ok := cur.Parent().Node().(*ast.BlockStmt)
-	if !ok {
-		return false
-	}
-	if len(block.List) != 1 {
-		return false
+	if !ok || len(block.List) != 1 {
+		return nil, false
 	}
 	n, ok := cur.Parent().Parent().Node().(*ast.ForStmt)
-	if !ok || n.Body != block {
-		return false
+	if !ok || n.Body != block || n.Init != nil || n.Post != nil {
+		return nil, false
 	}
-	return n.Init == nil && n.Post == nil
+	return n, true
+}
+
+func labelsOf(cur inspector.Cursor) map[string]*ast.LabeledStmt {
+	out := map[string]*ast.LabeledStmt{}
+	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		ast.Inspect(fn.Node(), func(n ast.Node) bool {
+			if l, ok := n.(*ast.LabeledStmt); ok && l.Label != nil {
+				if _, dup := out[l.Label.Name]; !dup {
+					out[l.Label.Name] = l
+				}
+			}
+			return true
+		})
+		return out
+	}
+	return out
 }
 
 func splitDonespin(sel *ast.SelectStmt) (commClause, dfltClause *ast.CommClause, found bool) {
@@ -121,9 +138,9 @@ func isDoneCall(info *types.Info, call *ast.CallExpr) bool {
 	return obj.Name() == contextName && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
 }
 
-func defaultBlocks(info *types.Info, dflt *ast.CommClause) bool {
+func defaultBlocks(info *types.Info, dflt *ast.CommClause, loop *ast.ForStmt, labels map[string]*ast.LabeledStmt) bool {
 	for _, s := range dflt.Body {
-		if stmtBlocks(info, s) {
+		if stmtBlocks(info, s, loop, labels) {
 			return true
 		}
 	}
@@ -132,11 +149,13 @@ func defaultBlocks(info *types.Info, dflt *ast.CommClause) bool {
 
 type blockWalk struct {
 	info    *types.Info
+	loop    *ast.ForStmt
+	labels  map[string]*ast.LabeledStmt
 	blocked bool
 }
 
-func stmtBlocks(info *types.Info, s ast.Stmt) bool {
-	w := &blockWalk{info: info}
+func stmtBlocks(info *types.Info, s ast.Stmt, loop *ast.ForStmt, labels map[string]*ast.LabeledStmt) bool {
+	w := &blockWalk{info: info, loop: loop, labels: labels}
 	w.walk(s)
 	return w.blocked
 }
@@ -148,7 +167,7 @@ func (w *blockWalk) walk(n ast.Node) {
 	if _, ok := n.(*ast.FuncLit); ok {
 		return
 	}
-	if leavesLoop(n) {
+	if w.leavesLoop(n) {
 		w.blocked = true
 		return
 	}
@@ -180,7 +199,7 @@ func (w *blockWalk) walkChildren(n ast.Node) {
 	}
 }
 
-func leavesLoop(n ast.Node) bool {
+func (w *blockWalk) leavesLoop(n ast.Node) bool {
 	if _, ok := n.(*ast.ReturnStmt); ok {
 		return true
 	}
@@ -188,10 +207,34 @@ func leavesLoop(n ast.Node) bool {
 	if !ok {
 		return false
 	}
-	if b.Tok == token.GOTO {
-		return true
+	if b.Label == nil {
+		return false
 	}
-	return b.Tok == token.BREAK && b.Label != nil
+	target, ok := w.labels[b.Label.Name]
+	if !ok {
+		return false
+	}
+	if b.Tok == token.GOTO {
+		return outsideLoop(target, w.loop)
+	}
+	if b.Tok != token.BREAK {
+		return false
+	}
+	return wrapsLoop(target, w.loop)
+}
+
+func wrapsLoop(target *ast.LabeledStmt, loop *ast.ForStmt) bool {
+	return target.Pos() <= loop.Pos() && loop.End() <= target.End()
+}
+
+func outsideLoop(target *ast.LabeledStmt, loop *ast.ForStmt) bool {
+	if target.Pos() >= loop.Pos() && target.End() <= loop.End() {
+		return false
+	}
+	if target.Stmt.Pos() == loop.Pos() && target.Stmt.End() == loop.End() {
+		return false
+	}
+	return true
 }
 
 func (w *blockWalk) walkDefaultBody(sel *ast.SelectStmt) {
