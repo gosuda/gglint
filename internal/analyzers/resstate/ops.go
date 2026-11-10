@@ -535,7 +535,13 @@ func lenCapCall(pass *analysis.Pass, call *ast.CallExpr) bool {
 	if id.Name != lenBuiltin && id.Name != capBuiltin {
 		return false
 	}
-	_, ok = pass.TypesInfo.Uses[id].(*types.Builtin)
+	if _, ok = pass.TypesInfo.Uses[id].(*types.Builtin); !ok {
+		return false
+	}
+	if len(call.Args) != 1 {
+		return false
+	}
+	_, ok = ast.Unparen(call.Args[0]).(*ast.Ident)
 	return ok
 }
 
@@ -543,7 +549,17 @@ func nilCompare(pass *analysis.Pass, bin *ast.BinaryExpr) bool {
 	if bin.Op != token.EQL && bin.Op != token.NEQ {
 		return false
 	}
-	return pass.TypesInfo.Types[bin.X].IsNil() || pass.TypesInfo.Types[bin.Y].IsNil()
+	xNil := pass.TypesInfo.Types[bin.X].IsNil()
+	yNil := pass.TypesInfo.Types[bin.Y].IsNil()
+	if xNil == yNil {
+		return false
+	}
+	if xNil {
+		_, ok := ast.Unparen(bin.Y).(*ast.Ident)
+		return ok
+	}
+	_, ok := ast.Unparen(bin.X).(*ast.Ident)
+	return ok
 }
 
 func exprMentions(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {

@@ -278,3 +278,41 @@ func viewescapeReportedAssignBreakKept(s string) []byte {
 	sc.Scan()
 	return first
 }
+
+func viewescapeReportedLoopLocalFieldEscape(sc *bufio.Scanner) []viewHolder {
+	var all []viewHolder
+	for sc.Scan() {
+		var h viewHolder
+		h.b = sc.Bytes() // want "points into the buffer of"
+		all = append(all, h)
+	}
+	return all
+}
+
+func viewescapeReportedLoopLocalMapEscape(sc *bufio.Scanner) []map[int][]byte {
+	var all []map[int][]byte
+	for sc.Scan() {
+		m := map[int][]byte{}
+		m[0] = sc.Bytes() // want "points into the buffer of"
+		all = append(all, m)
+	}
+	return all
+}
+
+func viewescapeReportedAssignBreakParam(sc *bufio.Scanner) []byte {
+	var out []byte
+	for sc.Scan() {
+		out = sc.Bytes() // want "points into the buffer of"
+		break
+	}
+	return out
+}
+
+func viewescapeReportedAssignReturnParam(sc *bufio.Scanner) []byte {
+	var out []byte
+	for sc.Scan() {
+		out = sc.Bytes() // want "points into the buffer of"
+		return out
+	}
+	return nil
+}
