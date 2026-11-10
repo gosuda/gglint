@@ -1,6 +1,7 @@
 package gorace
 
 import (
+	"cmp"
 	"go/ast"
 	"go/types"
 	"sync"
@@ -59,6 +60,7 @@ func (h *holder) at(n ast.Node) []flow.Key {
 	seen := map[flow.Key]bool{}
 	var out []flow.Key
 	resolved := resolveStmt(n)
+	lookup := cmp.Or(resolved, n)
 	for k, nodes := range h.keys {
 		if nodes[n] || nodes[resolved] {
 			if !seen[k] {
@@ -68,7 +70,7 @@ func (h *holder) at(n ast.Node) []flow.Key {
 		}
 	}
 	if h.held != nil {
-		for _, k := range h.held(n) {
+		for _, k := range h.held(lookup) {
 			if !seen[k] {
 				seen[k] = true
 				out = append(out, k)
@@ -85,7 +87,7 @@ func resolveStmt(n ast.Node) ast.Node {
 	case *ast.ForStmt:
 		return resolveFor(s)
 	case *ast.RangeStmt:
-		return s.X
+		return resolveRange(s)
 	case *ast.SwitchStmt:
 		return resolveSwitch(s)
 	case *ast.TypeSwitchStmt:
@@ -104,10 +106,17 @@ func resolveIf(s *ast.IfStmt) ast.Node {
 	return s.Cond
 }
 
-func resolveFor(s *ast.ForStmt) ast.Node {
-	if s.Init != nil {
-		return resolveStmt(s.Init)
+func resolveRange(s *ast.RangeStmt) ast.Node {
+	if s.Value != nil {
+		return s.Value
 	}
+	if s.Key != nil {
+		return s.Key
+	}
+	return s.X
+}
+
+func resolveFor(s *ast.ForStmt) ast.Node {
 	if s.Cond != nil {
 		return s.Cond
 	}

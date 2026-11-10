@@ -178,6 +178,20 @@ func heldOutside(pass *analysis.Pass, lit *ast.FuncLit, stmt ast.Node) []flow.Ke
 	return rootedKeys(newHolder(pass, lit).at(stmt), lit)
 }
 
+func lockNodeFor(a varAccess) ast.Node {
+	if !a.write {
+		return a.stmt
+	}
+	rs, ok := a.stmt.(*ast.RangeStmt)
+	if !ok {
+		return a.stmt
+	}
+	if rs.Body == nil || len(rs.Body.List) == 0 {
+		return a.stmt
+	}
+	return rs.Body.List[0]
+}
+
 func rootedKeys(keys []flow.Key, lit *ast.FuncLit) []flow.Key {
 	var out []flow.Key
 	for _, k := range keys {
@@ -324,12 +338,101 @@ func bodyContains(body *ast.BlockStmt, pos token.Pos) bool {
 
 func exitsListAfter(fn, site ast.Node) bool {
 	list, owner := stmtListAfter(fn, site)
-	switch owner.(type) {
-	case *ast.CaseClause, *ast.CommClause:
-		return slices.ContainsFunc(list, isReturnStmt)
-	default:
-		return slices.ContainsFunc(list, isLoopExit)
+	if len(list) == 0 {
+		return false
 	}
+	outer, outerBody := outermostLoop(fn, site.Pos())
+	if outer == nil || outerBody == nil {
+		return false
+	}
+	if owner == outerBody {
+		return exitsDirect(list, fn, site.Pos(), outer)
+	}
+	return exitsNested(list, fn, site.Pos(), outer)
+}
+
+func outermostLoop(fn ast.Node, pos token.Pos) (ast.Node, *ast.BlockStmt) {
+	var bestLoop ast.Node
+	var bestBody *ast.BlockStmt
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok && n != fn {
+			return false
+		}
+		body := loopBodyOf(n)
+		if !bodyContains(body, pos) {
+			return true
+		}
+		if bestBody == nil || body.End()-body.Pos() > bestBody.End()-bestBody.Pos() {
+			bestLoop = n
+			bestBody = body
+		}
+		return true
+	})
+	return bestLoop, bestBody
+}
+
+func exitsDirect(list []ast.Stmt, fn ast.Node, pos token.Pos, outer ast.Node) bool {
+	for _, st := range list {
+		if isReturnStmt(st) {
+			return true
+		}
+		br, ok := st.(*ast.BranchStmt)
+		if !ok || br.Tok != token.BREAK {
+			continue
+		}
+		if br.Label == nil {
+			return true
+		}
+		if breakTargets(br.Label.Name, fn, pos, outer) {
+			return true
+		}
+	}
+	return false
+}
+
+func exitsNested(list []ast.Stmt, fn ast.Node, pos token.Pos, outer ast.Node) bool {
+	for _, st := range list {
+		if isReturnStmt(st) {
+			return true
+		}
+		br, ok := st.(*ast.BranchStmt)
+		if !ok || br.Tok != token.BREAK || br.Label == nil {
+			continue
+		}
+		if breakTargets(br.Label.Name, fn, pos, outer) {
+			return true
+		}
+	}
+	return false
+}
+
+func breakTargets(name string, fn ast.Node, pos token.Pos, outer ast.Node) bool {
+	best := bestLabelTarget(name, fn, pos)
+	if best == nil {
+		return false
+	}
+	return best.Pos() <= outer.Pos() && outer.End() <= best.End()
+}
+
+func bestLabelTarget(name string, fn ast.Node, pos token.Pos) ast.Node {
+	var best ast.Node
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok && n != fn {
+			return false
+		}
+		ls, ok := n.(*ast.LabeledStmt)
+		if !ok || ls.Label.Name != name {
+			return true
+		}
+		if pos < ls.Pos() || pos >= ls.End() {
+			return true
+		}
+		if best == nil || ls.End()-ls.Pos() < best.End()-best.Pos() {
+			best = ls.Stmt
+		}
+		return true
+	})
+	return best
 }
 
 func stmtListAfter(fn, site ast.Node) ([]ast.Stmt, ast.Node) {
@@ -362,16 +465,6 @@ func stmtListOf(n ast.Node) []ast.Stmt {
 		return b.Body
 	}
 	return nil
-}
-
-func isLoopExit(stmt ast.Stmt) bool {
-	switch s := stmt.(type) {
-	case *ast.BranchStmt:
-		return s.Tok == token.BREAK && s.Label == nil
-	case *ast.ReturnStmt:
-		return true
-	}
-	return false
 }
 
 func isReturnStmt(stmt ast.Stmt) bool {

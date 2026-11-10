@@ -212,3 +212,34 @@ func fanoutSwitchBreakReported(xs []int) {
 	}
 	_ = out
 }
+
+func fanoutInnerBreakReported(xs []int) {
+	var out int
+	for _, x := range xs {
+		for range 2 {
+			go func() {
+				out = x // want `out is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+			}()
+			break
+		}
+	}
+	_ = out
+}
+
+var fanoutHeaderMu sync.Mutex
+
+func fanoutHeaderUnlockedReported(xs []int) {
+	var v int
+	for range 2 {
+		go func() {
+			fanoutHeaderMu.Lock()
+			for _, v = range xs { // want `v is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+				fanoutHeaderMu.Unlock()
+				if v > 0 {
+					return
+				}
+			}
+		}()
+	}
+	_ = v
+}

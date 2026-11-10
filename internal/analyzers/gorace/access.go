@@ -653,7 +653,7 @@ func fanoutVarReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, v *type
 	if !outsideLit(v, s.Body) || isSyncType(v.Type()) || !declaredOutsideLoop(pass.TypesInfo, fn, v, s.Site) {
 		return false
 	}
-	return len(heldOutside(pass, s.Body, a.stmt)) == 0
+	return len(heldOutside(pass, s.Body, lockNodeFor(a))) == 0
 }
 
 func runShared(pass *analysis.Pass) (any, error) {
@@ -755,7 +755,7 @@ func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess) bool {
 	if m.bubbleJoined(s, p.stmt) {
 		return true
 	}
-	return commonKey(m.litHeld(s.Body, a.stmt), m.parentHeld(p.stmt))
+	return commonKey(m.litHeld(s.Body, lockNodeFor(a)), m.parentHeld(lockNodeFor(p)))
 }
 
 func (m *sharedScope) bubbleJoined(s flow.Spawn, at ast.Node) bool {
