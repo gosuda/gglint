@@ -18,70 +18,151 @@ var closedrecvAnalyzer = &analysis.Analyzer{
 }
 
 func runClosedrecv(pass *analysis.Pass) (any, error) {
+	cache := map[ast.Node]*fnCloses{}
 	forLoops(pass, func(cur inspector.Cursor, loop *ast.ForStmt) {
-		checkClosedrecv(pass, cur, loop)
+		checkClosedrecv(pass, cur, loop, cache)
 	})
 	return nil, nil
 }
 
-func checkClosedrecv(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
-	if !bareLoop(loop) {
-		return
-	}
-	recv := loneRecv(pass.TypesInfo, loop.Body)
-	if recv == nil {
-		return
-	}
-	v, ok := recvVar(pass, recv)
+type fnCloses struct {
+	reassigned map[*types.Var]bool
+	firstClose map[*types.Var]token.Pos
+}
+
+func checkClosedrecv(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt, cache map[ast.Node]*fnCloses) {
+	v, fn, ok := closedrecvCandidate(pass, cur, loop)
 	if !ok {
-		return
-	}
-	fn := enclosingFunc(cur)
-	if !isLocalVar(fn, v) || !isChan(v.Type()) {
-		return
-	}
-	if channelReassigned(pass.TypesInfo, fn, v) {
-		return
-	}
-	if !closesBefore(pass, fn, loop, v) {
 		return
 	}
 	if loopExits(pass.TypesInfo, cur, loop) {
 		return
 	}
+	fc := closesFor(pass, fn, cache)
+	if fc.reassigned[v] {
+		return
+	}
+	pos, ok := fc.firstClose[v]
+	if !ok || pos >= loop.Pos() {
+		return
+	}
 	pass.Reportf(loop.Pos(), "after close, this receive from %s returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false", v.Name())
+}
+
+func closedrecvCandidate(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) (*types.Var, ast.Node, bool) {
+	if !bareLoop(loop) {
+		return nil, nil, false
+	}
+	recv := loneRecv(pass.TypesInfo, loop.Body)
+	if recv == nil {
+		return nil, nil, false
+	}
+	v, ok := recvVar(pass, recv)
+	if !ok {
+		return nil, nil, false
+	}
+	fn := enclosingFunc(cur)
+	if !isLocalVar(fn, v) || !isChan(v.Type()) {
+		return nil, nil, false
+	}
+	return v, fn, true
 }
 
 func bareLoop(loop *ast.ForStmt) bool {
 	return loop.Cond == nil && loop.Body != nil
 }
 
-func channelReassigned(info *types.Info, fn ast.Node, v *types.Var) bool {
-	if fn == nil {
-		return false
+func closesFor(pass *analysis.Pass, fn ast.Node, cache map[ast.Node]*fnCloses) *fnCloses {
+	if fc, ok := cache[fn]; ok {
+		return fc
 	}
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
+	fc := &fnCloses{reassigned: map[*types.Var]bool{}, firstClose: map[*types.Var]token.Pos{}}
+	cache[fn] = fc
+	if fn == nil {
+		return fc
+	}
+	walkCalledLit(fn, func(n ast.Node) bool {
+		switch t := n.(type) {
+		case *ast.AssignStmt:
+			markReassigned(pass.TypesInfo, t, fc.reassigned)
+		case *ast.RangeStmt:
+			markRangeReassigned(pass.TypesInfo, t, fc.reassigned)
+		case *ast.GoStmt:
+			markGoCloses(pass, t, fc.firstClose)
 		}
-		if reassignsVar(info, n, v) {
-			found = true
-		}
-		return !found
+		return true
 	})
-	return found
+	return fc
 }
 
-func reassignsVar(info *types.Info, n ast.Node, v *types.Var) bool {
-	switch t := n.(type) {
-	case *ast.AssignStmt:
-		return t.Tok == token.ASSIGN && t.Pos() > v.Pos() && lhsHits(info, t.Lhs, v)
-	case *ast.RangeStmt:
-		return t.Tok == token.ASSIGN && t.Pos() > v.Pos() && rangeHits(info, t, v)
-	default:
-		return false
+func markReassigned(info *types.Info, t *ast.AssignStmt, out map[*types.Var]bool) {
+	if t.Tok != token.ASSIGN {
+		return
 	}
+	for _, lhs := range t.Lhs {
+		if id := rootIdent(lhs); id != nil {
+			if v, ok := info.ObjectOf(id).(*types.Var); ok && t.Pos() > v.Pos() {
+				out[v] = true
+			}
+		}
+	}
+}
+
+func markRangeReassigned(info *types.Info, t *ast.RangeStmt, out map[*types.Var]bool) {
+	if t.Tok != token.ASSIGN {
+		return
+	}
+	for _, e := range []ast.Expr{t.Key, t.Value} {
+		if id := rootIdent(e); id != nil {
+			if v, ok := info.ObjectOf(id).(*types.Var); ok && t.Pos() > v.Pos() {
+				out[v] = true
+			}
+		}
+	}
+}
+
+func markGoCloses(pass *analysis.Pass, t *ast.GoStmt, out map[*types.Var]token.Pos) {
+	lit, ok := spawnedBody(t)
+	if !ok {
+		return
+	}
+	for v := range closedVars(pass, lit) {
+		if pos, ok := out[v]; !ok || t.Pos() < pos {
+			out[v] = t.Pos()
+		}
+	}
+}
+
+func closedVars(pass *analysis.Pass, lit *ast.FuncLit) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	walkCalledLit(lit.Body, func(x ast.Node) bool {
+		if v, ok := closedVarOf(pass, x); ok {
+			out[v] = true
+		}
+		return true
+	})
+	return out
+}
+
+func closedVarOf(pass *analysis.Pass, x ast.Node) (*types.Var, bool) {
+	c, ok := x.(*ast.CallExpr)
+	if !ok || len(c.Args) != 1 {
+		return nil, false
+	}
+	id, ok := ast.Unparen(c.Fun).(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	b, ok := pass.TypesInfo.ObjectOf(id).(*types.Builtin)
+	if !ok || b.Name() != "close" {
+		return nil, false
+	}
+	arg, ok := ast.Unparen(c.Args[0]).(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	v, ok := pass.TypesInfo.ObjectOf(arg).(*types.Var)
+	return v, ok
 }
 
 func recvVar(pass *analysis.Pass, recv *ast.UnaryExpr) (*types.Var, bool) {
@@ -208,27 +289,6 @@ func walkCalledLit(n ast.Node, f func(ast.Node) bool) {
 	})
 }
 
-func closesBefore(pass *analysis.Pass, fn ast.Node, loop *ast.ForStmt, v *types.Var) bool {
-	closed := false
-	walkCalledLit(fn, func(n ast.Node) bool {
-		if closed {
-			return false
-		}
-		if n == nil || n.Pos() >= loop.Pos() {
-			return n == nil
-		}
-		lit, ok := spawnedBody(n)
-		if !ok {
-			return true
-		}
-		if litCloses(pass, lit, v) {
-			closed = true
-		}
-		return true
-	})
-	return closed
-}
-
 func spawnedBody(n ast.Node) (*ast.FuncLit, bool) {
 	gs, ok := n.(*ast.GoStmt)
 	if !ok {
@@ -243,34 +303,6 @@ func spawnedBody(n ast.Node) (*ast.FuncLit, bool) {
 		return nil, false
 	}
 	return lit, true
-}
-
-func litCloses(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
-	closed := false
-	walkCalledLit(lit.Body, func(x ast.Node) bool {
-		if closesVar(pass, x, v) {
-			closed = true
-		}
-		return !closed
-	})
-	return closed
-}
-
-func closesVar(pass *analysis.Pass, x ast.Node, v *types.Var) bool {
-	c, ok := x.(*ast.CallExpr)
-	if !ok || len(c.Args) != 1 {
-		return false
-	}
-	id, ok := ast.Unparen(c.Fun).(*ast.Ident)
-	if !ok {
-		return false
-	}
-	b, ok := pass.TypesInfo.ObjectOf(id).(*types.Builtin)
-	if !ok || b.Name() != "close" {
-		return false
-	}
-	arg, ok := ast.Unparen(c.Args[0]).(*ast.Ident)
-	return ok && pass.TypesInfo.ObjectOf(arg) == types.Object(v)
 }
 
 type exitQuery struct {

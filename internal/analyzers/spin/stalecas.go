@@ -13,7 +13,7 @@ import (
 
 var stalecasAnalyzer = &analysis.Analyzer{
 	Name:     "stalecas",
-	Doc:      "report a CAS loop retrying with the same old local when the loop never assigns old, never passes it by address, and never calls a reloading closure; spin covers five shapes only",
+	Doc:      "report a CAS loop retrying with stale old when the loop cannot reload it: no assign, no leaving jump, no called reload; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runStalecas,
 }
@@ -37,10 +37,10 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 	if assignsOldInLoop(pass.TypesInfo, loop, old) {
 		return
 	}
-	if loopReceivesAddr(pass.TypesInfo, fn, loop, old) {
+	if loopHasOutsideJump(loop) {
 		return
 	}
-	if loopCallsFuncValue(pass.TypesInfo, loop) && funcLitAssignsOld(pass.TypesInfo, fn, old) {
+	if (addrTakenInFunc(pass.TypesInfo, fn, old) || funcLitAssignsOld(pass.TypesInfo, fn, old)) && loopCallsOut(pass.TypesInfo, loop) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "after one failed swap %s is stale, so retries fail until another goroutine stores %s back: load it again inside the loop", old.Name(), old.Name())
@@ -64,59 +64,16 @@ func isAddrOfOld(info *types.Info, e ast.Expr, old *types.Var) bool {
 	return hitRoot(info, u.X, old)
 }
 
-func addrAliases(info *types.Info, fn ast.Node, old *types.Var) map[*types.Var]bool {
-	out := map[*types.Var]bool{}
+func addrTakenInFunc(info *types.Info, fn ast.Node, old *types.Var) bool {
+	found := false
 	if fn == nil {
-		return out
+		return false
 	}
 	ast.Inspect(fn, func(n ast.Node) bool {
-		collectAddrAlias(info, n, old, out)
-		return true
-	})
-	return out
-}
-
-func collectAddrAlias(info *types.Info, n ast.Node, old *types.Var, out map[*types.Var]bool) {
-	switch t := n.(type) {
-	case *ast.AssignStmt:
-		collectAssignAlias(info, t, old, out)
-	case *ast.ValueSpec:
-		collectSpecAlias(info, t, old, out)
-	}
-}
-
-func collectAssignAlias(info *types.Info, t *ast.AssignStmt, old *types.Var, out map[*types.Var]bool) {
-	for i, lhs := range t.Lhs {
-		if i >= len(t.Rhs) || !isAddrOfOld(info, t.Rhs[i], old) {
-			continue
-		}
-		if id := rootIdent(lhs); id != nil {
-			if v, ok := info.ObjectOf(id).(*types.Var); ok {
-				out[v] = true
-			}
-		}
-	}
-}
-
-func collectSpecAlias(info *types.Info, t *ast.ValueSpec, old *types.Var, out map[*types.Var]bool) {
-	for i, name := range t.Names {
-		if i >= len(t.Values) || !isAddrOfOld(info, t.Values[i], old) {
-			continue
-		}
-		if v, ok := info.Defs[name].(*types.Var); ok {
-			out[v] = true
-		}
-	}
-}
-
-func loopReceivesAddr(info *types.Info, fn ast.Node, loop *ast.ForStmt, old *types.Var) bool {
-	aliases := addrAliases(info, fn, old)
-	found := false
-	walkLoopParts(loop, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		if call, ok := n.(*ast.CallExpr); ok && callTakesAddr(info, call, old, aliases) {
+		if u, ok := n.(*ast.UnaryExpr); ok && isAddrOfOld(info, u, old) {
 			found = true
 			return false
 		}
@@ -125,18 +82,72 @@ func loopReceivesAddr(info *types.Info, fn ast.Node, loop *ast.ForStmt, old *typ
 	return found
 }
 
-func callTakesAddr(info *types.Info, call *ast.CallExpr, old *types.Var, aliases map[*types.Var]bool) bool {
-	for _, arg := range call.Args {
-		if isAddrOfOld(info, arg, old) {
+func loopHasOutsideJump(loop *ast.ForStmt) bool {
+	if loop.Body == nil {
+		return false
+	}
+	inside := loopLabels(loop.Body)
+	jumps := false
+	walkNoLit(loop.Body, func(n ast.Node) bool {
+		if jumps {
+			return false
+		}
+		if leavesLoop(n, inside) {
+			jumps = true
+			return false
+		}
+		return true
+	})
+	return jumps
+}
+
+func loopLabels(body ast.Node) map[string]bool {
+	inside := map[string]bool{}
+	walkNoLit(body, func(n ast.Node) bool {
+		if lab, ok := n.(*ast.LabeledStmt); ok {
+			inside[lab.Label.Name] = true
+		}
+		return true
+	})
+	return inside
+}
+
+func leavesLoop(n ast.Node, inside map[string]bool) bool {
+	b, ok := n.(*ast.BranchStmt)
+	if !ok {
+		return false
+	}
+	if b.Tok == token.GOTO {
+		return true
+	}
+	return b.Label != nil && (b.Tok == token.BREAK || b.Tok == token.CONTINUE) && !inside[b.Label.Name]
+}
+
+func loopCallsOut(info *types.Info, loop *ast.ForStmt) bool {
+	found := false
+	walkLoopParts(loop, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
 			return true
 		}
-		if id := rootIdent(arg); id != nil {
-			if v, ok := info.ObjectOf(id).(*types.Var); ok && aliases[v] {
+		if _, ok := casOld(info, call); ok {
+			return true
+		}
+		if info.Types[call.Fun].IsType() {
+			return true
+		}
+		if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok {
+			if _, ok := info.ObjectOf(id).(*types.Builtin); ok {
 				return true
 			}
 		}
-	}
-	return false
+		found = true
+		return false
+	})
+	return found
 }
 
 func walkLoopParts(loop *ast.ForStmt, f func(ast.Node) bool) {
@@ -149,40 +160,6 @@ func walkLoopParts(loop *ast.ForStmt, f func(ast.Node) bool) {
 	if loop.Post != nil {
 		walkNoLit(loop.Post, f)
 	}
-}
-
-func isFuncValueCall(info *types.Info, call *ast.CallExpr) bool {
-	switch fn := ast.Unparen(call.Fun).(type) {
-	case *ast.Ident:
-		obj := info.ObjectOf(fn)
-		_, isVar := obj.(*types.Var)
-		return isVar
-	case *ast.SelectorExpr:
-		obj := info.ObjectOf(fn.Sel)
-		_, isVar := obj.(*types.Var)
-		return isVar
-	case *ast.FuncLit:
-		return true
-	case *ast.IndexExpr, *ast.IndexListExpr:
-		return true
-	default:
-		return false
-	}
-}
-
-func loopCallsFuncValue(info *types.Info, loop *ast.ForStmt) bool {
-	found := false
-	walkLoopParts(loop, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if call, ok := n.(*ast.CallExpr); ok && isFuncValueCall(info, call) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
 }
 
 func funcLitAssignsOld(info *types.Info, fn ast.Node, old *types.Var) bool {

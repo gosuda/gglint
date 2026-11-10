@@ -295,10 +295,9 @@ func defaultWaits(pass *analysis.Pass, stmt ast.Stmt) bool {
 			return false
 		}
 		if sel, ok := n.(*ast.SelectStmt); ok {
-			if selectHasDefault(sel) {
-				return false
+			if nestedSelectWaits(pass, sel) {
+				waits = true
 			}
-			waits = true
 			return false
 		}
 		waits = waits || pollNodeWaits(pass, n)
@@ -307,16 +306,23 @@ func defaultWaits(pass *analysis.Pass, stmt ast.Stmt) bool {
 	return waits
 }
 
-func selectHasDefault(sel *ast.SelectStmt) bool {
+func nestedSelectWaits(pass *analysis.Pass, sel *ast.SelectStmt) bool {
 	if sel.Body == nil {
 		return false
 	}
 	for _, stmt := range sel.Body.List {
-		if clause, ok := stmt.(*ast.CommClause); ok && clause.Comm == nil {
-			return true
+		clause, ok := stmt.(*ast.CommClause)
+		if !ok || clause.Comm != nil {
+			continue
 		}
+		for _, s := range clause.Body {
+			if defaultWaits(pass, s) {
+				return true
+			}
+		}
+		return false
 	}
-	return false
+	return true
 }
 
 func pollNodeWaits(pass *analysis.Pass, n ast.Node) bool {
@@ -328,7 +334,7 @@ func pollNodeWaits(pass *analysis.Pass, n ast.Node) bool {
 	case *ast.UnaryExpr:
 		return t.Op == token.ARROW
 	case *ast.SelectStmt:
-		return !selectHasDefault(t)
+		return nestedSelectWaits(pass, t)
 	case *ast.RangeStmt:
 		return isChanRange(pass, t)
 	default:

@@ -339,3 +339,43 @@ func stalecasReportedInRange(n *atomic.Int64, xs []int) {
 		sink(&old)
 	}
 }
+
+type staleTask struct{ fn func() }
+
+func (t staleTask) run() { t.fn() }
+
+func stalecasSilentMethodReload(n *atomic.Int64) {
+	old := n.Load()
+	bump := func() { old = n.Load() }
+	t := staleTask{fn: bump}
+	for !n.CompareAndSwap(old, old+1) {
+		t.run()
+	}
+	use(old)
+}
+
+type staleReloader struct {
+	dst *int64
+	src *atomic.Int64
+}
+
+func (r staleReloader) reload() { *r.dst = r.src.Load() }
+
+func stalecasSilentCompositeReload(n *atomic.Int64) {
+	old := n.Load()
+	r := staleReloader{dst: &old, src: n}
+	for !n.CompareAndSwap(old, old+1) {
+		r.reload()
+	}
+	use(old)
+}
+
+func stalecasSilentGotoReload(n *atomic.Int64) {
+	var old int64
+again:
+	old = n.Load()
+	for !n.CompareAndSwap(old, old+1) {
+		goto again
+	}
+	use(old)
+}

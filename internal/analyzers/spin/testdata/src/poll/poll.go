@@ -309,3 +309,33 @@ func pollReportedCountedWrite(ch chan int, n int) {
 		}
 	}
 }
+func pollSilentNestedWait(ch chan int, stop chan struct{}, d time.Duration) {
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			select {
+			case <-stop:
+				use(0)
+			default:
+				time.Sleep(d)
+			}
+		}
+	}
+}
+
+func pollReportedNestedEmptyDefault(ch chan int) {
+	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			select {
+			case w := <-ch:
+				use(w)
+			default:
+			}
+		}
+	}
+}
