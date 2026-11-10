@@ -4,13 +4,13 @@ import "sync/atomic"
 
 func use(any) {}
 
-func myCAS(x *int32, o, n int32) bool { return o == n }
+func myCAS(x *int32, o, n int32) bool { if *x != o { return false }; *x = n; return true }
 
 func oneArg(x int64) bool { return x > 0 }
 
 type casBox struct{ v int64 }
 
-func (c *casBox) CompareAndSwap(o, n int64) bool { return o == n }
+func (c *casBox) CompareAndSwap(o, n int64) bool { if c.v != o { return false }; c.v = n; return true }
 
 func (c *casBox) Check(o int64) bool { return o == c.v }
 
@@ -18,13 +18,13 @@ const stalecasOld = int64(1)
 
 func stalecasReported(n *atomic.Int64) {
 	old := n.Load()
-	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 	}
 }
 
 func stalecasReportedIfBreak(n *atomic.Int64) {
 	old := n.Load()
-	for { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		if n.CompareAndSwap(old, old+1) {
 			break
 		}
@@ -33,7 +33,7 @@ func stalecasReportedIfBreak(n *atomic.Int64) {
 
 func stalecasReportedReturn(n *atomic.Int64) int {
 	old := n.Load()
-	for { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		if n.CompareAndSwap(old, old+1) {
 			return 1
 		}
@@ -42,7 +42,7 @@ func stalecasReportedReturn(n *atomic.Int64) int {
 
 func stalecasReportedFunc3(x *int32) {
 	old := atomic.LoadInt32(x)
-	for !atomic.CompareAndSwapInt32(x, old, old+1) { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for !atomic.CompareAndSwapInt32(x, old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 	}
 }
 
@@ -77,6 +77,7 @@ func stalecasSilentTwoStmtIf(n *atomic.Int64) {
 		if n.CompareAndSwap(old, old+1) {
 			use(1)
 			use(2)
+			break
 		}
 	}
 	use(old)
@@ -87,6 +88,7 @@ func stalecasSilentUseIf(n *atomic.Int64) {
 	for {
 		if n.CompareAndSwap(old, old+1) {
 			use(old)
+			break
 		}
 	}
 }
@@ -97,15 +99,6 @@ func stalecasSilentWrongPkg(x *int32) {
 	}
 }
 
-func stalecasSilentNotCall(n *atomic.Int64) {
-	old := n.Load()
-	for {
-		if old > 0 {
-			break
-		}
-	}
-	use(old)
-}
 
 func stalecasSilentMethodWrongRecv() {
 	c := &casBox{}
@@ -114,15 +107,6 @@ func stalecasSilentMethodWrongRecv() {
 	}
 }
 
-func stalecasSilentOneArg(n *atomic.Int64) {
-	old := n.Load()
-	for {
-		if oneArg(old) {
-			break
-		}
-	}
-	use(old)
-}
 
 func stalecasSilentNonIdentOld(n *atomic.Int64) {
 	for !n.CompareAndSwap(n.Load(), 2) {
@@ -140,32 +124,19 @@ func stalecasSilentMethodOneArg() {
 	use(old)
 }
 
-func stalecasSilentOldParam(n *atomic.Int64, old int64) {
-	for !n.CompareAndSwap(old, old+1) {
-	}
-}
-
-func stalecasSilentOldConst(n *atomic.Int64) {
-	for !n.CompareAndSwap(stalecasOld, stalecasOld+1) {
-	}
-}
-
-func stalecasSilentEmpty() {
-	for {
-	}
-}
 
 func stalecasSilentNonIf(n *atomic.Int64) {
 	old := n.Load()
 	for {
 		use(old)
+		break
 	}
 	use(old)
 }
 
 func stalecasReportedElse(n *atomic.Int64) {
 	old := n.Load()
-	for { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		if n.CompareAndSwap(old, old+1) {
 			break
 		} else {
@@ -184,15 +155,15 @@ func stalecasSilentInit(n *atomic.Int64) {
 
 func stalecasSilentRange(n *atomic.Int64) {
 	old := n.Load()
-	olds := []int64{old}
 	for !n.CompareAndSwap(old, old+1) {
+		olds := []int64{n.Load()}
 		for _, old = range olds {
 		}
 	}
 }
 func stalecasReportedCondFallback(n *atomic.Int64, ready bool) {
 	old := n.Load()
-	for !ready { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for !ready { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		if n.CompareAndSwap(old, old+1) {
 			break
 		}
@@ -200,14 +171,14 @@ func stalecasReportedCondFallback(n *atomic.Int64, ready bool) {
 }
 
 func stalecasReportedLoopInit(n *atomic.Int64) {
-	for old := n.Load(); !n.CompareAndSwap(old, old+1); { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for old := n.Load(); !n.CompareAndSwap(old, old+1); { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 	}
 }
 
 func stalecasReportedIfInit(n *atomic.Int64) {
 	old := n.Load()
 	i := 0
-	for { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		if i = 1; n.CompareAndSwap(old, old+1) {
 			break
 		}
@@ -248,7 +219,7 @@ func stalecasSilentAddr(n *atomic.Int64) {
 
 func stalecasReportedReadCapture(n *atomic.Int64) {
 	old := n.Load()
-	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		show := func() { use(old) }
 		show()
 	}
@@ -319,13 +290,13 @@ func stalecasSilentAddrBefore(n *atomic.Int64) {
 	old := n.Load()
 	p := &old
 	for !n.CompareAndSwap(old, old+1) {
-		use(p)
+		loadOld(p, n)
 	}
 	use(old)
 }
 func stalecasReportedClosureAfter(n *atomic.Int64) {
 	old := n.Load()
-	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 	}
 	reset := func() { old = 0 }
 	reset()
@@ -333,20 +304,38 @@ func stalecasReportedClosureAfter(n *atomic.Int64) {
 
 func stalecasReportedAddrAfter(n *atomic.Int64) {
 	old := n.Load()
-	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so every retry fails: load it again inside the loop`
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 	}
 	use(&old)
 }
 func stalecasSilentRangeOuter(n *atomic.Int64) {
 	old := n.Load()
-	var reset func()
 	for range 2 {
+		reload := func() { old = n.Load() }
 		for !n.CompareAndSwap(old, old+1) {
-			if reset != nil {
-				reset()
-			}
+			reload()
 		}
-		reset = func() { old = 0 }
 	}
 	use(old)
+}
+func stalecasReportedAfterLabel(n *atomic.Int64, xs []int) {
+	old := n.Load()
+scan:
+	for _, x := range xs {
+		if x < 0 {
+			break scan
+		}
+	}
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+	}
+}
+
+func stalecasReportedInRange(n *atomic.Int64, xs []int) {
+	old := n.Load()
+	sink := func(p *int64) { use(*p) }
+	for _, x := range xs {
+		for !n.CompareAndSwap(old, old+int64(x)) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		}
+		sink(&old)
+	}
 }

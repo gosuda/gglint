@@ -12,7 +12,7 @@ import (
 
 var busywaitAnalyzer = &analysis.Analyzer{
 	Name:     "busywait",
-	Doc:      "report try-lock loops that spin instead of blocking; spin covers five shapes only",
+	Doc:      "report for TryLock loops with empty or Gosched-only body when the lock is an identifier or field chain; other bodies are not reported; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runBusywait,
 }
@@ -52,7 +52,29 @@ func busywaitTarget(pass *analysis.Pass, loop *ast.ForStmt) (*ast.SelectorExpr, 
 	if !isPkgMethod(pass.TypesInfo, sel, "sync", sel.Sel.Name) {
 		return nil, "", false
 	}
+	if !isLockReceiver(sel.X) {
+		return nil, "", false
+	}
 	return sel, mate, true
+}
+
+func isLockReceiver(e ast.Expr) bool {
+	e = ast.Unparen(e)
+	for {
+		star, ok := e.(*ast.StarExpr)
+		if !ok {
+			break
+		}
+		e = ast.Unparen(star.X)
+	}
+	switch t := e.(type) {
+	case *ast.Ident:
+		return true
+	case *ast.SelectorExpr:
+		return isLockReceiver(t.X)
+	default:
+		return false
+	}
 }
 
 func busywaitCall(cond ast.Expr) (*ast.CallExpr, bool) {

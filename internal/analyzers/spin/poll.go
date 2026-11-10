@@ -12,7 +12,7 @@ import (
 
 var pollAnalyzer = &analysis.Analyzer{
 	Name:     "poll",
-	Doc:      "report for-select loops whose default case never waits; spin covers five shapes only",
+	Doc:      "report a for loop whose body is one select with a default that never waits and never leaves; counted loops that keep their counter and Done-only selects are skipped; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runPoll,
 }
@@ -54,11 +54,21 @@ func isCounted(info *types.Info, loop *ast.ForStmt) bool {
 	}
 	posts := assignedVars(info, loop.Post)
 	for v := range inits {
-		if posts[v] && condMentions(info, loop.Cond, v) {
+		if isCounter(info, loop, posts, v) {
 			return true
 		}
 	}
 	return false
+}
+
+func isCounter(info *types.Info, loop *ast.ForStmt, posts map[*types.Var]bool, v *types.Var) bool {
+	if !posts[v] {
+		return false
+	}
+	if !condMentions(info, loop.Cond, v) {
+		return false
+	}
+	return loop.Body == nil || !assignsRoot(info, loop.Body, v)
 }
 
 func assignedVars(info *types.Info, node ast.Node) map[*types.Var]bool {
@@ -281,10 +291,32 @@ func selectSplit(sel *ast.SelectStmt) (*ast.CommClause, int, bool) {
 func defaultWaits(pass *analysis.Pass, stmt ast.Stmt) bool {
 	waits := false
 	walkNoLit(stmt, func(n ast.Node) bool {
+		if waits {
+			return false
+		}
+		if sel, ok := n.(*ast.SelectStmt); ok {
+			if selectHasDefault(sel) {
+				return false
+			}
+			waits = true
+			return false
+		}
 		waits = waits || pollNodeWaits(pass, n)
 		return !waits
 	})
 	return waits
+}
+
+func selectHasDefault(sel *ast.SelectStmt) bool {
+	if sel.Body == nil {
+		return false
+	}
+	for _, stmt := range sel.Body.List {
+		if clause, ok := stmt.(*ast.CommClause); ok && clause.Comm == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func pollNodeWaits(pass *analysis.Pass, n ast.Node) bool {
@@ -296,7 +328,7 @@ func pollNodeWaits(pass *analysis.Pass, n ast.Node) bool {
 	case *ast.UnaryExpr:
 		return t.Op == token.ARROW
 	case *ast.SelectStmt:
-		return true
+		return !selectHasDefault(t)
 	case *ast.RangeStmt:
 		return isChanRange(pass, t)
 	default:

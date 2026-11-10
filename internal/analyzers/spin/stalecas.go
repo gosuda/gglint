@@ -13,7 +13,7 @@ import (
 
 var stalecasAnalyzer = &analysis.Analyzer{
 	Name:     "stalecas",
-	Doc:      "report compare-and-swap loops retrying with a stale value; spin covers five shapes only",
+	Doc:      "report a CAS loop retrying with the same old local when the loop never assigns old, never passes it by address, and never calls a reloading closure; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runStalecas,
 }
@@ -34,62 +34,173 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 	if !isLocalVar(fn, old) || definedInBody(loop, old) {
 		return
 	}
-	if assignsRoot(pass.TypesInfo, loop.Body, old) {
+	if assignsOldInLoop(pass.TypesInfo, loop, old) {
 		return
 	}
-	if loop.Post != nil && assignsRoot(pass.TypesInfo, loop.Post, old) {
+	if loopReceivesAddr(pass.TypesInfo, fn, loop, old) {
 		return
 	}
-	if staleUnknown(pass.TypesInfo, staleScope{fn: fn, loop: loop, outer: outerLoop(cur, loop, fn)}, old) {
+	if loopCallsFuncValue(pass.TypesInfo, loop) && funcLitAssignsOld(pass.TypesInfo, fn, old) {
 		return
 	}
-	pass.Reportf(loop.Pos(), "after one failed swap %s is stale, so every retry fails: load it again inside the loop", old.Name())
+	pass.Reportf(loop.Pos(), "after one failed swap %s is stale, so retries fail until another goroutine stores %s back: load it again inside the loop", old.Name(), old.Name())
 }
 
-type staleScope struct {
-	fn    ast.Node
-	loop  *ast.ForStmt
-	outer ast.Node
-}
-
-func outerLoop(cur inspector.Cursor, loop *ast.ForStmt, fn ast.Node) ast.Node {
-	if fn == nil {
-		return nil
-	}
-	for c := range cur.Enclosing((*ast.ForStmt)(nil), (*ast.RangeStmt)(nil)) {
-		node := c.Node()
-		if node == ast.Node(loop) {
-			continue
-		}
-		if node.Pos() < fn.Pos() || node.End() > fn.End() {
-			continue
-		}
-		switch node.(type) {
-		case *ast.ForStmt, *ast.RangeStmt:
-			return node
-		}
-	}
-	return nil
-}
-
-func inStaleScope(n ast.Node, scope staleScope) bool {
-	if n.Pos() < scope.loop.End() {
+func assignsOldInLoop(info *types.Info, loop *ast.ForStmt, old *types.Var) bool {
+	if loop.Cond != nil && assignsRoot(info, loop.Cond, old) {
 		return true
 	}
-	return scope.outer != nil && withinOuter(n, scope.outer)
+	if loop.Body != nil && assignsRoot(info, loop.Body, old) {
+		return true
+	}
+	return loop.Post != nil && assignsRoot(info, loop.Post, old)
 }
 
-func withinOuter(n, outer ast.Node) bool {
-	var body *ast.BlockStmt
-	switch t := outer.(type) {
-	case *ast.ForStmt:
-		body = t.Body
-	case *ast.RangeStmt:
-		body = t.Body
+func isAddrOfOld(info *types.Info, e ast.Expr, old *types.Var) bool {
+	u, ok := ast.Unparen(e).(*ast.UnaryExpr)
+	if !ok || u.Op != token.AND {
+		return false
+	}
+	return hitRoot(info, u.X, old)
+}
+
+func addrAliases(info *types.Info, fn ast.Node, old *types.Var) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	if fn == nil {
+		return out
+	}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		collectAddrAlias(info, n, old, out)
+		return true
+	})
+	return out
+}
+
+func collectAddrAlias(info *types.Info, n ast.Node, old *types.Var, out map[*types.Var]bool) {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		collectAssignAlias(info, t, old, out)
+	case *ast.ValueSpec:
+		collectSpecAlias(info, t, old, out)
+	}
+}
+
+func collectAssignAlias(info *types.Info, t *ast.AssignStmt, old *types.Var, out map[*types.Var]bool) {
+	for i, lhs := range t.Lhs {
+		if i >= len(t.Rhs) || !isAddrOfOld(info, t.Rhs[i], old) {
+			continue
+		}
+		if id := rootIdent(lhs); id != nil {
+			if v, ok := info.ObjectOf(id).(*types.Var); ok {
+				out[v] = true
+			}
+		}
+	}
+}
+
+func collectSpecAlias(info *types.Info, t *ast.ValueSpec, old *types.Var, out map[*types.Var]bool) {
+	for i, name := range t.Names {
+		if i >= len(t.Values) || !isAddrOfOld(info, t.Values[i], old) {
+			continue
+		}
+		if v, ok := info.Defs[name].(*types.Var); ok {
+			out[v] = true
+		}
+	}
+}
+
+func loopReceivesAddr(info *types.Info, fn ast.Node, loop *ast.ForStmt, old *types.Var) bool {
+	aliases := addrAliases(info, fn, old)
+	found := false
+	walkLoopParts(loop, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok && callTakesAddr(info, call, old, aliases) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func callTakesAddr(info *types.Info, call *ast.CallExpr, old *types.Var, aliases map[*types.Var]bool) bool {
+	for _, arg := range call.Args {
+		if isAddrOfOld(info, arg, old) {
+			return true
+		}
+		if id := rootIdent(arg); id != nil {
+			if v, ok := info.ObjectOf(id).(*types.Var); ok && aliases[v] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func walkLoopParts(loop *ast.ForStmt, f func(ast.Node) bool) {
+	if loop.Cond != nil {
+		walkNoLit(loop.Cond, f)
+	}
+	if loop.Body != nil {
+		walkNoLit(loop.Body, f)
+	}
+	if loop.Post != nil {
+		walkNoLit(loop.Post, f)
+	}
+}
+
+func isFuncValueCall(info *types.Info, call *ast.CallExpr) bool {
+	switch fn := ast.Unparen(call.Fun).(type) {
+	case *ast.Ident:
+		obj := info.ObjectOf(fn)
+		_, isVar := obj.(*types.Var)
+		return isVar
+	case *ast.SelectorExpr:
+		obj := info.ObjectOf(fn.Sel)
+		_, isVar := obj.(*types.Var)
+		return isVar
+	case *ast.FuncLit:
+		return true
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		return true
 	default:
 		return false
 	}
-	return body != nil && body.Pos() <= n.Pos() && n.Pos() < body.End()
+}
+
+func loopCallsFuncValue(info *types.Info, loop *ast.ForStmt) bool {
+	found := false
+	walkLoopParts(loop, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok && isFuncValueCall(info, call) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func funcLitAssignsOld(info *types.Info, fn ast.Node, old *types.Var) bool {
+	found := false
+	if fn == nil {
+		return false
+	}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && assignsRoot(info, lit, old) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func staleShape(pass *analysis.Pass, loop *ast.ForStmt) (*types.Var, bool) {
@@ -293,118 +404,4 @@ func hitRoot(info *types.Info, e ast.Expr, v *types.Var) bool {
 		return false
 	}
 	return info.ObjectOf(id) == types.Object(v)
-}
-
-func staleUnknown(info *types.Info, scope staleScope, old *types.Var) bool {
-	if scope.fn == nil {
-		return false
-	}
-	if hasUnorderedJump(info, scope.fn) {
-		return true
-	}
-	return capturedInScope(info, scope, old) || addrInScope(info, scope, old)
-}
-
-func hasUnorderedJump(info *types.Info, fn ast.Node) bool {
-	labels := collectLabels(info, fn)
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		branch, ok := n.(*ast.BranchStmt)
-		if !ok {
-			return true
-		}
-		if unorderedBranch(info, branch, labels) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func collectLabels(info *types.Info, fn ast.Node) map[types.Object]token.Pos {
-	labels := map[types.Object]token.Pos{}
-	ast.Inspect(fn, func(n ast.Node) bool {
-		labeled, ok := n.(*ast.LabeledStmt)
-		if !ok {
-			return true
-		}
-		if obj := info.ObjectOf(labeled.Label); obj != nil {
-			labels[obj] = labeled.Pos()
-		}
-		return true
-	})
-	return labels
-}
-
-func unorderedBranch(info *types.Info, branch *ast.BranchStmt, labels map[types.Object]token.Pos) bool {
-	if branch.Tok == token.GOTO {
-		return true
-	}
-	if branch.Label == nil {
-		return false
-	}
-	obj := info.ObjectOf(branch.Label)
-	if obj == nil {
-		return false
-	}
-	pos, ok := labels[obj]
-	return ok && branch.Pos() > pos
-}
-
-func capturedInScope(info *types.Info, scope staleScope, v *types.Var) bool {
-	hit := false
-	ast.Inspect(scope.fn, func(x ast.Node) bool {
-		if hit {
-			return false
-		}
-		lit, ok := x.(*ast.FuncLit)
-		if !ok {
-			return true
-		}
-		if inStaleScope(lit, scope) && litMentions(info, lit, v, &hit) {
-			return false
-		}
-		return !hit
-	})
-	return hit
-}
-
-func addrInScope(info *types.Info, scope staleScope, v *types.Var) bool {
-	hit := false
-	ast.Inspect(scope.fn, func(x ast.Node) bool {
-		if hit {
-			return false
-		}
-		u, ok := x.(*ast.UnaryExpr)
-		if !ok || u.Op != token.AND {
-			return true
-		}
-		if inStaleScope(u, scope) && addrHits(info, u, v) {
-			hit = true
-		}
-		return !hit
-	})
-	return hit
-}
-
-func addrHits(info *types.Info, u *ast.UnaryExpr, v *types.Var) bool {
-	id := rootIdent(u.X)
-	return id != nil && info.ObjectOf(id) == types.Object(v)
-}
-
-func litMentions(info *types.Info, lit *ast.FuncLit, v *types.Var, hit *bool) bool {
-	ast.Inspect(lit.Body, func(y ast.Node) bool {
-		if *hit {
-			return false
-		}
-		if assignsNode(info, y, v) {
-			*hit = true
-		}
-		return !*hit
-	})
-	return *hit
 }

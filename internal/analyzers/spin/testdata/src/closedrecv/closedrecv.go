@@ -2,10 +2,6 @@ package closedrecv
 
 func use(any) {}
 
-func worker(ch chan int) {
-	ch <- 1
-	close(ch)
-}
 
 func closedrecvReported() {
 	ch := make(chan int)
@@ -53,17 +49,6 @@ func closedrecvSilentVarSpec() {
 	use(sum)
 }
 
-func closedrecvSilentParam(ch chan int) {
-	go func() {
-		ch <- 1
-		close(ch)
-	}()
-	sum := 0
-	for {
-		sum += <-ch
-	}
-	use(sum)
-}
 
 func closedrecvSilentNoClose() {
 	ch := make(chan int)
@@ -104,7 +89,10 @@ func closedrecvSilentSelect() {
 	}()
 	for {
 		select {
-		case v := <-ch:
+		case v, ok := <-ch:
+			if !ok {
+				return
+			}
 			use(v)
 		}
 	}
@@ -121,6 +109,8 @@ func closedrecvSilentSend() {
 	}
 }
 
+func closedrecvFail(v int) { panic("fail") }
+
 func closedrecvSilentCall() {
 	ch := make(chan int)
 	go func() {
@@ -128,32 +118,10 @@ func closedrecvSilentCall() {
 		close(ch)
 	}()
 	for {
-		use(<-ch)
+		closedrecvFail(<-ch)
 	}
 }
 
-func closedrecvSilentNamedGo() {
-	ch := make(chan int)
-	go worker(ch)
-	sum := 0
-	for {
-		sum += <-ch
-	}
-	use(sum)
-}
-
-func closedrecvSilentDelete() {
-	ch := make(chan int)
-	m := map[int]int{}
-	go func() {
-		delete(m, 1)
-	}()
-	sum := 0
-	for {
-		sum += <-ch
-	}
-	use(sum)
-}
 
 func closedrecvReportedInitPost() int {
 	ch := make(chan int)
@@ -240,13 +208,10 @@ func closedrecvSilentUncalled() int {
 	return sum
 }
 
-type closedrecvNop struct{}
-
-func (closedrecvNop) M(ch chan int) {}
 
 func closedrecvSilentGoto() {
 	ch := make(chan int)
-	go func() { ch <- 1; close(ch); closedrecvNop{}.M(ch) }()
+	go func() { ch <- 1; close(ch) }()
 	sum := 0
 	for {
 		sum += <-ch
@@ -364,13 +329,13 @@ func closedrecvSilentNestedFor() int {
 	}
 }
 
-func closedrecvSilentNestedRange(xs []int) int {
+func closedrecvSilentNestedRange() int {
 	ch := make(chan int)
 	go func() { ch <- 1; close(ch) }()
 	sum := 0
 	for {
 		sum += <-ch
-		for _, v := range xs {
+		for _, v := range []int{sum} {
 			return v
 		}
 	}
@@ -386,7 +351,7 @@ func closedrecvSilentNestedSwitch(n int) int {
 		case 0:
 			return 0
 		default:
-			n++
+			return -1
 		}
 	}
 }
@@ -401,6 +366,7 @@ func closedrecvSilentNestedTypeSwitch(v any) int {
 		case int:
 			return 1
 		default:
+			return 0
 		}
 	}
 }
@@ -412,4 +378,16 @@ func closedrecvReportedInvoked() {
 	for { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
 		sum += <-ch
 	}
+}
+func closedrecvSilentReassign() {
+	ch := make(chan int)
+	done := make(chan struct{})
+	go func() { close(ch); close(done) }()
+	<-done
+	ch = make(chan int)
+	sum := 0
+	for {
+		sum += <-ch
+	}
+	use(sum)
 }

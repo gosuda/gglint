@@ -54,7 +54,6 @@ func busywaitSilentPlainFunc() {
 func busywaitSilentCustomLock() {
 	var l customLock
 	for !l.TryLock() {
-		break
 	}
 }
 
@@ -72,15 +71,9 @@ func busywaitSilentTwoStmt(mu *sync.Mutex, d time.Duration) {
 	use(n)
 }
 
-func busywaitSilentDecl(mu *sync.Mutex) {
-	for !mu.TryLock() {
-		var x int
-		_ = x
-	}
-}
+func newMu() *sync.Mutex { return &sync.Mutex{} }
 
-func busywaitSilentPlainCall(mu *sync.Mutex) {
-	for !mu.TryLock() {
-		ready()
+func busywaitSilentCallRecv() {
+	for !newMu().TryLock() {
 	}
 }

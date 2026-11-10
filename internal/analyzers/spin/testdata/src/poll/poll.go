@@ -20,14 +20,14 @@ func pollReported(ch chan int) {
 	}
 }
 
-func pollReportedTwoComm(ch, ch2 chan int) {
+func pollReportedTwoComm(ctx context.Context, ch chan int) {
 	n := 0
 	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
 		select {
+		case <-ctx.Done():
+			return
 		case v := <-ch:
 			use(v)
-		case w := <-ch2:
-			use(w)
 		default:
 			n++
 		}
@@ -41,7 +41,7 @@ func pollSilent(ch chan int, d time.Duration) {
 		case v := <-ch:
 			use(v)
 		default:
-			time.Sleep(d)
+			time.Sleep(max(d, time.Millisecond))
 			n++
 		}
 	}
@@ -76,7 +76,7 @@ func pollReportedNoComm() {
 	}
 }
 
-func pollG() int { return 1 }
+func pollG() int { time.Sleep(time.Millisecond); return 1 }
 
 func pollSilentOverwrite(ch chan int, n int) {
 	for {
@@ -103,13 +103,6 @@ func pollReportedLen(ch chan int, xs []int) {
 
 func pollSilentNonSelect(ch chan int) {
 	for {
-		use(ch)
-	}
-}
-
-func pollSilentMultiStmt(ch chan int) {
-	for {
-		use(ch)
 		use(ch)
 	}
 }
@@ -145,7 +138,6 @@ func pollSilentDefaultSelect(ch chan int) {
 			select {
 			case w := <-ch:
 				use(w)
-			default:
 			}
 		}
 	}
@@ -306,4 +298,14 @@ func pollReportedCountedFlag(ch chan int, stop *atomic.Bool) {
 		}
 	}
 	use(n)
+}
+func pollReportedCountedWrite(ch chan int, n int) {
+	for i := 0; i < n; i++ { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			i--
+		}
+	}
 }

@@ -12,7 +12,7 @@ import (
 
 var closedrecvAnalyzer = &analysis.Analyzer{
 	Name:     "closedrecv",
-	Doc:      "report single-value receives spinning after close in loops without return, break, goto, or panic; spin covers five shapes only",
+	Doc:      "report a bare loop receiving once per pass from a local channel closed by a spawned literal before the loop when the loop has no exit and the channel is never reassigned; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runClosedrecv,
 }
@@ -40,6 +40,9 @@ func checkClosedrecv(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStm
 	if !isLocalVar(fn, v) || !isChan(v.Type()) {
 		return
 	}
+	if channelReassigned(pass.TypesInfo, fn, v) {
+		return
+	}
 	if !closesBefore(pass, fn, loop, v) {
 		return
 	}
@@ -51,6 +54,34 @@ func checkClosedrecv(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStm
 
 func bareLoop(loop *ast.ForStmt) bool {
 	return loop.Cond == nil && loop.Body != nil
+}
+
+func channelReassigned(info *types.Info, fn ast.Node, v *types.Var) bool {
+	if fn == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if reassignsVar(info, n, v) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func reassignsVar(info *types.Info, n ast.Node, v *types.Var) bool {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		return t.Tok == token.ASSIGN && t.Pos() > v.Pos() && lhsHits(info, t.Lhs, v)
+	case *ast.RangeStmt:
+		return t.Tok == token.ASSIGN && t.Pos() > v.Pos() && rangeHits(info, t, v)
+	default:
+		return false
+	}
 }
 
 func recvVar(pass *analysis.Pass, recv *ast.UnaryExpr) (*types.Var, bool) {

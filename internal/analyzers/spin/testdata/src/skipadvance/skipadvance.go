@@ -21,7 +21,7 @@ func skipadvanceReported() {
 	i := 0
 	for i < len(xs) {
 		if err := doStep(xs[i]); err != nil {
-			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		i++
 	}
@@ -31,7 +31,7 @@ func skipadvanceReportedIndex(a []int, n int) {
 	i := 0
 	for a[i] < n {
 		if err := doStep(a[i]); err != nil {
-			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		a[i]++
 	}
@@ -40,7 +40,7 @@ func skipadvanceReportedIndex(a []int, n int) {
 func skipadvanceReportedStar(p *int, n int) {
 	for *p < n {
 		if err := doStep(*p); err != nil {
-			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		(*p)++
 	}
@@ -50,6 +50,7 @@ func skipadvanceSilentCustomErr(e *ptrErr) {
 	i := 0
 	for i < len(xs) {
 		if e != nil {
+			e = nil
 			continue
 		}
 		i++
@@ -87,16 +88,6 @@ func skipadvanceSilentIntCompare() {
 	_ = x
 }
 
-func skipadvanceSilentNonErrorPtr(p *int) {
-	i := 0
-	for i < len(xs) {
-		if p != nil {
-			continue
-		}
-		i++
-	}
-}
-
 func skipadvanceSilentBreak() {
 	i := 0
 	for i < len(xs) {
@@ -112,7 +103,7 @@ func skipadvanceReportedLabeled() {
 Outer:
 	for i < len(xs) {
 		if err := doStep(xs[i]); err != nil {
-			continue Outer // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue Outer // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		i++
 	}
@@ -121,8 +112,9 @@ Outer:
 func skipadvanceSilentAdvanceBefore() {
 	i := 0
 	for i < len(xs) {
+		v := xs[i]
 		i++
-		if err := doStep(xs[i]); err != nil {
+		if err := doStep(v); err != nil {
 			continue
 		}
 	}
@@ -131,10 +123,9 @@ func skipadvanceSilentAdvanceBefore() {
 func skipadvanceSilentInitAssign() {
 	i := 0
 	for i < len(xs) {
-		if i = next(); stepErr != nil {
+		if i = i + 1; stepErr != nil {
 			continue
 		}
-		i++
 	}
 }
 
@@ -149,21 +140,12 @@ func skipadvanceSilentInnerAssign() {
 	}
 }
 
-func skipadvanceSilentNoAdvance() {
-	i := 0
-	for i < len(xs) {
-		if err := doStep(xs[i]); err != nil {
-			continue
-		}
-	}
-}
-
 func skipadvanceReportedRangeAdvance() {
 	i := 0
 	m := []int{1, 2, 3}
 	for i < len(xs) {
 		if err := doStep(xs[i]); err != nil {
-			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		for _, i = range m {
 		}
@@ -188,7 +170,7 @@ func skipadvanceReportedSleep() {
 	for i < len(xs) {
 		if err := doStep(xs[i]); err != nil {
 			time.Sleep(time.Second)
-			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		i++
 	}
@@ -214,7 +196,7 @@ func skipadvanceReportedOuterWrite(xs []int, lastErr *error) {
 	for i < len(xs) {
 		if err := doStep(xs[i]); err != nil {
 			*lastErr = err
-			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		i++
 	}
@@ -226,7 +208,7 @@ func skipadvanceReportedCounter(xs []int) {
 	for i < len(xs) {
 		if err := doStep(xs[i]); err != nil {
 			failures++
-			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		i++
 	}

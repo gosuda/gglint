@@ -12,7 +12,7 @@ import (
 
 var skipadvanceAnalyzer = &analysis.Analyzer{
 	Name:     "skipadvance",
-	Doc:      "report continue statements skipping the loop advance; spin covers five shapes only",
+	Doc:      "report a continue directly in if err != nil that skips the advance when the advance follows the if and none precedes it; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runSkipadvance,
 }
@@ -91,7 +91,7 @@ func reportContinue(pass *analysis.Pass, site continueSite, label string, k int,
 		return
 	}
 	if advancedAfter(info, site.list, site.at, site.vars) {
-		pass.Reportf(branch.Pos(), "this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue")
+		pass.Reportf(branch.Pos(), "this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue")
 	}
 }
 
