@@ -17,12 +17,16 @@ func runPair(pass *analysis.Pass) (any, error) {
 }
 
 func checkPair(pass *analysis.Pass, fn ast.Node) {
+	keys := collectKeys(pass.TypesInfo, fn)
+	if len(keys) == 0 {
+		return
+	}
 	g := flow.NewGraph(pass, fn)
 	if g == nil {
 		return
 	}
 	facts := collectFacts(pass.TypesInfo, fn)
-	for _, key := range collectKeys(pass.TypesInfo, fn) {
+	for _, key := range keys {
 		checkPairKey(pass, g, fn, key, facts)
 	}
 }

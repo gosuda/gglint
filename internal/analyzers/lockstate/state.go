@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/types/typeutil"
 
@@ -115,14 +116,14 @@ func recvText(info *types.Info, call *ast.CallExpr) string {
 }
 
 type fnFacts struct {
-	info    *types.Info
-	fn      ast.Node
-	byPos   map[token.Pos][]types.Object
-	defines map[types.Object]ast.Expr
-	vars    map[types.Object]ast.Expr
-	stored  map[types.Object][]flow.Key
-	exposed map[types.Object][]exposure
-	funs    map[flow.Key]map[ast.Expr]bool
+	info      *types.Info
+	fn        ast.Node
+	mentionAt map[types.Object][]token.Pos
+	defines   map[types.Object]ast.Expr
+	vars      map[types.Object]ast.Expr
+	stored    map[types.Object][]flow.Key
+	exposed   map[types.Object][]exposure
+	funs      map[flow.Key]map[ast.Expr]bool
 }
 
 type exposure struct {
@@ -134,14 +135,14 @@ type exposure struct {
 
 func collectFacts(info *types.Info, fn ast.Node) *fnFacts {
 	f := &fnFacts{
-		info:    info,
-		fn:      fn,
-		byPos:   map[token.Pos][]types.Object{},
-		defines: map[types.Object]ast.Expr{},
-		vars:    map[types.Object]ast.Expr{},
-		stored:  map[types.Object][]flow.Key{},
-		exposed: map[types.Object][]exposure{},
-		funs:    map[flow.Key]map[ast.Expr]bool{},
+		info:      info,
+		fn:        fn,
+		mentionAt: map[types.Object][]token.Pos{},
+		defines:   map[types.Object]ast.Expr{},
+		vars:      map[types.Object]ast.Expr{},
+		stored:    map[types.Object][]flow.Key{},
+		exposed:   map[types.Object][]exposure{},
+		funs:      map[flow.Key]map[ast.Expr]bool{},
 	}
 	f.collectLockCalls()
 	f.collectDeclValues()
@@ -427,14 +428,7 @@ func (f *fnFacts) lockExposed(key flow.Key) bool {
 }
 
 func (f *fnFacts) collectMentions() {
-	var stack []token.Pos
 	ast.Inspect(f.fn, func(n ast.Node) bool {
-		if n == nil {
-			stack = stack[:len(stack)-1]
-			return true
-		}
-		pos := n.Pos()
-		stack = append(stack, pos)
 		id, ok := n.(*ast.Ident)
 		if !ok {
 			return true
@@ -443,20 +437,26 @@ func (f *fnFacts) collectMentions() {
 		if obj == nil {
 			return true
 		}
-		for _, p := range stack {
-			f.byPos[p] = append(f.byPos[p], obj)
-		}
+		f.mentionAt[obj] = append(f.mentionAt[obj], id.Pos())
 		return true
 	})
+	for obj := range f.mentionAt {
+		slices.Sort(f.mentionAt[obj])
+	}
 }
 
 func (f *fnFacts) mentions(n ast.Node, root types.Object) bool {
-	for _, obj := range f.byPos[n.Pos()] {
-		if obj == root {
-			return true
-		}
+	at := f.mentionAt[root]
+	if len(at) == 0 {
+		return false
 	}
-	return false
+	pos := n.Pos()
+	end := n.End()
+	if !pos.IsValid() || !end.IsValid() {
+		return false
+	}
+	i, _ := slices.BinarySearch(at, pos)
+	return i < len(at) && at[i] < end
 }
 
 func reassignsRoot(info *types.Info, n ast.Node, key flow.Key) bool {
