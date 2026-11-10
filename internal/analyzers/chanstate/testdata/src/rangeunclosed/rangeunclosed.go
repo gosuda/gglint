@@ -38,3 +38,97 @@ func rangeunclosedSilentBreak() {
 		}
 	}
 }
+
+type streamRange struct{ ch chan int }
+
+func closeLaterRange(s *streamRange) { close(s.ch) }
+
+func rangeunclosedSilentField() {
+	s := &streamRange{ch: make(chan int)}
+	go closeLaterRange(s)
+	for v := range s.ch {
+		_ = v
+	}
+}
+
+func rangeunclosedSilentReturn() {
+	ch := make(chan int)
+	go func() { ch <- 1; close(ch) }()
+	for v := range ch {
+		useRange(v)
+		return
+	}
+}
+
+func rangeunclosedSilentGoto() {
+	ch := make(chan int)
+	go func() { ch <- 1; close(ch) }()
+	for v := range ch {
+		useRange(v)
+		if v > 0 {
+			goto doneRange
+		}
+	}
+doneRange:
+}
+
+func rangeunclosedSilentRich() {
+	ch := make(chan int)
+	go func() { ch <- 1; close(ch) }()
+	var y = 1
+	_ = y
+	_ = &ch
+	for v := range ch {
+		switch v {
+		case 1:
+			return
+		default:
+			_ = v
+		}
+	}
+}
+
+func rangeunclosedSilentComposite() {
+	ch := make(chan int)
+	holders := []chan int{ch}
+	go func() { close(holders[0]) }()
+	for v := range ch {
+		_ = v
+	}
+}
+
+func rangeunclosedSilentMapKey() {
+	ch := make(chan int)
+	m := map[chan int]bool{}
+	m[ch] = true
+	go func() {
+		for k := range m {
+			close(k)
+		}
+	}()
+	for v := range ch {
+		_ = v
+	}
+}
+
+func genRangeClose() chan int {
+	ch := make(chan int)
+	close(ch)
+	return ch
+}
+
+func rangeunclosedSilentCallOrigin() {
+	ch := genRangeClose()
+	for v := range ch {
+		_ = v
+	}
+}
+
+func rangeunclosedSilentAlias() {
+	ch := make(chan int)
+	done := ch
+	go func() { close(done) }()
+	for v := range ch {
+		_ = v
+	}
+}

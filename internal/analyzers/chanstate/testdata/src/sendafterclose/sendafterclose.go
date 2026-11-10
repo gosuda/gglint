@@ -11,3 +11,9 @@ func sendaftercloseSilent() {
 	defer close(ch)
 	ch <- 1
 }
+
+func sendaftercloseSilentGo() {
+	ch := make(chan int, 1)
+	go close(ch)
+	ch <- 1
+}

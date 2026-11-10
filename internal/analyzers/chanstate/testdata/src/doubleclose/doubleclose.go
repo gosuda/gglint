@@ -14,3 +14,26 @@ func doublecloseSilent(a bool) {
 		close(ch)
 	}
 }
+
+func doublecloseSilentAddress() {
+	ch := make(chan int)
+	close(ch)
+	p := &ch
+	*p = make(chan int)
+	close(ch)
+	_ = p
+}
+
+func doublecloseSilentRange(chans []chan int) {
+	ch := make(chan int)
+	close(ch)
+	for _, ch = range chans {
+	}
+	close(ch)
+}
+
+func doublecloseSilentGo() {
+	ch := make(chan int, 1)
+	go close(ch)
+	close(ch)
+}

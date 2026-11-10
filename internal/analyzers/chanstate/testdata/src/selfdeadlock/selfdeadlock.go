@@ -35,3 +35,27 @@ func selfdeadlockSilentBranch(a bool) {
 		<-ch
 	}
 }
+
+func peerSelf(c chan int) {
+	go func() {
+		<-c
+		c <- 2
+	}()
+}
+
+func selfdeadlockSilentEscapeCall() int {
+	ch := make(chan int)
+	peerSelf(ch)
+	ch <- 1
+	return <-ch
+}
+
+func selfdeadlockSilentRich() {
+	var y = 1
+	_ = y
+	xs := []int{1, 2}
+	_ = xs[1:2]
+	ch := make(chan int, 1)
+	ch <- 1
+	<-ch
+}

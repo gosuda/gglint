@@ -25,7 +25,7 @@ func Analyzers() []*analysis.Analyzer {
 	}
 }
 
-func mk(name string, doc string, run func(*analysis.Pass) (any, error)) *analysis.Analyzer {
+func mk(name, doc string, run func(*analysis.Pass) (any, error)) *analysis.Analyzer {
 	return &analysis.Analyzer{
 		Name:     name,
 		Doc:      doc,
@@ -48,9 +48,21 @@ func runNilop(pass *analysis.Pass) (any, error) {
 	each(pass, func(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
 		for _, k := range nilLocals(pass.TypesInfo, fn) {
 			machineReport(pass, fn, g, k, reportNilop)
+			nilRangeReport(pass, fn, k)
 		}
 	})
 	return nil, nil
+}
+
+func nilRangeReport(pass *analysis.Pass, fn ast.Node, k flow.Key) {
+	info := pass.TypesInfo
+	for _, r := range chanRanges(info, fn) {
+		rk, ok := flow.KeyOf(info, r.X)
+		if !ok || rk != k {
+			continue
+		}
+		pass.Reportf(r.X.Pos(), msgNilop, chanName(k))
+	}
 }
 
 func reportNilop(pass *analysis.Pass, op chanOp, s chanState) {
@@ -112,18 +124,53 @@ func runRangeunclosed(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func rangeunclosedCheck(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
+func rangeunclosedCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 	info := pass.TypesInfo
 	for _, r := range chanRanges(info, fn) {
-		k, ok := flow.KeyOf(info, r.X)
-		if !ok || !localKey(info, fn, k) {
-			continue
-		}
-		if closesAnywhere(info, fn, k) || handsOn(info, fn, k) || loopExits(r.Body.List) {
+		k, ok := rangeUnclosedKey(info, fn, r)
+		if !ok {
 			continue
 		}
 		pass.Reportf(r.X.Pos(), msgRangeunclosed, chanName(k))
 	}
+}
+
+func rangeUnclosedKey(info *types.Info, fn ast.Node, r *ast.RangeStmt) (flow.Key, bool) {
+	k, ok := rangeKeyDecl(info, fn, r)
+	if !ok {
+		return flow.Key{}, false
+	}
+	if rangeKeyClosed(info, fn, r, k) {
+		return flow.Key{}, false
+	}
+	return k, true
+}
+
+func rangeKeyDecl(info *types.Info, fn ast.Node, r *ast.RangeStmt) (flow.Key, bool) {
+	if _, ok := ast.Unparen(r.X).(*ast.Ident); !ok {
+		return flow.Key{}, false
+	}
+	k, ok := flow.KeyOf(info, r.X)
+	if !ok || k.Path != "" || !localKey(info, fn, k) {
+		return flow.Key{}, false
+	}
+	if _, ok := makeDef(info, fn, k); !ok {
+		return flow.Key{}, false
+	}
+	if channelCopied(info, fn, k) {
+		return flow.Key{}, false
+	}
+	return k, true
+}
+
+func rangeKeyClosed(info *types.Info, fn ast.Node, r *ast.RangeStmt, k flow.Key) bool {
+	if closesAnywhere(info, fn, k) {
+		return true
+	}
+	if handsOn(info, fn, k) {
+		return true
+	}
+	return loopExits(r.Body.List)
 }
 
 func runOrphansend(pass *analysis.Pass) (any, error) {
@@ -131,18 +178,22 @@ func runOrphansend(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func orphansendCheck(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
+func orphansendCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 	info := pass.TypesInfo
 	for _, sp := range flow.Spawns(pass, fn) {
-		op, ok := loneSend(info, sp.Body)
-		if !ok || !unbuffered(info, fn, op.Key) {
-			continue
+		for _, op := range loneSends(info, sp.Body) {
+			if !unbuffered(info, fn, op.Key) {
+				continue
+			}
+			if handsOn(info, fn, op.Key) || spawnDrains(info, fn, op.Key) {
+				continue
+			}
+			sel, recv, ok := loneSelectRecv(info, fn, op.Key)
+			if !ok || !otherReturns(sel, recv.Expr) {
+				continue
+			}
+			pass.Reportf(op.Pos, msgOrphansend, chanName(op.Key), chanName(op.Key))
 		}
-		sel, ok := loneSelectRecv(info, fn, op.Key)
-		if !ok || !otherReturns(sel, op.Expr) {
-			continue
-		}
-		pass.Reportf(op.Pos, msgOrphansend, chanName(op.Key), chanName(op.Key))
 	}
 }
 
@@ -151,7 +202,7 @@ func runFirstresult(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
-func firstresultCheck(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
+func firstresultCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 	info := pass.TypesInfo
 	for _, st := range countLoops(fn) {
 		n, ok := loopTrip(info, st)
@@ -177,13 +228,29 @@ func firstresultGo(pass *analysis.Pass, info *types.Info, fn ast.Node, loop ast.
 	if !ok {
 		return
 	}
-	if hasRange(info, fn, op.Key) {
+	if !firstresultReady(info, fn, loop, op.Key) {
 		return
 	}
-	r := straightRecvs(info, fn, loop, op.Key)
+	r, ok := straightRecvs(info, fn, loop, op.Key)
+	if !ok {
+		return
+	}
 	if n > r+kcap {
 		pass.Reportf(goStmt.Pos(), msgFirstresult, n, chanName(op.Key), r, kcap)
 	}
+}
+
+func firstresultReady(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) bool {
+	if hasRange(info, fn, k) {
+		return false
+	}
+	if handsOn(info, fn, k) {
+		return false
+	}
+	if spawnDrains(info, fn, k) {
+		return false
+	}
+	return !loopHasRecv(info, loop, k)
 }
 
 func each(pass *analysis.Pass, do func(*analysis.Pass, ast.Node, *flow.Graph)) {
@@ -200,7 +267,7 @@ func each(pass *analysis.Pass, do func(*analysis.Pass, ast.Node, *flow.Graph)) {
 func machineReport(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k flow.Key, report func(*analysis.Pass, chanOp, chanState)) {
 	info := pass.TypesInfo
 	flow.Forward(g, stUnknown,
-		func(n ast.Node, s chanState) chanState { return stepNode(info, n, k, s) },
+		func(n ast.Node, s chanState) chanState { return stepNode(info, fn, n, k, s) },
 		joinState,
 		func(n ast.Node, s chanState) { visitOps(pass, fn, info, n, k, s, report) },
 	)

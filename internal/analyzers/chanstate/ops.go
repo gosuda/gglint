@@ -58,26 +58,36 @@ func (w *opWalker) stmts(l []ast.Stmt) {
 }
 
 func (w *opWalker) stmt(s ast.Stmt) {
+	if w.simpleStmt(s) {
+		return
+	}
 	switch s := s.(type) {
 	case *ast.SendStmt:
 		w.send(s)
-	case *ast.ExprStmt:
-		w.expr(s.X)
 	case *ast.AssignStmt:
 		w.assign(s)
-	case *ast.IncDecStmt:
-		w.expr(s.X)
 	case *ast.DeclStmt:
 		w.decl(s)
-	case *ast.ReturnStmt:
-		w.exprs(s.Results)
 	case *ast.GoStmt:
-		w.expr(s.Call)
-	case *ast.DeferStmt:
-		w.expr(s.Call)
 	default:
 		w.structured(s)
 	}
+}
+
+func (w *opWalker) simpleStmt(s ast.Stmt) bool {
+	switch s := s.(type) {
+	case *ast.ExprStmt:
+		w.expr(s.X)
+	case *ast.IncDecStmt:
+		w.expr(s.X)
+	case *ast.ReturnStmt:
+		w.exprs(s.Results)
+	case *ast.DeferStmt:
+		w.expr(s.Call)
+	default:
+		return false
+	}
+	return true
 }
 
 func (w *opWalker) structured(s ast.Stmt) {
@@ -249,6 +259,26 @@ func (w *opWalker) expr(x ast.Expr) {
 }
 
 func (w *opWalker) compound(x ast.Expr) {
+	if w.singleExpr(x) {
+		return
+	}
+	switch x := x.(type) {
+	case *ast.IndexExpr:
+		w.indexExpr(x)
+	case *ast.IndexListExpr:
+		w.expr(x.X)
+		w.exprs(x.Indices)
+	case *ast.SliceExpr:
+		w.sliceExpr(x)
+	case *ast.CompositeLit:
+		w.exprs(x.Elts)
+	case *ast.KeyValueExpr:
+		w.expr(x.Key)
+		w.expr(x.Value)
+	}
+}
+
+func (w *opWalker) singleExpr(x ast.Expr) bool {
 	switch x := x.(type) {
 	case *ast.StarExpr:
 		w.expr(x.X)
@@ -258,23 +288,22 @@ func (w *opWalker) compound(x ast.Expr) {
 		w.expr(x.X)
 	case *ast.TypeAssertExpr:
 		w.expr(x.X)
-	case *ast.IndexExpr:
-		w.expr(x.X)
-		w.expr(x.Index)
-	case *ast.IndexListExpr:
-		w.expr(x.X)
-		w.exprs(x.Indices)
-	case *ast.SliceExpr:
-		w.expr(x.X)
-		w.optExpr(x.Low)
-		w.optExpr(x.High)
-		w.optExpr(x.Max)
-	case *ast.CompositeLit:
-		w.exprs(x.Elts)
-	case *ast.KeyValueExpr:
-		w.expr(x.Key)
-		w.expr(x.Value)
+	default:
+		return false
 	}
+	return true
+}
+
+func (w *opWalker) indexExpr(x *ast.IndexExpr) {
+	w.expr(x.X)
+	w.expr(x.Index)
+}
+
+func (w *opWalker) sliceExpr(x *ast.SliceExpr) {
+	w.expr(x.X)
+	w.optExpr(x.Low)
+	w.optExpr(x.High)
+	w.optExpr(x.Max)
 }
 
 func (w *opWalker) unary(x *ast.UnaryExpr) {
@@ -329,9 +358,6 @@ func closeKey(info *types.Info, c *ast.CallExpr) (flow.Key, bool) {
 }
 
 func isMake(info *types.Info, e ast.Expr) bool {
-	if e == nil {
-		return false
-	}
 	call, ok := ast.Unparen(e).(*ast.CallExpr)
 	if !ok || len(call.Args) == 0 {
 		return false
@@ -346,11 +372,8 @@ func isMake(info *types.Info, e ast.Expr) bool {
 
 func constInt(info *types.Info, e ast.Expr) (int64, bool) {
 	e = ast.Unparen(e)
-	if e == nil {
-		return 0, false
-	}
 	tv, ok := info.Types[e]
-	if !ok || tv.Value == nil {
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.Int {
 		return 0, false
 	}
 	return constant.Int64Val(tv.Value)
@@ -364,9 +387,6 @@ func constCap(info *types.Info, call *ast.CallExpr) (int64, bool) {
 }
 
 func isChan(t types.Type) bool {
-	if t == nil {
-		return false
-	}
 	_, ok := t.Underlying().(*types.Chan)
 	return ok
 }
