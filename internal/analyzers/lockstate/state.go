@@ -32,7 +32,7 @@ var (
 	unknownState = state{kind: unknownKind}
 )
 
-const maxReadDepth = 8
+const maxReadDepth = 64
 
 func readState(depth int) state {
 	return state{kind: readKind, depth: depth}

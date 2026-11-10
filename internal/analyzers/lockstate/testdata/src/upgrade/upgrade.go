@@ -66,3 +66,18 @@ func upgradeDeepReported() {
 	mu.RLock()
 	mu.Lock() // want "is read-locked by this goroutine, so this Lock waits for itself"
 }
+
+func upgradeDeepRUnlockReported() {
+	var mu sync.RWMutex
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RUnlock()
+	mu.Lock() // want "is read-locked by this goroutine, so this Lock waits for itself"
+}
