@@ -173,7 +173,7 @@ var lockerIface = sync.OnceValue(func() *types.Interface {
 	sig := types.NewSignatureType(nil, nil, nil, nil, nil, false)
 	lock := types.NewFunc(0, nil, lockOpLock, sig)
 	unlock := types.NewFunc(0, nil, lockOpUnlock, sig)
-	return types.NewInterfaceType([]*types.Func{lock, unlock}, nil)
+	return types.NewInterfaceType([]*types.Func{lock, unlock}, nil).Complete()
 })
 
 func deferStmts(fn ast.Node) map[ast.Node]bool {

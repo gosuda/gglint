@@ -265,29 +265,37 @@ func each(pass *analysis.Pass, do func(*analysis.Pass, ast.Node, *flow.Graph)) {
 }
 
 func machineReport(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k flow.Key, report func(*analysis.Pass, chanOp, chanState)) {
-	info := pass.TypesInfo
+	v := machineVisitor{pass: pass, fn: fn, info: pass.TypesInfo, key: k, report: report}
 	flow.Forward(g, stUnknown,
-		func(n ast.Node, s chanState) chanState { return stepNode(info, fn, n, k, s) },
+		func(n ast.Node, s chanState) chanState { return stepNode(v.info, fn, n, k, s) },
 		joinState,
-		func(n ast.Node, s chanState) { visitOps(pass, fn, info, n, k, s, report) },
+		v.visitOps,
 	)
 }
 
-func visitOps(pass *analysis.Pass, fn ast.Node, info *types.Info, n ast.Node, k flow.Key, s chanState, report func(*analysis.Pass, chanOp, chanState)) {
+type machineVisitor struct {
+	pass   *analysis.Pass
+	fn     ast.Node
+	info   *types.Info
+	key    flow.Key
+	report func(*analysis.Pass, chanOp, chanState)
+}
+
+func (v machineVisitor) visitOps(n ast.Node, s chanState) {
 	if d, ok := n.(*ast.DeferStmt); ok {
-		if ck, ok := closeKey(info, d.Call); ok && ck == k {
-			report(pass, chanOp{Kind: opClose, Key: ck, Pos: d.Pos(), Expr: d}, s)
+		if ck, ok := closeKey(v.info, d.Call); ok && ck == v.key {
+			v.report(v.pass, chanOp{Kind: opClose, Key: ck, Pos: d.Pos(), Expr: d}, s)
 			return
 		}
 	}
-	if literalTouch(info, n, k) {
+	if literalTouch(v.info, n, v.key) {
 		return
 	}
-	for _, op := range opsOf(info, n, k) {
-		if underSelect(fn, op.Expr) {
+	for _, op := range opsOf(v.info, n, v.key) {
+		if underSelect(v.fn, op.Expr) {
 			op.InSelect = true
 		}
-		report(pass, op, s)
+		v.report(v.pass, op, s)
 		s = stepOp(op, s)
 	}
 }

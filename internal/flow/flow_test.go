@@ -465,6 +465,46 @@ outer:
 }
 `
 
+func fieldVar(info *types.Info, field *ast.Field, pname string) *types.Var {
+	for _, id := range field.Names {
+		if id.Name != pname {
+			continue
+		}
+		if obj, ok := info.Defs[id].(*types.Var); ok {
+			return obj
+		}
+	}
+	return nil
+}
+
+func escapeVar(info *types.Info, decl *ast.FuncDecl, pname string) *types.Var {
+	for _, field := range decl.Type.Params.List {
+		if v := fieldVar(info, field, pname); v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+func checkEscapeCase(t *testing.T, f *ast.File, info *types.Info, name string, want bool) {
+	t.Helper()
+	decl := findDecl(f, name)
+	if decl == nil {
+		t.Fatalf("%s: decl missing", name)
+	}
+	pname := "v"
+	if name == "deref" {
+		pname = "p"
+	}
+	v := escapeVar(info, decl, pname)
+	if v == nil {
+		t.Fatalf("%s: param missing", name)
+	}
+	if got := Escapes(info, decl, v); got != want {
+		t.Fatalf("%s: Escapes = %v, want %v", name, got, want)
+	}
+}
+
 func TestEscapes(t *testing.T) {
 	t.Parallel()
 	f, info := checkTypes(t, escapeSource)
@@ -477,30 +517,7 @@ func TestEscapes(t *testing.T) {
 		"notf": false, "sl3": false, "declv": false, "many": false,
 	}
 	for name, w := range want {
-		decl := findDecl(f, name)
-		if decl == nil {
-			t.Fatalf("%s: decl missing", name)
-		}
-		pname := "v"
-		if name == "deref" {
-			pname = "p"
-		}
-		var v *types.Var
-		for _, field := range decl.Type.Params.List {
-			for _, id := range field.Names {
-				if id.Name == pname {
-					if obj, ok := info.Defs[id].(*types.Var); ok {
-						v = obj
-					}
-				}
-			}
-		}
-		if v == nil {
-			t.Fatalf("%s: param missing", name)
-		}
-		if got := Escapes(info, decl, v); got != w {
-			t.Fatalf("%s: Escapes = %v, want %v", name, got, w)
-		}
+		checkEscapeCase(t, f, info, name, w)
 	}
 }
 

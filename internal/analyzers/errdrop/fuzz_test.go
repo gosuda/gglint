@@ -43,10 +43,7 @@ func decodeErrdrop(data []byte) []string {
 		"p, _ = c1()",
 		"r.Close()",
 	}
-	n := len(data)
-	if n > 8 {
-		n = 8
-	}
+	n := min(len(data), 8)
 	out := make([]string, 0, n)
 	for i := range n {
 		out = append(out, ops[int(data[i])%len(ops)])

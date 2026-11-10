@@ -18,10 +18,7 @@ func fuzzOps() []string {
 
 func decodeFuzzOps(data []byte) []string {
 	ops := fuzzOps()
-	n := len(data)
-	if n > 8 {
-		n = 8
-	}
+	n := min(len(data), 8)
 	out := make([]string, 0, n)
 	for _, b := range data[:n] {
 		out = append(out, ops[int(b)%len(ops)])

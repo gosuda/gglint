@@ -165,9 +165,8 @@ func extraPass(t *testing.T) (pass *analysis.Pass, decls map[string]*ast.FuncDec
 	return pass, decls
 }
 
-func TestSpawnShapes(t *testing.T) {
-	t.Parallel()
-	pass, decls := extraPass(t)
+func checkSwitchSpawns(t *testing.T, pass *analysis.Pass, decls map[string]*ast.FuncDecl) {
+	t.Helper()
 	spawns := Spawns(pass, decls["switches"])
 	if len(spawns) != 5 {
 		t.Fatalf("switches: got %d spawns, want 5", len(spawns))
@@ -178,6 +177,10 @@ func TestSpawnShapes(t *testing.T) {
 	if !spawns[4].InLoop {
 		t.Fatalf("switches: range spawn not in loop")
 	}
+}
+
+func checkParamsubSpawns(t *testing.T, pass *analysis.Pass, decls map[string]*ast.FuncDecl) {
+	t.Helper()
 	ps := Spawns(pass, decls["paramsub"])
 	if len(ps) != 3 {
 		t.Fatalf("paramsub: got %d spawns, want 3", len(ps))
@@ -195,14 +198,11 @@ func TestSpawnShapes(t *testing.T) {
 	if !Joined(pass, fg, ps[0], decls["paramsub"].Body.List[3]) {
 		t.Fatalf("paramsub: not joined at Wait")
 	}
-	if Spawns(nil, nil) != nil {
-		t.Fatalf("nil pass spawns")
-	}
-	if Spawns(pass, &ast.BlockStmt{}) != nil {
-		t.Fatalf("block spawns")
-	}
+}
+
+func firstFuncLit(fn ast.Node) *ast.FuncLit {
 	var lit *ast.FuncLit
-	ast.Inspect(decls["switches"], func(n ast.Node) bool {
+	ast.Inspect(fn, func(n ast.Node) bool {
 		if lit != nil {
 			return false
 		}
@@ -211,6 +211,18 @@ func TestSpawnShapes(t *testing.T) {
 		}
 		return true
 	})
+	return lit
+}
+
+func checkSpawnEdges(t *testing.T, pass *analysis.Pass, decls map[string]*ast.FuncDecl) {
+	t.Helper()
+	if Spawns(nil, nil) != nil {
+		t.Fatalf("nil pass spawns")
+	}
+	if Spawns(pass, &ast.BlockStmt{}) != nil {
+		t.Fatalf("block spawns")
+	}
+	lit := firstFuncLit(decls["switches"])
 	if lit == nil {
 		t.Fatalf("no literal found")
 	}
@@ -220,6 +232,14 @@ func TestSpawnShapes(t *testing.T) {
 	if NewGraph(pass, lit) == nil {
 		t.Fatalf("literal graph nil")
 	}
+}
+
+func TestSpawnShapes(t *testing.T) {
+	t.Parallel()
+	pass, decls := extraPass(t)
+	checkSwitchSpawns(t, pass, decls)
+	checkParamsubSpawns(t, pass, decls)
+	checkSpawnEdges(t, pass, decls)
 }
 
 func TestSelectJoins(t *testing.T) {
@@ -304,36 +324,32 @@ func typelocal(v int) int {
 }
 `
 
+func checkEscapeExtraCase(t *testing.T, f *ast.File, info *types.Info, name string, want bool) {
+	t.Helper()
+	decl := findDecl(f, name)
+	if decl == nil {
+		t.Fatalf("%s: decl missing", name)
+	}
+	v := escapeVar(info, decl, "v")
+	if v == nil {
+		t.Fatalf("%s: param missing", name)
+	}
+	if got := Escapes(info, decl, v); got != want {
+		t.Fatalf("%s: Escapes = %v, want %v", name, got, want)
+	}
+}
+
 func TestEscapeExtra(t *testing.T) {
 	t.Parallel()
 	f, info := checkTypes(t, extraEscapeSource)
 	want := map[string]bool{"conv": false, "imm": false, "inc": true, "typelocal": true}
 	for name, w := range want {
-		decl := findDecl(f, name)
-		if decl == nil {
-			t.Fatalf("%s: decl missing", name)
-		}
-		var v *types.Var
-		for _, field := range decl.Type.Params.List {
-			for _, id := range field.Names {
-				if id.Name == "v" {
-					if obj, ok := info.Defs[id].(*types.Var); ok {
-						v = obj
-					}
-				}
-			}
-		}
-		if v == nil {
-			t.Fatalf("%s: param missing", name)
-		}
-		if got := Escapes(info, decl, v); got != w {
-			t.Fatalf("%s: Escapes = %v, want %v", name, got, w)
-		}
+		checkEscapeExtraCase(t, f, info, name, w)
 	}
 }
 
-func TestFlowGuards(t *testing.T) {
-	t.Parallel()
+func checkGuardGraphs(t *testing.T) {
+	t.Helper()
 	if _, ok := KeyOf(nil, nil); ok {
 		t.Fatalf("nil info key")
 	}
@@ -354,6 +370,10 @@ func TestFlowGuards(t *testing.T) {
 	if Spawns(nil, nil) != nil {
 		t.Fatalf("nil spawns")
 	}
+}
+
+func checkGuardMeta(t *testing.T) {
+	t.Helper()
 	if StraightLine(nil, nil, nil) {
 		t.Fatalf("nil straight")
 	}
@@ -372,6 +392,10 @@ func TestFlowGuards(t *testing.T) {
 	if ft, _ := funcSig(&ast.BadStmt{}); ft != nil {
 		t.Fatalf("bad sig")
 	}
+}
+
+func checkGuardBreaks(t *testing.T) {
+	t.Helper()
 	if !breaksLine(&ast.GoStmt{}) {
 		t.Fatalf("go breaks")
 	}
@@ -387,6 +411,10 @@ func TestFlowGuards(t *testing.T) {
 	if breaksLine(&ast.ExprStmt{}) {
 		t.Fatalf("expr breaks")
 	}
+}
+
+func checkGuardBodies(t *testing.T) {
+	t.Helper()
 	f, _ := checkTypes(t, "package p\nfunc f() { go func() {}() }\n")
 	decl := findDecl(f, "f")
 	if fnBody(decl) == nil {
@@ -409,6 +437,14 @@ func TestFlowGuards(t *testing.T) {
 	if ft, _ := funcSig(lit); ft == nil {
 		t.Fatalf("literal sig nil")
 	}
+}
+
+func TestFlowGuards(t *testing.T) {
+	t.Parallel()
+	checkGuardGraphs(t)
+	checkGuardMeta(t)
+	checkGuardBreaks(t)
+	checkGuardBodies(t)
 }
 
 func TestReachExtra(t *testing.T) {

@@ -33,10 +33,7 @@ func stmtFor(v byte) string {
 func renderFuzz(data []byte) string {
 	var b strings.Builder
 	b.WriteString("package fuzz\n\nimport \"sync\"\n\nfunc FuzzFn(x int, m map[int]int, mu *sync.Mutex, wg *sync.WaitGroup) {\n")
-	n := len(data)
-	if n > 8 {
-		n = 8
-	}
+	n := min(len(data), 8)
 	for i := range n {
 		b.WriteString(stmtFor(data[i]))
 	}

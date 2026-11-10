@@ -13,10 +13,7 @@ import (
 )
 
 func fuzzOps(data []byte) []int {
-	n := len(data)
-	if n > 8 {
-		n = 8
-	}
+	n := min(len(data), 8)
 	ops := make([]int, 0, n)
 	for _, b := range data[:n] {
 		ops = append(ops, int(b)%6)

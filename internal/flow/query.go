@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 )
 
 // EndsInReturn reports whether the last statement of list is a return.
@@ -68,12 +69,7 @@ func listIndex(list []ast.Stmt, s ast.Stmt) int {
 }
 
 func anyBreak(list []ast.Stmt) bool {
-	for _, s := range list {
-		if breaksLine(s) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(list, breaksLine)
 }
 
 func breaksLine(s ast.Stmt) bool {

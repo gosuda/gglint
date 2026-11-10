@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/types/typeutil"
@@ -112,12 +113,7 @@ func isAtomicType(t types.Type) bool {
 }
 
 func hasKey(keys []flow.Key, k flow.Key) bool {
-	for _, x := range keys {
-		if x == k {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(keys, k)
 }
 
 func nilKey(info *types.Info, cond ast.Expr) (flow.Key, bool) {

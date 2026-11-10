@@ -111,3 +111,17 @@ func (s *atomicHolder) doublecheckAtomicSilent() *atomic.Int64 {
 	}
 	return s.n
 }
+
+func doublecheckNestedReported() *chkT {
+	f := func() *chkT {
+		if chkInst == nil { // want `chkInst is read outside the lock and assigned inside it, so a reader can see a half-built value: read it under the lock, or use sync.Once`
+			chkMu.Lock()
+			if chkInst == nil {
+				chkInst = newChk()
+			}
+			chkMu.Unlock()
+		}
+		return chkInst
+	}
+	return f()
+}

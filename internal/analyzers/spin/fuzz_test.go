@@ -36,10 +36,7 @@ func fuzzLoop(b byte) string {
 func fuzzSource(data []byte) string {
 	var sb strings.Builder
 	sb.WriteString("package fuzz\n\nimport (\n\"context\"\n\"sync\"\n\"sync/atomic\"\n\"time\"\n)\n\nfunc use(any) {}\n\nfunc FuzzFn(ch chan int, mu *sync.Mutex, n *atomic.Int64, d time.Duration, ctx context.Context) {\n_ = mu\n_ = n\n_ = d\n_ = ctx\n")
-	m := len(data)
-	if m > 4 {
-		m = 4
-	}
+	m := min(len(data), 4)
 	for _, b := range data[:m] {
 		sb.WriteString(fuzzLoop(b))
 	}

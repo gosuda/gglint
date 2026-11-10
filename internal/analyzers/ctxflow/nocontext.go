@@ -3,6 +3,7 @@ package ctxflow
 import (
 	"go/ast"
 	"go/types"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -179,12 +180,7 @@ func isWrapper(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, ri
 }
 
 func matchesReplacement(name, right string) bool {
-	for _, cand := range replacementNames(right) {
-		if name == cand {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(replacementNames(right), name)
 }
 
 func replacementNames(right string) []string {

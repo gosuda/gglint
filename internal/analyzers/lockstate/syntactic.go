@@ -363,9 +363,9 @@ func fieldType(cur types.Type, name string) (types.Type, bool) {
 	if !ok {
 		return nil, false
 	}
-	for i := range st.NumFields() {
-		if st.Field(i).Name() == name {
-			return st.Field(i).Type(), true
+	for field := range st.Fields() {
+		if field.Name() == name {
+			return field.Type(), true
 		}
 	}
 	return nil, false

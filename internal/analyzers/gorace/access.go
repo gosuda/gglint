@@ -136,8 +136,7 @@ func appendReadNode(info *types.Info, n ast.Node, stmt ast.Stmt, skip map[flow.K
 	if call, ok := n.(*ast.CallExpr); ok && isLenCall(info, call) {
 		return true, false
 	}
-	if idx, ok := n.(*ast.IndexExpr); ok {
-		appendIndexRead(info, idx, stmt, skip, out)
+	if idx, ok := n.(*ast.IndexExpr); ok && appendIndexedRead(info, idx, stmt, skip, out) {
 		return true, false
 	}
 	if appendSelectorRead(info, n, stmt, skip, out) {
@@ -149,12 +148,29 @@ func appendReadNode(info *types.Info, n ast.Node, stmt ast.Stmt, skip map[flow.K
 	return false, true
 }
 
-func appendIndexRead(info *types.Info, idx *ast.IndexExpr, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) {
+func appendIndexedRead(info *types.Info, idx *ast.IndexExpr, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) bool {
 	k, ok := flow.KeyOf(info, idx.X)
-	if !ok || skip[k] {
+	if !ok {
+		return false
+	}
+	if !skip[k] {
+		*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(info.TypeOf(idx.X))})
+	}
+	appendSubReads(info, idx.Index, stmt, skip, out)
+	return true
+}
+
+func appendSubReads(info *types.Info, e ast.Expr, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) {
+	if e == nil {
 		return
 	}
-	*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(info.TypeOf(idx.X))})
+	ast.Inspect(e, func(n ast.Node) bool {
+		handled, descend := appendReadNode(info, n, stmt, skip, out)
+		if handled {
+			return descend
+		}
+		return true
+	})
 }
 
 func appendSelectorRead(info *types.Info, n ast.Node, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) bool {
@@ -307,8 +323,9 @@ func appendCondNode(info *types.Info, n ast.Node, stmt ast.Stmt, out *[]varAcces
 	if idx, ok := n.(*ast.IndexExpr); ok {
 		if k, ok := flow.KeyOf(info, idx.X); ok {
 			*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(info.TypeOf(idx.X))})
+			*out = append(*out, exprReads(info, stmt, idx.Index)...)
+			return true, false
 		}
-		return true, false
 	}
 	if sel, ok := n.(*ast.SelectorExpr); ok && info.Selections[sel] != nil {
 		appendCondSelector(info, sel, stmt, out)

@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/ctrlflow"
@@ -211,10 +212,8 @@ func (g *guardScope) litHeld(lit *ast.FuncLit, stmt ast.Node) []flow.Key {
 
 func commonKey(a, b []flow.Key) bool {
 	for _, x := range a {
-		for _, y := range b {
-			if x == y {
-				return true
-			}
+		if slices.Contains(b, x) {
+			return true
 		}
 	}
 	return false
@@ -298,12 +297,7 @@ func bodyContains(body *ast.BlockStmt, pos token.Pos) bool {
 }
 
 func exitsListAfter(fn, site ast.Node) bool {
-	for _, after := range stmtListAfter(fn, site) {
-		if isLoopExit(after) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(stmtListAfter(fn, site), isLoopExit)
 }
 
 func stmtListAfter(fn, site ast.Node) []ast.Stmt {

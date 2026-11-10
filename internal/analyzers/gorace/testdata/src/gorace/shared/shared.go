@@ -215,3 +215,13 @@ func sharedFieldMapSilent() {
 	}()
 	_ = r.m[2]
 }
+
+func sharedIndexReadReported(m map[int]int) {
+	k := 0
+	go func() { // want `k is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		if m[k] > 0 {
+			println("x")
+		}
+	}()
+	k = 1
+}

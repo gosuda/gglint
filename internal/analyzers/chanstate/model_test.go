@@ -37,21 +37,11 @@ func modStep(op string, cur modState) modState {
 }
 
 func modHasMake(seq []string) bool {
-	for _, op := range seq {
-		if op == "make" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(seq, "make")
 }
 
 func modHasEscape(seq []string) bool {
-	for _, op := range seq {
-		if op == "escape" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(seq, "escape")
 }
 
 func modDouble(op string, pre modState) bool {
