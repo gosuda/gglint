@@ -35,7 +35,22 @@ func isCloseOf(pass *analysis.Pass, call *ast.CallExpr, v *types.Var) bool {
 	if !ok {
 		return false
 	}
-	return exactVar(pass, recv, v)
+	if !exactVar(pass, recv, v) {
+		return false
+	}
+	return closeOwns(pass, call)
+}
+
+func closeOwns(pass *analysis.Pass, call *ast.CallExpr) bool {
+	fn := typeutil.StaticCallee(pass.TypesInfo, call)
+	if fn == nil {
+		return false
+	}
+	pkg := fn.Pkg()
+	if pkg == nil {
+		return false
+	}
+	return closeFailPkgs[pkg.Path()]
 }
 
 func closeRecv(pass *analysis.Pass, call *ast.CallExpr) (ast.Expr, bool) {
@@ -182,7 +197,7 @@ func freeTargets(pass *analysis.Pass, fn ast.Node, e ast.Expr, v *types.Var) boo
 	}
 	switch x := e.(type) {
 	case *ast.SliceExpr:
-		if x.X == nil {
+		if !wholeSlice(pass, x, v) {
 			return false
 		}
 		return freeTargets(pass, fn, x.X, v)
@@ -192,6 +207,45 @@ func freeTargets(pass *analysis.Pass, fn ast.Node, e ast.Expr, v *types.Var) boo
 		return freeTempTarget(pass, fn, x, v)
 	}
 	return false
+}
+
+func wholeSlice(pass *analysis.Pass, x *ast.SliceExpr, v *types.Var) bool {
+	if x.X == nil || x.Max != nil {
+		return false
+	}
+	if !exactVar(pass, x.X, v) {
+		return false
+	}
+	if x.Low != nil && !isZeroExpr(pass, x.Low) {
+		return false
+	}
+	if x.High == nil {
+		return true
+	}
+	return isLenOf(pass, x.High, v)
+}
+
+func isZeroExpr(pass *analysis.Pass, e ast.Expr) bool {
+	tv, ok := pass.TypesInfo.Types[ast.Unparen(e)]
+	if !ok {
+		return false
+	}
+	return tv.Value != nil && tv.Value.String() == "0"
+}
+
+func isLenOf(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	if !plainCall(pass, call) {
+		return false
+	}
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok || id.Name != lenBuiltin {
+		return false
+	}
+	return exactVar(pass, call.Args[0], v)
 }
 
 func freeConvTarget(pass *analysis.Pass, fn ast.Node, e ast.Expr, call *ast.CallExpr, v *types.Var) bool {
@@ -247,14 +301,29 @@ func freeTempSkip(n, scope ast.Node) bool {
 
 func freeTempTargeted(pass *analysis.Pass, n ast.Node, tv *types.Var) (*ast.AssignStmt, bool) {
 	as, ok := n.(*ast.AssignStmt)
-	if !ok || len(as.Lhs) != 1 {
+	if !ok {
 		return nil, false
 	}
-	lid, ok := ast.Unparen(as.Lhs[0]).(*ast.Ident)
-	if !ok || freeTempVar(pass, as, lid) != tv {
-		return nil, false
+	for _, lhs := range as.Lhs {
+		lid, ok := ast.Unparen(lhs).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if tempBinds(pass, as, lid, tv) {
+			return as, true
+		}
 	}
-	return as, true
+	return nil, false
+}
+
+func tempBinds(pass *analysis.Pass, as *ast.AssignStmt, lid *ast.Ident, tv *types.Var) bool {
+	if v, ok := pass.TypesInfo.Defs[lid].(*types.Var); ok && v == tv {
+		return true
+	}
+	if v, ok := pass.TypesInfo.Uses[lid].(*types.Var); ok && v == tv {
+		return true
+	}
+	return freeTempVar(pass, as, lid) == tv
 }
 
 func freeTempSingle(as *ast.AssignStmt) bool {
@@ -315,6 +384,8 @@ const (
 	closeMethodRead        = "Read"
 	closeMethodWrite       = "Write"
 	closeMethodWriteString = "WriteString"
+	lenBuiltin             = "len"
+	capBuiltin             = "cap"
 )
 
 var closeFailPkgs = map[string]bool{"os": true, "net": true, "net/http": true}
@@ -428,7 +499,7 @@ func mentionsVar(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 		if found {
 			return false
 		}
-		if _, ok := x.(*ast.FuncLit); ok {
+		if pruneMention(pass, x) {
 			return false
 		}
 		id, ok := x.(*ast.Ident)
@@ -441,6 +512,38 @@ func mentionsVar(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 		return !found
 	})
 	return found
+}
+
+func pruneMention(pass *analysis.Pass, x ast.Node) bool {
+	if _, ok := x.(*ast.FuncLit); ok {
+		return true
+	}
+	if call, ok := x.(*ast.CallExpr); ok && lenCapCall(pass, call) {
+		return true
+	}
+	if bin, ok := x.(*ast.BinaryExpr); ok && nilCompare(pass, bin) {
+		return true
+	}
+	return false
+}
+
+func lenCapCall(pass *analysis.Pass, call *ast.CallExpr) bool {
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if id.Name != lenBuiltin && id.Name != capBuiltin {
+		return false
+	}
+	_, ok = pass.TypesInfo.Uses[id].(*types.Builtin)
+	return ok
+}
+
+func nilCompare(pass *analysis.Pass, bin *ast.BinaryExpr) bool {
+	if bin.Op != token.EQL && bin.Op != token.NEQ {
+		return false
+	}
+	return pass.TypesInfo.Types[bin.X].IsNil() || pass.TypesInfo.Types[bin.Y].IsNil()
 }
 
 func exprMentions(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
@@ -470,7 +573,7 @@ func mentionPos(pass *analysis.Pass, n ast.Node, v *types.Var) token.Pos {
 		if pos != token.NoPos {
 			return false
 		}
-		if _, ok := x.(*ast.FuncLit); ok {
+		if pruneMention(pass, x) {
 			return false
 		}
 		id, ok := x.(*ast.Ident)
@@ -564,7 +667,7 @@ func plainCall(pass *analysis.Pass, call *ast.CallExpr) bool {
 	if !ok {
 		return false
 	}
-	if id.Name != "len" && id.Name != "cap" {
+	if id.Name != lenBuiltin && id.Name != capBuiltin {
 		return false
 	}
 	_, ok = pass.TypesInfo.Uses[id].(*types.Builtin)

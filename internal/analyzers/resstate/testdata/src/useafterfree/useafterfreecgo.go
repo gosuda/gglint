@@ -12,3 +12,4 @@ func useafterfreeReportedCgo() {
 	C.free(unsafe.Pointer(p))
 	*(*byte)(p) = 1 // want "is used after it was freed"
 }
+

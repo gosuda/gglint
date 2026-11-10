@@ -78,6 +78,9 @@ func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]b
 		if !ok {
 			continue
 		}
+		if recvFreshInBody(recvKey, body) {
+			continue
+		}
 		method, ok := invalidOther(invalid[recvKey], viewMethod)
 		if !ok {
 			continue
@@ -88,6 +91,14 @@ func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]b
 		seen[s.Pos()] = true
 		pass.Reportf(s.Pos(), "%s points into the buffer of %s, and the next %s call overwrites it: store a copy made with bytes.Clone", types.ExprString(v), types.ExprString(recvExpr), method)
 	}
+}
+
+func recvFreshInBody(k flow.Key, body ast.Node) bool {
+	v, ok := k.Root.(*types.Var)
+	if !ok {
+		return false
+	}
+	return v.Pos() >= body.Pos() && v.Pos() <= body.End()
 }
 
 func invalidOther(methods []string, viewMethod string) (string, bool) {
@@ -212,7 +223,7 @@ func viewInvalidRecvTable(name string) []viewRecv {
 	case closeMethodWrite, viewWriteStringName:
 		return []viewRecv{buffer}
 	case closeMethodRead:
-		return []viewRecv{reader, buffer}
+		return []viewRecv{reader}
 	case viewReadSliceName, viewPeekName, viewDiscardName:
 		return []viewRecv{reader}
 	}
@@ -450,15 +461,13 @@ func appendElemArgs(call *ast.CallExpr, out []ast.Expr) []ast.Expr {
 
 func appendAssignRHS(pass *analysis.Pass, loop ast.Node, as *ast.AssignStmt, out []ast.Expr) []ast.Expr {
 	if len(as.Rhs) == 1 && len(as.Lhs) > 1 {
-		for _, lhs := range as.Lhs {
-			if fieldOrMapTarget(pass, lhs) || outsideVar(pass, loop, lhs) {
-				return append(out, as.Rhs[0])
-			}
+		if fieldOrMapTarget(pass, loop, as.Lhs[0]) || outsideVar(pass, loop, as.Lhs[0]) {
+			return append(out, as.Rhs[0])
 		}
 		return out
 	}
 	for i, lhs := range as.Lhs {
-		if fieldOrMapTarget(pass, lhs) {
+		if fieldOrMapTarget(pass, loop, lhs) {
 			out = appendRHS(as, i, out)
 			continue
 		}
@@ -482,14 +491,45 @@ func appendRHS(as *ast.AssignStmt, i int, out []ast.Expr) []ast.Expr {
 	return out
 }
 
-func fieldOrMapTarget(pass *analysis.Pass, lhs ast.Expr) bool {
+func fieldOrMapTarget(pass *analysis.Pass, loop ast.Node, lhs ast.Expr) bool {
 	switch x := ast.Unparen(lhs).(type) {
 	case *ast.SelectorExpr:
-		return true
+		return !rootInLoop(pass, loop, x)
 	case *ast.IndexExpr:
-		return viewIndexIsMap(pass, x.X)
+		if !viewIndexIsMap(pass, x.X) {
+			return false
+		}
+		return !rootInLoop(pass, loop, x)
 	}
 	return false
+}
+
+func rootInLoop(pass *analysis.Pass, loop ast.Node, e ast.Expr) bool {
+	id := rootIdent(e)
+	if id == nil || id.Name == "_" {
+		return false
+	}
+	v := viewVarOf(pass, id)
+	if v == nil {
+		return false
+	}
+	return v.Pos() >= loop.Pos() && v.Pos() <= loop.End()
+}
+
+func rootIdent(e ast.Expr) *ast.Ident {
+	for {
+		e = ast.Unparen(e)
+		switch x := e.(type) {
+		case *ast.Ident:
+			return x
+		case *ast.SelectorExpr:
+			e = x.X
+		case *ast.IndexExpr:
+			e = x.X
+		default:
+			return nil
+		}
+	}
 }
 
 func viewIndexIsMap(pass *analysis.Pass, x ast.Expr) bool {

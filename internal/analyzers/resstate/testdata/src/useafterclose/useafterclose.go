@@ -183,3 +183,16 @@ func useaftercloseSilentWriteTo() int {
 	p.Close()
 	return p.WriteTo()
 }
+
+type sharedWrap struct {
+	*os.File
+}
+
+func (s sharedWrap) Close() error { return nil }
+
+func useaftercloseSilentWrapperClose(p string, b []byte) {
+	f, _ := os.Open(p)
+	s := sharedWrap{f}
+	s.Close()
+	_, _ = s.Write(b)
+}

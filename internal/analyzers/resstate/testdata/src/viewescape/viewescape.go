@@ -158,9 +158,9 @@ func viewescapeReportedMultiTarget(r *bufio.Reader, h *viewHolder) {
 	}
 }
 
-func viewescapeReportedBufferRead(buf *bytes.Buffer, out [][]byte) [][]byte {
+func viewescapeSilentBufferRead(buf *bytes.Buffer, out [][]byte) [][]byte {
 	for buf.Len() > 0 {
-		out = append(out, buf.Bytes()) // want "points into the buffer of"
+		out = append(out, buf.Bytes())
 		_, _ = buf.Read(make([]byte, 1))
 	}
 	return out
@@ -210,6 +210,36 @@ func viewescapeSilentRangeReassign(sc *bufio.Scanner, ch chan []byte, out [][]by
 		for b = range ch {
 		}
 		out = append(out, b)
+	}
+	return out
+}
+
+func viewescapeSilentDiscardedPeek(r *bufio.Reader) {
+	var err error
+	for {
+		_, err = r.Peek(1)
+		if err != nil {
+			break
+		}
+		_, _ = r.Discard(1)
+	}
+}
+
+func viewescapeSilentLoopLocalField(sc *bufio.Scanner) int {
+	n := 0
+	for sc.Scan() {
+		var rec viewHolder
+		rec.b = sc.Bytes()
+		n += len(rec.b)
+	}
+	return n
+}
+
+func viewescapeSilentFreshBuffer(in []string, out [][]byte) [][]byte {
+	for _, s := range in {
+		var b bytes.Buffer
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes())
 	}
 	return out
 }

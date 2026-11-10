@@ -78,3 +78,34 @@ func useafterfreeSilentElementArg() {
 	syscall.Munmap(bufs[0])
 	syscall.Munmap(bufs[1])
 }
+
+func freeOther() ([]byte, error) { return nil, nil }
+
+func useafterfreeSilentTempReassign() byte {
+	b := make([]byte, 4096)
+	p := b
+	p, _ = freeOther()
+	syscall.Munmap(p)
+	return b[0]
+}
+
+func useafterfreeSilentPartialSlice() int {
+	b := make([]byte, 4096)
+	syscall.Munmap(b[:2048])
+	return int(b[2048])
+}
+
+func useafterfreeSilentLenAfterFree() int {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	return len(b)
+}
+
+func useafterfreeSilentNilCompareAfterFree() bool {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	if b == nil {
+		return true
+	}
+	return false
+}
