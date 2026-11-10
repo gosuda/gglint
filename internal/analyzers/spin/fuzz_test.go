@@ -13,7 +13,7 @@ import (
 )
 
 func fuzzLoop(b byte) string {
-	switch b % 7 {
+	switch b % 8 {
 	case 0:
 		return "for { v := <-ch; use(v) }\n"
 	case 1:
@@ -26,6 +26,8 @@ func fuzzLoop(b byte) string {
 		return "for { old := n.Load(); if n.CompareAndSwap(old, old+1) { break } }\n"
 	case 5:
 		return "for i := 0; i < 3; i++ { if ctx.Err() != nil { continue } }\n"
+	case 6:
+		return "{ i := 0; for i < 3 { i++; if ctx.Err() != nil { continue } } }\n"
 	default:
 		return "for i := 0; i < 3; i++ { use(i) }\n"
 	}
@@ -87,6 +89,10 @@ func FuzzNoPanic(f *testing.F) {
 	f.Add([]byte{1})
 	f.Add([]byte{2})
 	f.Add([]byte{3})
+	f.Add([]byte{4})
+	f.Add([]byte{5})
+	f.Add([]byte{6})
+	f.Add([]byte{7})
 	f.Add([]byte{0, 1, 2, 3})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		checkFuzzShapes(t, data)

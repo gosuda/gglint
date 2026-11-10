@@ -164,10 +164,10 @@ func closedrecvReportedInitPost() int {
 	}
 }
 
-func closedrecvReportedAfter() int {
+func closedrecvSilentAfter() int {
 	ch := make(chan int)
 	sum := 0
-	for { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
+	for {
 		sum += <-ch
 		if sum > 9 {
 			break

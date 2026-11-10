@@ -54,7 +54,7 @@ func staleShape(pass *analysis.Pass, loop *ast.ForStmt) (*types.Var, bool) {
 		return nil, false
 	}
 	old, ok := casOld(pass.TypesInfo, check.Cond)
-	if !ok || !exitsLoop(check) {
+	if !ok || !exitsLoop(pass.TypesInfo, check) {
 		return nil, false
 	}
 	return old, true
@@ -75,18 +75,78 @@ func firstCheck(loop *ast.ForStmt) (*ast.IfStmt, bool) {
 	return check, true
 }
 
-func exitsLoop(check *ast.IfStmt) bool {
+func exitsLoop(info *types.Info, check *ast.IfStmt) bool {
 	if len(check.Body.List) != 1 {
 		return false
 	}
 	switch t := check.Body.List[0].(type) {
 	case *ast.BranchStmt:
-		return t.Tok == token.BREAK && t.Label == nil
+		if t.Tok != token.BREAK {
+			return false
+		}
 	case *ast.ReturnStmt:
-		return true
 	default:
 		return false
 	}
+	return !elseLeaves(info, check)
+}
+
+func elseLeaves(info *types.Info, check *ast.IfStmt) bool {
+	if check.Else == nil {
+		return false
+	}
+	switch e := check.Else.(type) {
+	case *ast.BlockStmt:
+		return blockLeaves(info, e)
+	case *ast.IfStmt:
+		return ifLeaves(info, e)
+	default:
+		return false
+	}
+}
+
+func ifLeaves(info *types.Info, check *ast.IfStmt) bool {
+	if check.Body == nil || !blockLeaves(info, check.Body) {
+		return false
+	}
+	return elseLeaves(info, check)
+}
+
+func blockLeaves(info *types.Info, block *ast.BlockStmt) bool {
+	if block == nil || len(block.List) == 0 {
+		return false
+	}
+	return stmtLeaves(info, block.List[len(block.List)-1])
+}
+
+func stmtLeaves(info *types.Info, stmt ast.Stmt) bool {
+	switch t := stmt.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.BranchStmt:
+		return t.Tok == token.BREAK || t.Tok == token.GOTO
+	case *ast.ExprStmt:
+		return isPanicCall(info, t.X)
+	case *ast.BlockStmt:
+		return blockLeaves(info, t)
+	case *ast.IfStmt:
+		return ifLeaves(info, t)
+	default:
+		return false
+	}
+}
+
+func isPanicCall(info *types.Info, e ast.Expr) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	b, ok := info.ObjectOf(id).(*types.Builtin)
+	return ok && b.Name() == "panic"
 }
 
 func casOld(info *types.Info, e ast.Expr) (*types.Var, bool) {

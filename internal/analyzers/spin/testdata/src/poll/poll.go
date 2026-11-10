@@ -161,3 +161,27 @@ func pollSilentDone(ctx context.Context, ch chan int) {
 		}
 	}
 }
+
+func pollSilentDefaultReturn(ch chan int) {
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			return
+		}
+	}
+}
+
+func pollSilentDefaultRange(ch chan int) {
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			for v := range ch {
+				use(v)
+			}
+		}
+	}
+}

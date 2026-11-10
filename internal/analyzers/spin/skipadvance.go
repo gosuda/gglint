@@ -18,24 +18,32 @@ var skipadvanceAnalyzer = &analysis.Analyzer{
 }
 
 func runSkipadvance(pass *analysis.Pass) (any, error) {
-	forLoops(pass, func(_ inspector.Cursor, loop *ast.ForStmt) {
-		checkSkipadvance(pass, loop)
+	forLoops(pass, func(cur inspector.Cursor, loop *ast.ForStmt) {
+		checkSkipadvance(pass, cur, loop)
 	})
 	return nil, nil
 }
 
-func checkSkipadvance(pass *analysis.Pass, loop *ast.ForStmt) {
+func checkSkipadvance(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 	if loop.Cond == nil || loop.Post != nil || loop.Body == nil {
 		return
 	}
 	vars := condVars(pass.TypesInfo, loop.Cond)
+	label := loopLabel(cur)
 	for j, stmt := range loop.Body.List {
 		check, ok := stmt.(*ast.IfStmt)
 		if !ok || !errorCompared(pass.TypesInfo, check.Cond) {
 			continue
 		}
-		checkContinues(pass, loop.Body.List, j, check, vars)
+		checkContinues(pass, loop.Body.List, j, check, vars, label)
 	}
+}
+
+func loopLabel(cur inspector.Cursor) string {
+	if labeled, ok := cur.Parent().Node().(*ast.LabeledStmt); ok {
+		return labeled.Label.Name
+	}
+	return ""
 }
 
 func condVars(info *types.Info, cond ast.Expr) map[*types.Var]bool {
@@ -51,11 +59,14 @@ func condVars(info *types.Info, cond ast.Expr) map[*types.Var]bool {
 	return vars
 }
 
-func checkContinues(pass *analysis.Pass, list []ast.Stmt, j int, check *ast.IfStmt, vars map[*types.Var]bool) {
+func checkContinues(pass *analysis.Pass, list []ast.Stmt, j int, check *ast.IfStmt, vars map[*types.Var]bool, label string) {
 	info := pass.TypesInfo
 	for k, inner := range check.Body.List {
 		branch, ok := inner.(*ast.BranchStmt)
 		if !ok || branch.Tok != token.CONTINUE {
+			continue
+		}
+		if branch.Label != nil && (label == "" || branch.Label.Name != label) {
 			continue
 		}
 		if advancedBefore(info, list, j, check, k, vars) {

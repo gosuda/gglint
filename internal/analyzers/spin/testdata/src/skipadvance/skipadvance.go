@@ -164,3 +164,16 @@ func skipadvanceReportedRangeAdvance() {
 		}
 	}
 }
+
+func skipadvanceSilentOuterLabel() {
+	i := 0
+Outer:
+	for j := 0; j < len(xs); j++ {
+		for i < len(xs) {
+			if err := doStep(xs[i]); err != nil {
+				continue Outer
+			}
+			i++
+		}
+	}
+}

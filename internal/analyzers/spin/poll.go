@@ -3,6 +3,7 @@ package spin
 import (
 	"go/ast"
 	"go/token"
+	"go/types"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -17,13 +18,13 @@ var pollAnalyzer = &analysis.Analyzer{
 }
 
 func runPoll(pass *analysis.Pass) (any, error) {
-	forLoops(pass, func(_ inspector.Cursor, loop *ast.ForStmt) {
-		checkPoll(pass, loop)
+	forLoops(pass, func(cur inspector.Cursor, loop *ast.ForStmt) {
+		checkPoll(pass, cur, loop)
 	})
 	return nil, nil
 }
 
-func checkPoll(pass *analysis.Pass, loop *ast.ForStmt) {
+func checkPoll(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 	sel, def, comms, ok := pollSelect(loop)
 	if !ok {
 		return
@@ -31,10 +32,115 @@ func checkPoll(pass *analysis.Pass, loop *ast.ForStmt) {
 	if defaultSpins(pass, def) {
 		return
 	}
+	if defaultExits(pass, cur, def) {
+		return
+	}
 	if comms == 1 && doneRecv(pass, sel) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it")
+}
+
+func defaultExits(pass *analysis.Pass, cur inspector.Cursor, def *ast.CommClause) bool {
+	if len(def.Body) == 0 {
+		return false
+	}
+	return pollLeaves(pass, cur, def.Body[len(def.Body)-1])
+}
+
+func pollLeaves(pass *analysis.Pass, cur inspector.Cursor, stmt ast.Stmt) bool {
+	switch t := stmt.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.BranchStmt:
+		return pollBranchLeaves(pass, cur, t)
+	case *ast.ExprStmt:
+		return isPollPanic(pass.TypesInfo, t.X)
+	case *ast.BlockStmt:
+		return pollBlockTailLeaves(pass, cur, t)
+	case *ast.IfStmt:
+		return pollIfLeaves(pass, cur, t)
+	default:
+		return false
+	}
+}
+
+func pollBranchLeaves(pass *analysis.Pass, cur inspector.Cursor, t *ast.BranchStmt) bool {
+	if t.Tok == token.GOTO {
+		return true
+	}
+	if t.Tok == token.BREAK && t.Label != nil {
+		return !breaksSelect(pass, cur, t.Label)
+	}
+	return false
+}
+
+func pollBlockTailLeaves(pass *analysis.Pass, cur inspector.Cursor, t *ast.BlockStmt) bool {
+	if len(t.List) == 0 {
+		return false
+	}
+	return pollLeaves(pass, cur, t.List[len(t.List)-1])
+}
+
+func pollIfLeaves(pass *analysis.Pass, cur inspector.Cursor, check *ast.IfStmt) bool {
+	if check.Body == nil || len(check.Body.List) == 0 {
+		return false
+	}
+	if !pollLeaves(pass, cur, check.Body.List[len(check.Body.List)-1]) {
+		return false
+	}
+	if check.Else == nil {
+		return false
+	}
+	switch e := check.Else.(type) {
+	case *ast.BlockStmt:
+		if len(e.List) == 0 {
+			return false
+		}
+		return pollLeaves(pass, cur, e.List[len(e.List)-1])
+	case *ast.IfStmt:
+		return pollIfLeaves(pass, cur, e)
+	default:
+		return false
+	}
+}
+
+func breaksSelect(pass *analysis.Pass, cur inspector.Cursor, label *ast.Ident) bool {
+	obj := pass.TypesInfo.ObjectOf(label)
+	if obj == nil {
+		return false
+	}
+	fn := enclosingFunc(cur)
+	if fn == nil {
+		return false
+	}
+	selectLabeled := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		labeled, ok := n.(*ast.LabeledStmt)
+		if !ok {
+			return true
+		}
+		if pass.TypesInfo.ObjectOf(labeled.Label) != obj {
+			return true
+		}
+		_, isSelect := labeled.Stmt.(*ast.SelectStmt)
+		selectLabeled = isSelect
+		return false
+	})
+	return selectLabeled
+}
+
+func isPollPanic(info *types.Info, e ast.Expr) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	b, ok := info.ObjectOf(id).(*types.Builtin)
+	return ok && b.Name() == "panic"
 }
 
 func pollSelect(loop *ast.ForStmt) (*ast.SelectStmt, *ast.CommClause, int, bool) {
@@ -81,23 +187,39 @@ func selectSplit(sel *ast.SelectStmt) (*ast.CommClause, int, bool) {
 func defaultWaits(pass *analysis.Pass, stmt ast.Stmt) bool {
 	waits := false
 	walkNoLit(stmt, func(n ast.Node) bool {
-		switch t := n.(type) {
-		case *ast.CallExpr:
-			if isCodeCall(pass.TypesInfo, t) {
-				waits = true
-			}
-		case *ast.SendStmt:
-			waits = true
-		case *ast.UnaryExpr:
-			if t.Op == token.ARROW {
-				waits = true
-			}
-		case *ast.SelectStmt:
-			waits = true
-		}
+		waits = waits || pollNodeWaits(pass, n)
 		return !waits
 	})
 	return waits
+}
+
+func pollNodeWaits(pass *analysis.Pass, n ast.Node) bool {
+	switch t := n.(type) {
+	case *ast.CallExpr:
+		return isCodeCall(pass.TypesInfo, t)
+	case *ast.SendStmt:
+		return true
+	case *ast.UnaryExpr:
+		return t.Op == token.ARROW
+	case *ast.SelectStmt:
+		return true
+	case *ast.RangeStmt:
+		return isChanRange(pass, t)
+	default:
+		return false
+	}
+}
+
+func isChanRange(pass *analysis.Pass, t *ast.RangeStmt) bool {
+	if t.X == nil {
+		return false
+	}
+	typ := pass.TypesInfo.TypeOf(t.X)
+	if typ == nil {
+		return false
+	}
+	_, ok := typ.Underlying().(*types.Chan)
+	return ok
 }
 
 func doneRecv(pass *analysis.Pass, sel *ast.SelectStmt) bool {

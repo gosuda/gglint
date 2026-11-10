@@ -214,3 +214,15 @@ func stalecasReportedIfInit(n *atomic.Int64) {
 	}
 	use(i)
 }
+
+func stalecasSilentElseReturn(n *atomic.Int64) int {
+	old := n.Load()
+	for {
+		if n.CompareAndSwap(old, old+1) {
+			break
+		} else {
+			return 0
+		}
+	}
+	return 1
+}

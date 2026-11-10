@@ -40,7 +40,7 @@ func checkClosedrecv(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStm
 	if !isLocalVar(fn, v) || !isChan(v.Type()) {
 		return
 	}
-	if !closesBefore(pass, fn, v) {
+	if !closesBefore(pass, fn, loop, v) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "after close, this receive from %s returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false", v.Name())
@@ -146,11 +146,14 @@ func isChan(t types.Type) bool {
 	return ok
 }
 
-func closesBefore(pass *analysis.Pass, fn ast.Node, v *types.Var) bool {
+func closesBefore(pass *analysis.Pass, fn ast.Node, loop *ast.ForStmt, v *types.Var) bool {
 	closed := false
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if closed {
 			return false
+		}
+		if n == nil || n.Pos() >= loop.Pos() {
+			return n == nil
 		}
 		lit, ok := spawnedBody(n)
 		if !ok {
