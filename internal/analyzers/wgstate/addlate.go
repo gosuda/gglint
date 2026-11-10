@@ -22,6 +22,18 @@ var addlateAnalyzer = &analysis.Analyzer{
 	Run:      runAddlate,
 }
 
+type gateSet struct {
+	chans map[flow.Key][]token.Pos
+	mutex map[flow.Key][]token.Pos
+}
+
+type lateGroup struct {
+	list  []ast.Stmt
+	goIdx int
+	seen  map[token.Pos]bool
+	gates gateSet
+}
+
 func runAddlate(pass *analysis.Pass) (any, error) {
 	eachFunc(pass, func(fn ast.Node) {
 		checkAddlate(pass, fn)
@@ -37,31 +49,39 @@ func checkAddlate(pass *analysis.Pass, fn ast.Node) {
 			if !ok {
 				continue
 			}
-			checkGoAddlate(pass, fn, g, list[i+1:], seen)
+			checkGoAddlate(pass, fn, g, list, i, seen)
 		}
 	})
 }
 
-func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, after []ast.Stmt, seen map[token.Pos]bool) {
+func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, list []ast.Stmt, goIdx int, seen map[token.Pos]bool) {
 	lit, ok := ast.Unparen(g.Call.Fun).(*ast.FuncLit)
 	if !ok || lit.Body == nil {
 		return
 	}
-	dones := donePositions(pass, lit)
-	if len(dones) == 0 {
+	plain, deferred := donePositions(pass, lit)
+	if len(plain) == 0 && len(deferred) == 0 {
 		return
 	}
 	gates := gatePositions(pass, lit)
-	for _, k := range sortedDoneKeys(dones) {
+	group := lateGroup{list: list, goIdx: goIdx, seen: seen, gates: gates}
+	for _, k := range sortedDoneKeys(plain, deferred) {
 		if hasAddBefore(pass, fn, g, k) {
 			continue
 		}
-		reportLateAdds(pass, k, after, seen, dones[k], gates)
+		reportLateAdds(pass, group, k, plain[k])
 	}
 }
 
-func sortedDoneKeys(m map[flow.Key][]token.Pos) []flow.Key {
-	keys := slices.Collect(maps.Keys(m))
+func sortedDoneKeys(plain, deferred map[flow.Key][]token.Pos) []flow.Key {
+	merged := map[flow.Key]struct{}{}
+	for k := range plain {
+		merged[k] = struct{}{}
+	}
+	for k := range deferred {
+		merged[k] = struct{}{}
+	}
+	keys := slices.Collect(maps.Keys(merged))
 	slices.SortFunc(keys, func(a, b flow.Key) int {
 		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(keyName(a), keyName(b)))
 	})
@@ -75,52 +95,48 @@ func keyName(k flow.Key) string {
 	return k.Root.Name()
 }
 
-func reportLateAdds(pass *analysis.Pass, k flow.Key, after []ast.Stmt, seen map[token.Pos]bool, dones []token.Pos, gates map[flow.Key][]token.Pos) {
-	info := pass.TypesInfo
+func reportLateAdds(pass *analysis.Pass, group lateGroup, k flow.Key, plain []token.Pos) {
+	after := group.list[group.goIdx+1:]
 	for _, s := range after {
 		call, ok := directCall(s)
 		if !ok {
 			continue
 		}
-		ak, text, ok := wgKey(info, call, "Add")
+		ak, text, ok := wgKey(pass.TypesInfo, call, "Add")
 		if !ok || ak != k {
 			continue
 		}
-		if seen[call.Pos()] {
+		if group.seen[call.Pos()] {
 			continue
 		}
-		if gatedAdd(pass, after, call.Pos(), dones, gates) {
+		if gatedAdd(pass, group, call.Pos(), plain) {
 			continue
 		}
-		seen[call.Pos()] = true
+		group.seen[call.Pos()] = true
 		pass.Reportf(call.Pos(), "this Add runs after the goroutine it counts has started, so Wait can return early: call %s.Add before the go statement", text)
 	}
 }
 
-func gatedAdd(pass *analysis.Pass, after []ast.Stmt, addPos token.Pos, dones []token.Pos, gates map[flow.Key][]token.Pos) bool {
-	for _, gk := range gatingKeys(gates, dones) {
-		if releasedAfter(pass, after, addPos, gk) {
+func gatedAdd(pass *analysis.Pass, group lateGroup, addPos token.Pos, plain []token.Pos) bool {
+	after := group.list[group.goIdx+1:]
+	for gk, gpos := range group.gates.chans {
+		if gatesAll(gpos, plain) && releasedChanAfter(pass, after, addPos, gk) {
+			return true
+		}
+	}
+	for gk, gpos := range group.gates.mutex {
+		if gatesAll(gpos, plain) && heldBefore(pass, group.list, group.goIdx, addPos, gk) && releasedMutexAfter(pass, after, addPos, gk) {
 			return true
 		}
 	}
 	return false
 }
 
-func gatingKeys(gates map[flow.Key][]token.Pos, dones []token.Pos) []flow.Key {
-	out := []flow.Key{}
-	for k, gpos := range gates {
-		if gatesAll(gpos, dones) {
-			out = append(out, k)
-		}
+func gatesAll(gpos, plain []token.Pos) bool {
+	if len(plain) == 0 {
+		return true
 	}
-	return out
-}
-
-func gatesAll(gpos, dones []token.Pos) bool {
-	if len(dones) == 0 {
-		return false
-	}
-	for _, d := range dones {
+	for _, d := range plain {
 		if !hasEarlier(gpos, d) {
 			return false
 		}
@@ -137,35 +153,88 @@ func hasEarlier(gpos []token.Pos, d token.Pos) bool {
 	return false
 }
 
-func releasedAfter(pass *analysis.Pass, after []ast.Stmt, addPos token.Pos, k flow.Key) bool {
-	for _, s := range after {
-		if s.Pos() <= addPos {
+func heldBefore(pass *analysis.Pass, list []ast.Stmt, goIdx int, addPos token.Pos, k flow.Key) bool {
+	for _, s := range list[:goIdx] {
+		if !isLockStmt(pass, s, k) {
 			continue
 		}
-		if releasesKey(pass, s, k) {
+		if noUnlockBetween(pass, list, s.Pos(), addPos, k) {
 			return true
 		}
 	}
 	return false
 }
 
-func releasesKey(pass *analysis.Pass, s ast.Stmt, k flow.Key) bool {
-	if send, ok := unwrap(s).(*ast.SendStmt); ok {
-		if ck, ok := flow.KeyOf(pass.TypesInfo, send.Chan); ok && ck == k {
+func noUnlockBetween(pass *analysis.Pass, list []ast.Stmt, lockPos, addPos token.Pos, k flow.Key) bool {
+	for _, s := range list {
+		if s.Pos() <= lockPos || s.Pos() > addPos {
+			continue
+		}
+		if isUnlockStmt(pass, s, k) {
+			return false
+		}
+	}
+	return true
+}
+
+func releasedChanAfter(pass *analysis.Pass, after []ast.Stmt, addPos token.Pos, k flow.Key) bool {
+	for _, s := range after {
+		if s.Pos() <= addPos {
+			continue
+		}
+		if isSendTo(pass, s, k) || isCloseOf(pass, s, k) {
 			return true
 		}
 	}
+	return false
+}
+
+func releasedMutexAfter(pass *analysis.Pass, after []ast.Stmt, addPos token.Pos, k flow.Key) bool {
+	for _, s := range after {
+		if s.Pos() <= addPos {
+			continue
+		}
+		if isUnlockStmt(pass, s, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSendTo(pass *analysis.Pass, s ast.Stmt, k flow.Key) bool {
+	send, ok := unwrap(s).(*ast.SendStmt)
+	if !ok {
+		return false
+	}
+	ck, ok := flow.KeyOf(pass.TypesInfo, send.Chan)
+	return ok && ck == k
+}
+
+func isCloseOf(pass *analysis.Pass, s ast.Stmt, k flow.Key) bool {
 	call, ok := directCall(s)
 	if !ok {
 		return false
 	}
-	if ck, ok := closeKey(pass, call); ok && ck == k {
-		return true
+	ck, ok := closeKey(pass, call)
+	return ok && ck == k
+}
+
+func isLockStmt(pass *analysis.Pass, s ast.Stmt, k flow.Key) bool {
+	call, ok := directCall(s)
+	if !ok {
+		return false
 	}
-	if uk, ok := unlockKey(pass, call); ok && uk == k {
-		return true
+	gk, ok := lockGateKey(pass, call)
+	return ok && gk == k
+}
+
+func isUnlockStmt(pass *analysis.Pass, s ast.Stmt, k flow.Key) bool {
+	call, ok := directCall(s)
+	if !ok {
+		return false
 	}
-	return false
+	uk, ok := unlockKey(pass, call)
+	return ok && uk == k
 }
 
 func closeKey(pass *analysis.Pass, call *ast.CallExpr) (flow.Key, bool) {
@@ -188,61 +257,71 @@ func unlockKey(pass *analysis.Pass, call *ast.CallExpr) (flow.Key, bool) {
 		return flow.Key{}, false
 	}
 	switch fn.FullName() {
-	case "(*sync.Mutex).Unlock", "(*sync.RWMutex).Unlock", "(*sync.RWMutex).RUnlock":
+	case "(*sync.Mutex).Unlock", "(*sync.RWMutex).Unlock":
 		return flow.MethodKey(pass.TypesInfo, call)
 	}
 	return flow.Key{}, false
 }
 
-func donePositions(pass *analysis.Pass, lit *ast.FuncLit) map[flow.Key][]token.Pos {
-	info := pass.TypesInfo
-	out := map[flow.Key][]token.Pos{}
-	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
+func donePositions(pass *analysis.Pass, lit *ast.FuncLit) (plain, deferred map[flow.Key][]token.Pos) {
+	plain = map[flow.Key][]token.Pos{}
+	deferred = map[flow.Key][]token.Pos{}
+	for _, s := range lit.Body.List {
+		if d, ok := unwrap(s).(*ast.DeferStmt); ok {
+			collectDonesIn(pass, d, deferred)
+		} else {
+			collectDonesIn(pass, s, plain)
+		}
+	}
+	return plain, deferred
+}
+
+func collectDonesIn(pass *analysis.Pass, n ast.Node, out map[flow.Key][]token.Pos) {
+	ast.Inspect(n, func(x ast.Node) bool {
+		if _, ok := x.(*ast.FuncLit); ok {
 			return false
 		}
-		call, ok := n.(*ast.CallExpr)
+		call, ok := x.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if k, _, ok := wgKey(info, call, "Done"); ok {
+		if k, _, ok := wgKey(pass.TypesInfo, call, "Done"); ok {
 			out[k] = append(out[k], call.Pos())
 		}
 		return true
 	})
-	return out
 }
 
-func gatePositions(pass *analysis.Pass, lit *ast.FuncLit) map[flow.Key][]token.Pos {
-	out := map[flow.Key][]token.Pos{}
-	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		if _, ok := n.(*ast.DeferStmt); ok {
-			return false
-		}
-		if _, ok := n.(*ast.GoStmt); ok {
-			return false
-		}
-		noteRecvGate(pass, n, out)
-		noteLockGate(pass, n, out)
-		return true
-	})
-	return out
+func gatePositions(pass *analysis.Pass, lit *ast.FuncLit) gateSet {
+	gates := gateSet{chans: map[flow.Key][]token.Pos{}, mutex: map[flow.Key][]token.Pos{}}
+	for _, s := range lit.Body.List {
+		noteChanGate(pass, s, gates.chans)
+		noteMutexGate(pass, s, gates.mutex)
+	}
+	return gates
 }
 
-func noteRecvGate(pass *analysis.Pass, n ast.Node, out map[flow.Key][]token.Pos) {
-	switch n := n.(type) {
+func noteChanGate(pass *analysis.Pass, s ast.Stmt, out map[flow.Key][]token.Pos) {
+	switch n := unwrap(s).(type) {
 	case *ast.ExprStmt:
 		noteRecvExpr(pass, n.X, n.Pos(), out)
 	case *ast.AssignStmt:
 		for _, rhs := range n.Rhs {
 			noteRecvExpr(pass, rhs, n.Pos(), out)
 		}
-	case *ast.ValueSpec:
-		for _, v := range n.Values {
-			noteRecvExpr(pass, v, n.Pos(), out)
+	case *ast.DeclStmt:
+		gen, ok := n.Decl.(*ast.GenDecl)
+		if !ok {
+			return
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, v := range vs.Values {
+				noteRecvExpr(pass, v, n.Pos(), out)
+			}
 		}
 	}
 }
@@ -257,8 +336,8 @@ func noteRecvExpr(pass *analysis.Pass, e ast.Expr, pos token.Pos, out map[flow.K
 	}
 }
 
-func noteLockGate(pass *analysis.Pass, n ast.Node, out map[flow.Key][]token.Pos) {
-	call, ok := n.(*ast.CallExpr)
+func noteMutexGate(pass *analysis.Pass, s ast.Stmt, out map[flow.Key][]token.Pos) {
+	call, ok := directCall(s)
 	if !ok {
 		return
 	}
@@ -273,7 +352,7 @@ func lockGateKey(pass *analysis.Pass, call *ast.CallExpr) (flow.Key, bool) {
 		return flow.Key{}, false
 	}
 	switch fn.FullName() {
-	case "(*sync.Mutex).Lock", "(*sync.RWMutex).Lock", "(*sync.RWMutex).RLock":
+	case "(*sync.Mutex).Lock", "(*sync.RWMutex).Lock":
 		return flow.MethodKey(pass.TypesInfo, call)
 	}
 	return flow.Key{}, false

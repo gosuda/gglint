@@ -100,3 +100,57 @@ func addlateReportedCloseBefore() {
 	wg.Add(1) // want "so Wait can return early"
 	wg.Wait()
 }
+func addlateReportedRLockGate() {
+	var wg sync.WaitGroup
+	var mu sync.RWMutex
+	go func() {
+		mu.RLock()
+		defer wg.Done()
+		mu.RUnlock()
+		work()
+	}()
+	mu.RLock()
+	wg.Add(1) // want "so Wait can return early"
+	mu.RUnlock()
+	wg.Wait()
+}
+func addlateReportedLockAfter() {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	go func() {
+		mu.Lock()
+		defer wg.Done()
+		mu.Unlock()
+		work()
+	}()
+	wg.Add(1) // want "so Wait can return early"
+	mu.Lock()
+	mu.Unlock()
+	wg.Wait()
+}
+func addlateReportedBranchGate(ok bool) {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	go func() {
+		if ok {
+			<-start
+		}
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "so Wait can return early"
+	close(start)
+	wg.Wait()
+}
+func addlateSilentDeferredGate() {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	go func() {
+		defer wg.Done()
+		<-start
+		work()
+	}()
+	wg.Add(1)
+	close(start)
+	wg.Wait()
+}
