@@ -12,15 +12,16 @@ import (
 )
 
 func checkValueSites(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
+	idx := buildFuncIndex(pass, fn)
 	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		checkOneValueSite(pass, fn, cur, f, hash, reported)
+		checkOneValueSite(pass, cur, idx, f, hash, reported)
 	}
 }
 
-func checkOneValueSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
+func checkOneValueSite(pass *analysis.Pass, cur inspector.Cursor, idx *funcIndex, f facts, hash *types.Interface, reported map[token.Pos]bool) {
 	as := inspection.As[*ast.AssignStmt](cur.Node())
 	if as.Tok != token.DEFINE && as.Tok != token.ASSIGN {
 		return
@@ -38,7 +39,7 @@ func checkOneValueSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, h
 	if isExempt(pass, call, f, hash) {
 		return
 	}
-	if !valueHolds(pass, fn, as, vobj, f.safe) {
+	if !valueHolds(pass, idx, as, vobj, f.safe) {
 		return
 	}
 	callee := types.ExprString(call.Fun)
@@ -125,35 +126,18 @@ func qualifyingValueType(t types.Type) bool {
 	return false
 }
 
-func valueHolds(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt, v *types.Var, safe map[*types.Func]bool) bool {
-	first, ok := firstUseAfter(pass, fn, v, as.End())
+func valueHolds(pass *analysis.Pass, idx *funcIndex, as *ast.AssignStmt, v *types.Var, safe map[*types.Func]bool) bool {
+	first, ok := idx.firstUse(v, as.End())
 	if !ok {
 		return false
 	}
 	if !isDeref(pass, first, v, safe) {
 		return false
 	}
-	if interveningNilCheck(pass, fn, v, as.End(), first.Node().Pos()) {
+	if idx.hasNilCheckIn(v, as.End(), first.Node().Pos()) {
 		return false
 	}
-	return !interveningAssign(pass, fn, v, as.End(), first.Node().Pos())
-}
-
-func firstUseAfter(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, after token.Pos) (inspector.Cursor, bool) {
-	for cur := range fn.Preorder((*ast.Ident)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		id := inspection.As[*ast.Ident](cur.Node())
-		if id.Pos() <= after {
-			continue
-		}
-		if pass.TypesInfo.Uses[id] != v {
-			continue
-		}
-		return cur, true
-	}
-	return inspector.Cursor{}, false
+	return !idx.hasAssignIn(v, as.End(), first.Node().Pos())
 }
 
 func skipParens(cur inspector.Cursor) inspector.Cursor {
@@ -277,67 +261,6 @@ func lhsStoresIndex(as *ast.AssignStmt, up inspector.Cursor, p *ast.IndexExpr) b
 		}
 	}
 	return false
-}
-
-func interveningNilCheck(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, from, to token.Pos) bool {
-	for cur := range fn.Preorder((*ast.BinaryExpr)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		b := inspection.As[*ast.BinaryExpr](cur.Node())
-		if b.Pos() >= to {
-			break
-		}
-		if b.Op != token.EQL && b.Op != token.NEQ {
-			continue
-		}
-		if b.Pos() <= from {
-			continue
-		}
-		if nilCompareWith(pass.TypesInfo, b, v) {
-			return true
-		}
-	}
-	return false
-}
-
-func nilCompareWith(info *types.Info, b *ast.BinaryExpr, v *types.Var) bool {
-	return sideIsVarAndOtherNil(info, b.X, b.Y, v) || sideIsVarAndOtherNil(info, b.Y, b.X, v)
-}
-
-func sideIsVarAndOtherNil(info *types.Info, side, other ast.Expr, v *types.Var) bool {
-	id, ok := ast.Unparen(side).(*ast.Ident)
-	if !ok {
-		return false
-	}
-	if info.Uses[id] != v && info.Defs[id] != v {
-		return false
-	}
-	oid, ok := ast.Unparen(other).(*ast.Ident)
-	if !ok || oid.Name != nilName {
-		return false
-	}
-	_, ok = info.Uses[oid].(*types.Nil)
-	return ok
-}
-
-func interveningAssign(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, from, to token.Pos) bool {
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil), (*ast.IncDecStmt)(nil), (*ast.RangeStmt)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		if cur.Node().Pos() >= to {
-			break
-		}
-		if nodeInWindow(cur.Node(), from, to) && nodeAssignsVar(pass.TypesInfo, cur.Node(), v) {
-			return true
-		}
-	}
-	return false
-}
-
-func nodeInWindow(n ast.Node, from, to token.Pos) bool {
-	return n.Pos() > from && n.Pos() < to
 }
 
 func nodeAssignsVar(info *types.Info, n ast.Node, v *types.Var) bool {

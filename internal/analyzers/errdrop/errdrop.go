@@ -24,7 +24,8 @@ type facts struct {
 	never  map[*types.Func]bool
 	safe   map[*types.Func]bool
 	sticky map[*types.Func]bool
-	writer map[*types.Func]int
+	writer map[*types.Func]writerOnly
+	decls  map[*types.Func]*ast.FuncDecl
 }
 
 const writeMethodName = "Write"
@@ -56,11 +57,12 @@ func run(pass *analysis.Pass) (any, error) {
 		pass.ExportObjectFact(origin, &sticky{})
 	}
 	writerSet := computeWriterOnly(pass)
-	for origin, idx := range writerSet {
-		pass.ExportObjectFact(origin, &writerOnly{Param: idx})
+	for origin, need := range writerSet {
+		pass.ExportObjectFact(origin, &writerOnly{Param: need.Param, Write: need.Write, String: need.String})
 	}
 	hash := hashInterface(pass.Pkg)
-	f := facts{never: set, safe: safe, sticky: stickySet, writer: writerSet}
+	decls := buildDeclIndex(pass)
+	f := facts{never: set, safe: safe, sticky: stickySet, writer: writerSet, decls: decls}
 	for fn := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
 		processFunc(pass, fn, f, hash)
 	}

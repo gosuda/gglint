@@ -301,8 +301,14 @@ func closeForwarder(c io.Closer) error {
 	return c.Close()
 }
 
-func verdictSilentForwarder(c io.Closer) error {
-	closeForwarder(c)
+func verdictSilentForwarder(p string) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	var b [1]byte
+	_, _ = f.Read(b[:])
+	closeForwarder(f)
 	return nil
 }
 
@@ -712,13 +718,12 @@ func outSilentWriteTo(src *bytes.Buffer) []byte {
 	return out.Bytes()
 }
 
-func outReportedFormatNode(fset *token.FileSet, d ast.Decl) string {
+func outReportedFormatNode(fset *token.FileSet, n ast.Node) string {
 	var buf bytes.Buffer
-	if d == nil {
+	if n == nil {
 		return ""
 	}
-	format.Node(&buf, fset, &ast.BasicLit{Kind: token.INT, Value: "1"}) // want "is read after the error of format.Node is dropped"
-	_ = d
+	format.Node(&buf, fset, n) // want "is read after the error of format.Node is dropped"
 	return buf.String()
 }
 
@@ -733,8 +738,7 @@ func outReportedPrinterFprint(fset *token.FileSet, n ast.Node) string {
 	if n == nil {
 		return ""
 	}
-	printer.Fprint(&buf, fset, &ast.BasicLit{Kind: token.INT, Value: "1"}) // want "is read after the error of printer.Fprint is dropped"
-	_ = n
+	printer.Fprint(&buf, fset, n) // want "is read after the error of printer.Fprint is dropped"
 	return buf.String()
 }
 
@@ -841,4 +845,65 @@ func durableReportedSuccessPath(p string, start func(io.Writer) error) error {
 	}
 	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
 	return nil
+}
+
+type r1Sink struct{ f *os.File }
+
+func (s r1Sink) Write(p []byte) (int, error) { return s.f.Write(p) }
+
+func (s r1Sink) WriteString(x string) (int, error) { return len(x), nil }
+
+func r1Log(f *os.File, msg string) error {
+	fmt.Fprintf(r1Sink{f}, "%s\n", msg) // want "the error of fmt.Fprintf is dropped and the next statement returns nil"
+	return nil
+}
+
+func r2Count(d []byte) (int, error) {
+	if len(d) == 0 {
+		return 0, errors.New("empty")
+	}
+	return len(d), nil
+}
+
+func r2Save(w io.Writer, d []byte) (int, error) { return r2Count(d) }
+
+func r2Run(d []byte) error {
+	var buf bytes.Buffer
+	r2Save(&buf, d) // want "the error of r2Save is dropped and the next statement returns nil"
+	return nil
+}
+
+func r3CloseIt() error { return errors.New("close failed") }
+
+func r3Save(w io.Writer, d []byte) (err error) {
+	defer func() {
+		if cerr := r3CloseIt(); err == nil {
+			err = cerr
+		}
+	}()
+	_, err = w.Write(d)
+	return err
+}
+
+func r3Run(d []byte) error {
+	var buf bytes.Buffer
+	r3Save(&buf, d) // want "the error of r3Save is dropped and the next statement returns nil"
+	return nil
+}
+
+type r4Loader interface{ Load([]byte) error }
+
+type r4Cfg struct{ Port int }
+
+func (c *r4Cfg) Load(b []byte) error {
+	c.Port = 80
+	return json.Unmarshal(b, c)
+}
+
+func r4Fill(l r4Loader, b []byte) error { return l.Load(b) }
+
+func r4Port(b []byte) int {
+	var c r4Cfg
+	r4Fill(&c, b) // want "is read after the error of r4Fill is dropped"
+	return c.Port
 }

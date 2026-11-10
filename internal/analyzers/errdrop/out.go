@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	"slices"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
@@ -79,23 +80,27 @@ func decodeTarget(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
 	if !ok {
 		return false
 	}
-	if isEmptyInterface(pt) {
-		return true
-	}
-	if isPointerType(pt) {
-		return true
-	}
-	return isWriterInterface(pt)
+	return !isReaderInterface(pt)
 }
 
-func isEmptyInterface(t types.Type) bool {
+func isReaderInterface(t types.Type) bool {
 	iface, ok := types.Unalias(t).Underlying().(*types.Interface)
-	return ok && iface.NumMethods() == 0
-}
-
-func isPointerType(t types.Type) bool {
-	_, ok := types.Unalias(t).(*types.Pointer)
-	return ok
+	if !ok || iface.NumMethods() == 0 {
+		return false
+	}
+	found := false
+	for m := range iface.Methods() {
+		if strings.HasPrefix(m.Name(), "Write") {
+			return false
+		}
+		if m.Name() == "Read" {
+			sig, ok := m.Type().(*types.Signature)
+			if ok && writerSigShape(sig) {
+				found = true
+			}
+		}
+	}
+	return found
 }
 
 func callParamType(pass *analysis.Pass, call *ast.CallExpr, idx int) (types.Type, bool) {

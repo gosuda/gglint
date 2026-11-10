@@ -80,7 +80,7 @@ func verdictPairCall(pass *analysis.Pass, fn inspector.Cursor, p verdictPair, f 
 }
 
 func verdictSuppressed(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, f facts, hash *types.Interface, reported map[token.Pos]bool) bool {
-	if isCloseMethod(pass.TypesInfo, call) || forwardsClose(pass, call) {
+	if isCloseMethod(pass.TypesInfo, call) || forwardsClose(pass, call, f.decls) {
 		return true
 	}
 	if !dropsError(pass.TypesInfo, call) {
@@ -262,8 +262,8 @@ func isCloseMethod(info *types.Info, call *ast.CallExpr) bool {
 	return true
 }
 
-func forwardsClose(pass *analysis.Pass, call *ast.CallExpr) bool {
-	fd := calleeDecl(pass, call)
+func forwardsClose(pass *analysis.Pass, call *ast.CallExpr, decls map[*types.Func]*ast.FuncDecl) bool {
+	fd := calleeDecl(pass, call, decls)
 	if fd == nil {
 		return false
 	}

@@ -155,7 +155,7 @@ func isExempt(pass *analysis.Pass, call *ast.CallExpr, f facts, hash *types.Inte
 	if callee := calleeOrigin(pass, call); callee != nil && hasFact(pass, callee, f.never) {
 		return true
 	}
-	if isErrorSink(pass, call) {
+	if isErrorSink(pass, call, f.decls) {
 		return true
 	}
 	fn, ok := typeutil.Callee(info, call).(*types.Func)
@@ -166,26 +166,26 @@ func isExempt(pass *analysis.Pass, call *ast.CallExpr, f facts, hash *types.Inte
 }
 
 func writerThrough(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, f facts, hash *types.Interface) bool {
-	if tableWriterAtZero(pass, info, fn, call) {
-		return dstInfallible(pass, info, call, 0, f.never, hash)
+	if tableWriteAtZero(pass, info, fn, call) {
+		return dstWriteInfallible(pass, info, call, 0, f.never, hash)
+	}
+	if tableWriteStringAtZero(pass, fn, call) {
+		return dstWriteStringCall(pass, info, call, 0, f.never, hash)
 	}
 	callee := calleeOrigin(pass, call)
 	if callee == nil {
 		return false
 	}
-	q, ok := writerFact(pass, callee, f.writer)
+	need, ok := writerFact(pass, callee, f.writer)
 	if !ok {
 		return false
 	}
-	return dstInfallible(pass, info, call, q, f.never, hash)
+	return dstDerivedInfallible(pass, info, call, need, f.never, hash)
 }
 
-func tableWriterAtZero(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr) bool {
+func tableWriteAtZero(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr) bool {
 	switch fn.FullName() {
-	case "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "io.WriteString", "encoding/xml.EscapeText":
-		return true
-	}
-	if isReplacerWriteString(pass, call) {
+	case "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "encoding/xml.EscapeText":
 		return true
 	}
 	if isMemoryWriteTo(pass, call) {
@@ -197,7 +197,14 @@ func tableWriterAtZero(pass *analysis.Pass, info *types.Info, fn *types.Func, ca
 	return false
 }
 
-func dstInfallible(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, q int, set map[*types.Func]bool, hash *types.Interface) bool {
+func tableWriteStringAtZero(pass *analysis.Pass, fn *types.Func, call *ast.CallExpr) bool {
+	if fn.FullName() == "io.WriteString" {
+		return true
+	}
+	return isReplacerWriteString(pass, call)
+}
+
+func dstWriteInfallible(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, q int, set map[*types.Func]bool, hash *types.Interface) bool {
 	if q >= len(call.Args) {
 		return false
 	}
@@ -208,7 +215,57 @@ func dstInfallible(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, q 
 	if _, ok := types.Unalias(t).Underlying().(*types.Interface); ok {
 		return hash != nil && types.Implements(t, hash)
 	}
-	return writeHasFact(pass, t, set) || writeStringHasFact(pass, t, set) || typeIsHash(pass, t, hash)
+	return writeHasFact(pass, t, set) || typeIsHash(pass, t, hash)
+}
+
+func dstWriteStringCall(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, q int, set map[*types.Func]bool, hash *types.Interface) bool {
+	if q >= len(call.Args) {
+		return false
+	}
+	t := info.TypeOf(call.Args[q])
+	if t == nil {
+		return false
+	}
+	if destHasWriteString(pass, t) {
+		return dstWriteStringInfallible(pass, info, call, q, set)
+	}
+	return dstWriteInfallible(pass, info, call, q, set, hash)
+}
+
+func dstWriteStringInfallible(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, q int, set map[*types.Func]bool) bool {
+	if q >= len(call.Args) {
+		return false
+	}
+	t := info.TypeOf(call.Args[q])
+	if t == nil {
+		return false
+	}
+	return writeStringHasFact(pass, t, set)
+}
+
+func dstDerivedInfallible(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, need writerOnly, set map[*types.Func]bool, hash *types.Interface) bool {
+	if len(call.Args) <= need.Param {
+		return false
+	}
+	if need.Write && !dstWriteInfallible(pass, info, call, need.Param, set, hash) {
+		return false
+	}
+	if need.String && !dstWriteStringInfallible(pass, info, call, need.Param, set) {
+		return false
+	}
+	return true
+}
+
+func destHasWriteString(pass *analysis.Pass, t types.Type) bool {
+	if obj, _, _ := types.LookupFieldOrMethod(t, true, pass.Pkg, "WriteString"); obj != nil {
+		return true
+	}
+	if _, isPtr := t.Underlying().(*types.Pointer); !isPtr {
+		if obj, _, _ := types.LookupFieldOrMethod(types.NewPointer(t), true, pass.Pkg, "WriteString"); obj != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func writeStringHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) bool {
@@ -346,28 +403,35 @@ func writeHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) b
 	return false
 }
 
-func calleeDecl(pass *analysis.Pass, call *ast.CallExpr) *ast.FuncDecl {
-	fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
-	if !ok || fn == nil {
-		return nil
-	}
-	want := originOf(fn)
+func buildDeclIndex(pass *analysis.Pass) map[*types.Func]*ast.FuncDecl {
+	out := map[*types.Func]*ast.FuncDecl{}
 	for _, f := range pass.Files {
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
 			if !ok || fd.Body == nil {
 				continue
 			}
-			if obj, ok := pass.TypesInfo.Defs[fd.Name].(*types.Func); ok && originOf(obj) == want {
-				return fd
+			if obj, ok := pass.TypesInfo.Defs[fd.Name].(*types.Func); ok {
+				origin := originOf(obj)
+				if _, done := out[origin]; !done {
+					out[origin] = fd
+				}
 			}
 		}
 	}
-	return nil
+	return out
 }
 
-func isErrorSink(pass *analysis.Pass, call *ast.CallExpr) bool {
-	fd := calleeDecl(pass, call)
+func calleeDecl(pass *analysis.Pass, call *ast.CallExpr, decls map[*types.Func]*ast.FuncDecl) *ast.FuncDecl {
+	fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fn == nil {
+		return nil
+	}
+	return decls[originOf(fn)]
+}
+
+func isErrorSink(pass *analysis.Pass, call *ast.CallExpr, decls map[*types.Func]*ast.FuncDecl) bool {
+	fd := calleeDecl(pass, call, decls)
 	if fd == nil {
 		return false
 	}
