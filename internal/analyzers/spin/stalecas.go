@@ -13,7 +13,7 @@ import (
 
 var stalecasAnalyzer = &analysis.Analyzer{
 	Name:     "stalecas",
-	Doc:      "reports a loop for !v.CompareAndSwap(old, new) (and the other shapes it already recognises) when old is a local, nothing in the loop assigns old, no goto or labeled break or continue leaves the loop, no other literal assigns old or a field or element stored in it, and the address of old or of such a field or element never appears; the last two are function-wide, so such loops are not reported; a path through a pointer does not count; a call of a pointer-receiver method on old counts as its address unless the method is reached through a pointer; spin covers five shapes only",
+	Doc:      "reports a retry loop on CompareAndSwap(old, new), written as the loop condition or as a first statement that breaks or returns on success, when old is a local, nothing in the loop assigns old, and no goto or labeled break or continue leaves the loop; silent for the whole function when another function literal assigns old, or when the address of old appears, also through a pointer-receiver method of old that is called or bound as a method value; a field or element stored inside a struct or array value counts as old, and anything reached through a pointer does not; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runStalecas,
 }
