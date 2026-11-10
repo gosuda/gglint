@@ -240,3 +240,27 @@ func sharedIfGuardedSilent() {
 	n = 2
 	mu.Unlock()
 }
+
+func sharedDisjointSilent() {
+	out := make([]int, 2)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		out[0] = 1
+	}()
+	out[1] = 2
+	wg.Wait()
+}
+
+func sharedSameIndexReported() {
+	out := make([]int, 2)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // want `out is written by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		defer wg.Done()
+		out[0] = 1
+	}()
+	out[0] = 2
+	wg.Wait()
+}

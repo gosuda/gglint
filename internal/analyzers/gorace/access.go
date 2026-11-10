@@ -12,14 +12,16 @@ import (
 )
 
 type varAccess struct {
-	key   flow.Key
-	stmt  ast.Stmt
-	write bool
-	index bool
-	del   bool
-	rng   bool
-	clr   bool
-	isMap bool
+	key      flow.Key
+	stmt     ast.Stmt
+	write    bool
+	index    bool
+	del      bool
+	rng      bool
+	clr      bool
+	isMap    bool
+	idxConst bool
+	idxVal   string
 }
 
 type mapScope struct {
@@ -70,7 +72,9 @@ func appendAssignWrites(info *types.Info, n *ast.AssignStmt, out []varAccess) []
 func appendLHSWrite(info *types.Info, lhs ast.Expr, stmt ast.Stmt, out []varAccess) []varAccess {
 	if idx, ok := ast.Unparen(lhs).(*ast.IndexExpr); ok {
 		if k, ok := flow.KeyOf(info, idx.X); ok {
-			out = append(out, varAccess{key: k, stmt: stmt, write: true, index: true, isMap: isMapType(info.TypeOf(idx.X))})
+			base := info.TypeOf(idx.X)
+			val, has := constIndex(info, idx.Index, base)
+			out = append(out, varAccess{key: k, stmt: stmt, write: true, index: true, isMap: isMapType(base), idxConst: has, idxVal: val})
 		}
 		return out
 	}
@@ -88,7 +92,9 @@ func appendLHSWrite(info *types.Info, lhs ast.Expr, stmt ast.Stmt, out []varAcce
 func appendIncWrites(info *types.Info, n *ast.IncDecStmt, stmt ast.Stmt, out []varAccess) []varAccess {
 	if idx, ok := ast.Unparen(n.X).(*ast.IndexExpr); ok {
 		if k, ok := flow.KeyOf(info, idx.X); ok {
-			out = append(out, varAccess{key: k, stmt: stmt, write: true, index: true, isMap: isMapType(info.TypeOf(idx.X))})
+			base := info.TypeOf(idx.X)
+			val, has := constIndex(info, idx.Index, base)
+			out = append(out, varAccess{key: k, stmt: stmt, write: true, index: true, isMap: isMapType(base), idxConst: has, idxVal: val})
 		}
 		return out
 	}
@@ -116,6 +122,29 @@ func appendDeleteWrite(info *types.Info, n *ast.CallExpr, stmt ast.Stmt, out []v
 func isBuiltin(info *types.Info, id *ast.Ident, name string) bool {
 	b, ok := info.Uses[id].(*types.Builtin)
 	return ok && b.Name() == name
+}
+
+func constIndex(info *types.Info, idx ast.Expr, base types.Type) (string, bool) {
+	if info == nil || idx == nil {
+		return "", false
+	}
+	if isMapType(base) {
+		return "", false
+	}
+	tv, ok := info.Types[idx]
+	if !ok || tv.Value == nil {
+		return "", false
+	}
+	t := deref(base)
+	if t == nil {
+		return "", false
+	}
+	switch t.Underlying().(type) {
+	case *types.Slice, *types.Array:
+		return tv.Value.String(), true
+	default:
+		return "", false
+	}
 }
 
 func readsInStmt(info *types.Info, stmt ast.Stmt, writes []varAccess) []varAccess {
@@ -159,7 +188,9 @@ func appendIndexedRead(info *types.Info, idx *ast.IndexExpr, stmt ast.Stmt, skip
 		return false
 	}
 	if !skip[k] {
-		*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(info.TypeOf(idx.X))})
+		base := info.TypeOf(idx.X)
+		val, has := constIndex(info, idx.Index, base)
+		*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(base), idxConst: has, idxVal: val})
 	}
 	appendSubReads(info, idx.Index, stmt, skip, out)
 	return true
@@ -327,7 +358,9 @@ func appendCondNode(info *types.Info, n ast.Node, stmt ast.Stmt, out *[]varAcces
 	}
 	if idx, ok := n.(*ast.IndexExpr); ok {
 		if k, ok := flow.KeyOf(info, idx.X); ok {
-			*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(info.TypeOf(idx.X))})
+			base := info.TypeOf(idx.X)
+			val, has := constIndex(info, idx.Index, base)
+			*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(base), idxConst: has, idxVal: val})
 			*out = append(*out, exprReads(info, stmt, idx.Index)...)
 			return true, false
 		}
@@ -541,7 +574,11 @@ func (m *mapScope) hasOther(s flow.Spawn, a varAccess) bool {
 }
 
 func (m *mapScope) parentConflicts(s flow.Spawn, a, p varAccess) bool {
-	if p.key != a.key || !mapOpAccess(p) || !m.graph.Reaches(s.Site, p.stmt, nil) || flow.Joined(m.pass, m.graph, s, p.stmt) {
+	if p.key != a.key || !mapOpAccess(p) {
+		return false
+	}
+	avoid := declAvoid(m.pass.TypesInfo, m.fn, a.key.Root, s.Site)
+	if !m.graph.Reaches(s.Site, p.stmt, avoid) || flow.Joined(m.pass, m.graph, s, p.stmt) {
 		return false
 	}
 	return !commonKey(m.litHeld(s.Body, a.stmt), m.parentHeld(p.stmt))
@@ -694,6 +731,10 @@ func (m *sharedScope) conflict(s flow.Spawn, k flow.Key, lit []varAccess) bool {
 	return false
 }
 
+func disjointIndex(a, p varAccess) bool {
+	return a.idxConst && p.idxConst && a.idxVal != p.idxVal
+}
+
 func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess) bool {
 	if p.key != a.key {
 		return true
@@ -701,7 +742,11 @@ func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess) bool {
 	if !a.write && !p.write {
 		return true
 	}
-	if !m.graph.Reaches(s.Site, p.stmt, nil) {
+	if disjointIndex(a, p) {
+		return true
+	}
+	avoid := declAvoid(m.pass.TypesInfo, m.fn, a.key.Root, s.Site)
+	if !m.graph.Reaches(s.Site, p.stmt, avoid) {
 		return true
 	}
 	if flow.Joined(m.pass, m.graph, s, p.stmt) {

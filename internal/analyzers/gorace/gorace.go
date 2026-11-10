@@ -260,6 +260,34 @@ func declaredOutsideLoop(info *types.Info, fn ast.Node, v types.Object, site ast
 	return !headerDefines(info, loop, body, v)
 }
 
+func declAvoid(info *types.Info, fn ast.Node, v types.Object, site ast.Node) func(ast.Node) bool {
+	_, body := innermostLoop(fn, site.Pos())
+	if body == nil {
+		return nil
+	}
+	if v == nil || v.Pos() < body.Pos() || v.Pos() >= body.End() {
+		return nil
+	}
+	return func(n ast.Node) bool {
+		return definesVar(info, n, v)
+	}
+}
+
+func definesVar(info *types.Info, n ast.Node, v types.Object) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		if id, ok := x.(*ast.Ident); ok && info.Defs[id] == v {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 func innermostLoop(fn ast.Node, pos token.Pos) (ast.Node, *ast.BlockStmt) {
 	var bestLoop ast.Node
 	var bestBody *ast.BlockStmt

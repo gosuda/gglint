@@ -285,3 +285,17 @@ func recPtrUser(p recPtr) {}
 func mapRecPtrSilent(p recPtr) {
 	recPtrUser(p)
 }
+
+func mapPerIterationBeforeSpawnSilent() {
+	type job struct{ Name string }
+	jobs := []job{{Name: "a"}}
+	work := func(j job) int { return len(j.Name) }
+	for _, jb := range jobs {
+		results := map[string]int{}
+		results["seed"] = 0
+		go func() {
+			results[jb.Name] = work(jb)
+		}()
+		_ = results
+	}
+}
