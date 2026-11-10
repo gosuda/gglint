@@ -37,8 +37,8 @@ func readState(depth int) state {
 	return state{kind: readKind, depth: depth, exact: true}
 }
 
-func inexactReadState() state {
-	return state{kind: readKind, depth: 1}
+func inexactReadState(depth int) state {
+	return state{kind: readKind, depth: depth}
 }
 
 const (
@@ -323,6 +323,13 @@ func joinState(a, b state) state {
 	if a == b {
 		return a
 	}
+	if a.kind == readKind && b.kind == readKind && (!a.exact || !b.exact) {
+		depth := a.depth
+		if b.depth < depth {
+			depth = b.depth
+		}
+		return inexactReadState(depth)
+	}
 	return unknownState
 }
 
@@ -346,12 +353,12 @@ func stepRLock(cur state) state {
 	}
 	if cur.kind == readKind {
 		if !cur.exact {
-			return cur
+			return inexactReadState(cur.depth + 1)
 		}
 		return readState(cur.depth + 1)
 	}
 	if cur.kind == unknownKind {
-		return inexactReadState()
+		return inexactReadState(1)
 	}
 	return readState(1)
 }
@@ -365,6 +372,9 @@ func stepUnlock(cur state) state {
 
 func stepRUnlock(cur state) state {
 	if cur.kind == readKind && !cur.exact {
+		if cur.depth >= 2 {
+			return inexactReadState(cur.depth - 1)
+		}
 		return unknownState
 	}
 	if cur.kind == readKind && cur.depth > 1 {

@@ -29,8 +29,8 @@ type modState struct {
 	exact bool
 }
 
-func modInexactRead() modState {
-	return modState{kind: modRead, depth: 1}
+func modInexactRead(depth int) modState {
+	return modState{kind: modRead, depth: depth}
 }
 
 func modStep(op string, cur modState) modState {
@@ -43,12 +43,12 @@ func modStep(op string, cur modState) modState {
 		}
 		if cur.kind == modRead {
 			if !cur.exact {
-				return cur
+				return modInexactRead(cur.depth + 1)
 			}
 			return modState{kind: modRead, depth: cur.depth + 1, exact: true}
 		}
 		if cur.kind == modUnknown {
-			return modInexactRead()
+			return modInexactRead(1)
 		}
 		return modState{kind: modRead, depth: 1, exact: true}
 	case "Unlock":
@@ -58,6 +58,9 @@ func modStep(op string, cur modState) modState {
 		return modState{kind: modUnknown}
 	case "RUnlock":
 		if cur.kind == modRead && !cur.exact {
+			if cur.depth >= 2 {
+				return modInexactRead(cur.depth - 1)
+			}
 			return modState{kind: modUnknown}
 		}
 		if cur.kind == modRead && cur.depth > 1 {
@@ -95,11 +98,17 @@ type plainProg struct {
 	name   string
 	muType string
 	seq    []string
+	param  bool
 }
 
-func (p plainProg) progName() string       { return p.name }
-func (p plainProg) progSeq() []string      { return p.seq }
-func (p plainProg) progPre(t int) modState { return foldModelOps(p.seq[:t]) }
+func (p plainProg) progName() string  { return p.name }
+func (p plainProg) progSeq() []string { return p.seq }
+func (p plainProg) progPre(t int) modState {
+	if p.param {
+		return foldParamOps(p.seq[:t])
+	}
+	return foldModelOps(p.seq[:t])
+}
 
 type branchProg struct {
 	name   string
@@ -107,17 +116,29 @@ type branchProg struct {
 	seq    []string
 	i      int
 	j      int
+	param  bool
 }
 
 func (p branchProg) progName() string  { return p.name }
 func (p branchProg) progSeq() []string { return p.seq }
-
 func (p branchProg) progPre(target int) modState {
-	return foldModelOps(branchPathOps(p.seq, p.i, p.j, target))
+	ops := branchPathOps(p.seq, p.i, p.j, target)
+	if p.param {
+		return foldParamOps(ops)
+	}
+	return foldModelOps(ops)
 }
 
 func foldModelOps(ops []string) modState {
-	cur := modState{kind: modFree}
+	return foldFrom(modState{kind: modFree}, ops)
+}
+
+func foldParamOps(ops []string) modState {
+	return foldFrom(modState{kind: modUnknown}, ops)
+}
+
+func foldFrom(entry modState, ops []string) modState {
+	cur := entry
 	for _, op := range ops {
 		cur = modStep(op, cur)
 	}
@@ -173,11 +194,21 @@ func allModelSeqs(ops []string) [][]string {
 	return out
 }
 
-func branchVariants(muType string, seq []string, base int) []modelProg {
+func branchLocalVariants(muType string, seq []string, base int) []modelProg {
 	var out []modelProg
 	for i := range len(seq) + 1 {
 		for j := i; j <= len(seq); j++ {
 			out = append(out, branchProg{name: fmt.Sprintf("f%d", base+len(out)), muType: muType, seq: seq, i: i, j: j})
+		}
+	}
+	return out
+}
+
+func branchParamVariants(muType string, seq []string, base int) []modelProg {
+	var out []modelProg
+	for i := range len(seq) + 1 {
+		for j := i; j <= len(seq); j++ {
+			out = append(out, branchProg{name: fmt.Sprintf("f%d", base+len(out)), muType: muType, seq: seq, i: i, j: j, param: true})
 		}
 	}
 	return out
@@ -191,7 +222,9 @@ func buildModelProgs() []modelProg {
 	}{{"sync.RWMutex", rwOps()}, {"sync.Mutex", mutexOps()}} {
 		for _, seq := range allModelSeqs(tc.ops) {
 			out = append(out, plainProg{name: fmt.Sprintf("f%d", len(out)), muType: tc.muType, seq: seq})
-			out = append(out, branchVariants(tc.muType, seq, len(out))...)
+			out = append(out, branchLocalVariants(tc.muType, seq, len(out))...)
+			out = append(out, plainProg{name: fmt.Sprintf("f%d", len(out)), muType: tc.muType, seq: seq, param: true})
+			out = append(out, branchParamVariants(tc.muType, seq, len(out))...)
 		}
 	}
 	return out
@@ -215,8 +248,12 @@ func (r *modelRender) emitOp(pi, k int, op string) {
 }
 
 func renderPlainProg(r *modelRender, pi int, p plainProg) {
-	r.emit("func " + p.name + "() {")
-	r.emit("var mu " + p.muType)
+	if p.param {
+		renderParamHead(r, p.name, p.muType)
+	} else {
+		r.emit("func " + p.name + "() {")
+		r.emit("var mu " + p.muType)
+	}
 	for k := range p.seq {
 		r.emitOp(pi, k, p.seq[k])
 	}
@@ -225,8 +262,12 @@ func renderPlainProg(r *modelRender, pi int, p plainProg) {
 }
 
 func renderBranchProg(r *modelRender, pi int, p branchProg) {
-	r.emit("func " + p.name + "(c bool) {")
-	r.emit("var mu " + p.muType)
+	if p.param {
+		r.emit("func " + p.name + "(mu *" + p.muType + ", c bool) {")
+	} else {
+		r.emit("func " + p.name + "(c bool) {")
+		r.emit("var mu " + p.muType)
+	}
 	for k := range p.i {
 		r.emitOp(pi, k, p.seq[k])
 	}
@@ -241,6 +282,10 @@ func renderBranchProg(r *modelRender, pi int, p branchProg) {
 	r.emit("}")
 	r.emit("}")
 	r.emit("")
+}
+
+func renderParamHead(r *modelRender, name, muType string) {
+	r.emit("func " + name + "(mu *" + muType + ") {")
 }
 
 func renderModelProgs(progs []modelProg) (src string, lp, ls map[int]int) {

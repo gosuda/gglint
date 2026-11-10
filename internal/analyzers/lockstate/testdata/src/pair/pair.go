@@ -176,4 +176,11 @@ func pairInexactRUnlockSilent(mu *sync.RWMutex) {
 	mu.RLock()
 	mu.RUnlock()
 	mu.RUnlock()
+	mu.RUnlock()
+}
+func pairNestedReported(mu *sync.RWMutex) {
+	mu.RLock()
+	mu.RLock()
+	mu.RUnlock()
+	mu.Unlock() // want "is not write-locked here, so this Unlock panics"
 }
