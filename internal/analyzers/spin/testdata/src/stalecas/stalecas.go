@@ -305,3 +305,21 @@ func stalecasSilentElseBlock(n *atomic.Int64) int {
 	}
 	return 1
 }
+
+func stalecasSilentClosureBefore(n *atomic.Int64) {
+	old := n.Load()
+	bump := func() { old = n.Load() }
+	for !n.CompareAndSwap(old, old+1) {
+		bump()
+	}
+	use(old)
+}
+
+func stalecasSilentAddrBefore(n *atomic.Int64) {
+	old := n.Load()
+	p := &old
+	for !n.CompareAndSwap(old, old+1) {
+		use(p)
+	}
+	use(old)
+}

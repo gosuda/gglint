@@ -29,7 +29,7 @@ func checkPoll(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 	if !ok {
 		return
 	}
-	if loop.Init != nil || loop.Post != nil {
+	if loop.Cond != nil {
 		return
 	}
 	if defaultSpins(pass, def) {

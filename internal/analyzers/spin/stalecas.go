@@ -40,7 +40,7 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 	if loop.Post != nil && assignsRoot(pass.TypesInfo, loop.Post, old) {
 		return
 	}
-	if staleUnknown(pass.TypesInfo, loop, old) {
+	if staleUnknown(pass.TypesInfo, fn, old) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "after one failed swap %s is stale, so every retry fails: load it again inside the loop", old.Name())
@@ -249,17 +249,11 @@ func hitRoot(info *types.Info, e ast.Expr, v *types.Var) bool {
 	return info.ObjectOf(id) == types.Object(v)
 }
 
-func staleUnknown(info *types.Info, loop *ast.ForStmt, old *types.Var) bool {
-	if capturedByLit(info, loop.Body, old) {
-		return true
+func staleUnknown(info *types.Info, fn ast.Node, old *types.Var) bool {
+	if fn == nil {
+		return false
 	}
-	if loop.Post != nil && capturedByLit(info, loop.Post, old) {
-		return true
-	}
-	if addrTaken(info, loop.Body, old) {
-		return true
-	}
-	return loop.Post != nil && addrTaken(info, loop.Post, old)
+	return capturedByLit(info, fn, old) || addrTaken(info, fn, old)
 }
 
 func capturedByLit(info *types.Info, n ast.Node, v *types.Var) bool {

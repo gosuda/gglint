@@ -404,3 +404,12 @@ func closedrecvSilentNestedTypeSwitch(v any) int {
 		}
 	}
 }
+
+func closedrecvReportedInvoked() {
+	ch := make(chan int)
+	func() { go func() { ch <- 1; close(ch) }() }()
+	sum := 0
+	for { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
+		sum += <-ch
+	}
+}

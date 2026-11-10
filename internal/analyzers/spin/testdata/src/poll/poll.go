@@ -270,3 +270,15 @@ func pollSilentDefaultIfElse(ch chan int, n int) {
 		}
 	}
 }
+
+func pollReportedInitPost(ch chan int) int {
+	n := 0
+	for i := 0; ; i++ { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			return v
+		default:
+			n += i
+		}
+	}
+}

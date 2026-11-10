@@ -12,7 +12,7 @@ import (
 
 var closedrecvAnalyzer = &analysis.Analyzer{
 	Name:     "closedrecv",
-	Doc:      "report single-value receives spinning after close; spin covers five shapes only",
+	Doc:      "report single-value receives spinning after close in loops without return, break, goto, or panic; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runClosedrecv,
 }
@@ -149,9 +149,37 @@ func isChan(t types.Type) bool {
 	return ok
 }
 
+func calledLits(n ast.Node) map[*ast.FuncLit]bool {
+	lits := map[*ast.FuncLit]bool{}
+	ast.Inspect(n, func(x ast.Node) bool {
+		c, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if lit, ok := ast.Unparen(c.Fun).(*ast.FuncLit); ok {
+			lits[lit] = true
+		}
+		return true
+	})
+	return lits
+}
+
+func walkCalledLit(n ast.Node, f func(ast.Node) bool) {
+	lits := calledLits(n)
+	ast.Inspect(n, func(x ast.Node) bool {
+		if x == nil {
+			return true
+		}
+		if lit, ok := x.(*ast.FuncLit); ok && x != n && !lits[lit] {
+			return false
+		}
+		return f(x)
+	})
+}
+
 func closesBefore(pass *analysis.Pass, fn ast.Node, loop *ast.ForStmt, v *types.Var) bool {
 	closed := false
-	walkNoLit(fn, func(n ast.Node) bool {
+	walkCalledLit(fn, func(n ast.Node) bool {
 		if closed {
 			return false
 		}
@@ -188,7 +216,7 @@ func spawnedBody(n ast.Node) (*ast.FuncLit, bool) {
 
 func litCloses(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
 	closed := false
-	walkNoLit(lit.Body, func(x ast.Node) bool {
+	walkCalledLit(lit.Body, func(x ast.Node) bool {
 		if closesVar(pass, x, v) {
 			closed = true
 		}
