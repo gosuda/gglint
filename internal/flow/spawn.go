@@ -840,8 +840,11 @@ func calledLiterals(fn ast.Node) map[*ast.FuncLit]bool {
 			markCalledArgs(n.Call, out)
 			return false
 		case *ast.DeferStmt:
+			if lit, ok := ast.Unparen(n.Call.Fun).(*ast.FuncLit); ok {
+				out[lit] = true
+			}
 			markCalledArgs(n.Call, out)
-			return false
+			return true
 		}
 		if call, ok := n.(*ast.CallExpr); ok {
 			if lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit); ok {

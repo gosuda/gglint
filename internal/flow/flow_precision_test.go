@@ -723,3 +723,42 @@ func TestInPlaceLockEarlyExit(t *testing.T) {
 		})
 	}
 }
+
+func TestDeferredLitUnlockReleases(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc f() {\nvar mu sync.Mutex\nfunc() { mu.Lock(); defer func() { mu.Unlock() }() }()\n_ = 1\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	held := HeldAt(pass, NewGraph(pass, fd))
+	if got := held(fd.Body.List[2]); len(got) != 0 {
+		t.Fatalf("deferred literal unlock still held: %v", got)
+	}
+}
+
+func TestDeferredLitCalleeJoins(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"wait", "package p\nimport \"sync\"\nfunc drain(wg *sync.WaitGroup) { defer func() { wg.Wait() }() }\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\ndrain(&wg)\ns = \"b\"\nreturn s\n}\n"},
+		{"recv", "package p\nfunc drainCh(done chan struct{}) { defer func() { <-done }() }\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\ndrainCh(done)\ns = \"b\"\nreturn s\n}\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			pass, fd, target := joinedTarget(t, pkg)
+			sp := Spawns(pass, fd)[0]
+			g := NewGraph(pass, fd)
+			if !Joined(pass, g, sp, target) {
+				t.Fatalf("%s: deferred literal callee does not join", tc.name)
+			}
+		})
+	}
+}
