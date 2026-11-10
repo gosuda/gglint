@@ -79,6 +79,9 @@ func checkLoopDefer(pass *analysis.Pass, list []ast.Stmt, i int, st ast.Stmt) {
 	if want == "" {
 		return
 	}
+	if rootInLoop(dk, list) {
+		return
+	}
 	if !loopHasLock(pass, list, i, dk, want) {
 		return
 	}
@@ -86,12 +89,25 @@ func checkLoopDefer(pass *analysis.Pass, list []ast.Stmt, i int, st ast.Stmt) {
 	pass.Reportf(ds.Call.Pos(), "the deferred unlock runs at function exit, so the second iteration locks %s while it is held: unlock at the end of each iteration", recv)
 }
 
-func matchLock(deferMethod string) string {
-	if deferMethod == "Unlock" {
-		return "Lock"
+func rootInLoop(key flow.Key, list []ast.Stmt) bool {
+	pos := key.Root.Pos()
+	if !pos.IsValid() || len(list) == 0 {
+		return false
 	}
-	if deferMethod == "RUnlock" {
-		return "RLock"
+	for _, st := range list {
+		if pos >= st.Pos() && pos <= st.End() {
+			return true
+		}
+	}
+	return false
+}
+
+func matchLock(deferMethod string) string {
+	if deferMethod == methodUnlock {
+		return methodLock
+	}
+	if deferMethod == methodRUnlock {
+		return methodRLock
 	}
 	return ""
 }
@@ -173,26 +189,28 @@ func allBlank(lhs []ast.Expr) bool {
 	return len(lhs) > 0
 }
 
-func tryCall(info *types.Info, e ast.Expr) (*ast.CallExpr, string, string, bool) {
-	call, ok := ast.Unparen(e).(*ast.CallExpr)
+func tryCall(info *types.Info, e ast.Expr) (call *ast.CallExpr, method, recv string, ok bool) {
+	call, ok = ast.Unparen(e).(*ast.CallExpr)
 	if !ok {
 		return nil, "", "", false
 	}
-	k, m, ok := mutexKey(info, call)
+	var m string
+	var k flow.Key
+	k, m, ok = mutexKey(info, call)
 	if !ok || k.Root == nil {
 		return nil, "", "", false
 	}
-	if m != "TryLock" && m != "TryRLock" {
+	if m != methodTryLock && m != methodTryRLock {
 		return nil, "", "", false
 	}
 	return call, m, recvText(info, call), true
 }
 
 func lockForTry(m string) string {
-	if m == "TryRLock" {
-		return "RLock"
+	if m == methodTryRLock {
+		return methodRLock
 	}
-	return "Lock"
+	return methodLock
 }
 
 func runSelfcopy(pass *analysis.Pass) (any, error) {
@@ -212,9 +230,6 @@ func checkSelfcopy(pass *analysis.Pass, fn ast.Node) {
 		return
 	}
 	ast.Inspect(fn, func(n ast.Node) bool {
-		if lit, ok := n.(*ast.FuncLit); ok && lit.Body != nil {
-			return false
-		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -247,7 +262,7 @@ func checkSelfcopyCall(pass *analysis.Pass, rv *types.Var, call *ast.CallExpr) {
 	if !ok {
 		return
 	}
-	if m != "Lock" && m != "RLock" {
+	if m != methodLock && m != methodRLock {
 		return
 	}
 	if k.Root != rv {

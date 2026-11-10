@@ -30,3 +30,11 @@ func (c PCounter) selfcopySilent2() {
 
 func (Counter) selfcopySilent3() {
 }
+
+func (c Counter) selfcopyClosureReported() {
+	go func() {
+		c.mu.Lock() // want "locks a copy of c.mu"
+		c.n++
+		c.mu.Unlock()
+	}()
+}

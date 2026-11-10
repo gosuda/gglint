@@ -46,7 +46,7 @@ func reportUpgradeOps(pass *analysis.Pass, n ast.Node, key flow.Key, s state) {
 		return
 	}
 	for _, op := range opsInNode(pass.TypesInfo, n, key) {
-		if op.method == "Lock" {
+		if op.method == methodLock {
 			pass.Reportf(op.call.Pos(), "%s is read-locked by this goroutine, so this Lock waits for itself: RUnlock first, or take Lock from the start", op.recv)
 		}
 	}

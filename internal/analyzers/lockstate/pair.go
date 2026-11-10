@@ -48,10 +48,10 @@ func reportPairOps(pass *analysis.Pass, n ast.Node, key flow.Key, s state) {
 }
 
 func reportPairOp(pass *analysis.Pass, op opCall, s state) {
-	if op.method == "Unlock" && (s == readState || s == freeState) {
+	if op.method == methodUnlock && (s == readState || s == freeState) {
 		pass.Reportf(op.call.Pos(), "%s is not write-locked here, so this Unlock panics: pair Lock with Unlock and RLock with RUnlock", op.recv)
 	}
-	if op.method == "RUnlock" && (s == writeState || s == freeState) {
+	if op.method == methodRUnlock && (s == writeState || s == freeState) {
 		pass.Reportf(op.call.Pos(), "%s is not read-locked here, so this RUnlock panics: pair RLock with RUnlock and Lock with Unlock", op.recv)
 	}
 }

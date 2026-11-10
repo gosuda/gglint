@@ -14,3 +14,26 @@ func upgradeSilent() {
 	mu.RUnlock()
 	mu.Lock()
 }
+
+func upgradeAliasSilent() {
+	var mu sync.RWMutex
+	mu.RLock()
+	p := &mu
+	p.RUnlock()
+	mu.Lock()
+}
+
+type upgradeR struct {
+	mu sync.RWMutex
+}
+
+func (r *upgradeR) upgradeUnlockR() {
+	r.mu.RUnlock()
+}
+
+func upgradeEnclosingSilent() {
+	var r upgradeR
+	r.mu.RLock()
+	r.upgradeUnlockR()
+	r.mu.Lock()
+}

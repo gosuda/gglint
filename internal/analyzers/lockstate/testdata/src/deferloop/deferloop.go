@@ -38,3 +38,11 @@ func deferloopSilent3(xs []int) {
 		defer mu.Unlock()
 	}
 }
+
+func deferloopFreshSilent(n int) {
+	for range n {
+		var mu sync.Mutex
+		mu.Lock()
+		defer mu.Unlock()
+	}
+}
