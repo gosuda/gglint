@@ -159,9 +159,22 @@ func clearSliceNodes(info *types.Info, fn ast.Node) map[ast.Node]bool {
 	return out
 }
 
-func plainStoreBases(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
-	out := map[*ast.Ident]bool{}
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+func plainStoreBases(info *types.Info, fn ast.Node, a *types.Var, ptrs map[*types.Var]*types.Var) map[*ast.Ident]bool {
+	scan := storeScan{info: info, fn: fn, target: a, ptrs: ptrs, out: map[*ast.Ident]bool{}}
+	scan.collect()
+	return scan.out
+}
+
+type storeScan struct {
+	info   *types.Info
+	fn     ast.Node
+	target *types.Var
+	ptrs   map[*types.Var]*types.Var
+	out    map[*ast.Ident]bool
+}
+
+func (s storeScan) collect() {
+	ast.Inspect(flow.Body(s.fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -169,64 +182,73 @@ func plainStoreBases(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident
 		if !ok || st.Tok != token.ASSIGN {
 			return true
 		}
-		markPlainStore(info, st, a, out)
+		s.mark(st)
 		return true
 	})
-	return out
 }
 
-func markPlainStore(info *types.Info, st *ast.AssignStmt, a *types.Var, out map[*ast.Ident]bool) {
+func (s storeScan) mark(st *ast.AssignStmt) {
 	for _, lhs := range st.Lhs {
-		markPlainLHS(info, lhs, a, out)
+		idx, ok := ast.Unparen(lhs).(*ast.IndexExpr)
+		if !ok {
+			continue
+		}
+		_, id, ok := resolveIndexBase(s.info, map[*types.Var]bool{s.target: true}, s.ptrs, idx.X)
+		if !ok {
+			continue
+		}
+		s.out[id] = true
 	}
 }
 
-func markPlainLHS(info *types.Info, lhs ast.Expr, a *types.Var, out map[*ast.Ident]bool) {
-	idx, ok := ast.Unparen(lhs).(*ast.IndexExpr)
-	if !ok {
-		return
-	}
-	v, ok := identVar(info, idx.X)
-	if !ok || v != a {
-		return
-	}
-	if id, ok := ast.Unparen(idx.X).(*ast.Ident); ok {
-		out[id] = true
-	}
+func clearArgIdents(info *types.Info, fn ast.Node, a *types.Var, ptrs map[*types.Var]*types.Var) map[*ast.Ident]bool {
+	scan := clearScan{info: info, fn: fn, target: a, ptrs: ptrs, out: map[*ast.Ident]bool{}}
+	scan.collect()
+	return scan.out
 }
 
-func clearArgIdents(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
-	out := map[*ast.Ident]bool{}
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+type clearScan struct {
+	info   *types.Info
+	fn     ast.Node
+	target *types.Var
+	ptrs   map[*types.Var]*types.Var
+	out    map[*ast.Ident]bool
+}
+
+func (s clearScan) collect() {
+	ast.Inspect(flow.Body(s.fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
-		if !ok || !isClearCall(info, call) {
+		if !ok || !isClearCall(s.info, call) {
 			return true
 		}
-		markClearArgs(info, call, a, out)
+		for _, arg := range call.Args {
+			ast.Inspect(arg, func(x ast.Node) bool {
+				s.mark(x)
+				return true
+			})
+		}
 		return true
 	})
-	return out
 }
 
-func markClearArgs(info *types.Info, call *ast.CallExpr, a *types.Var, out map[*ast.Ident]bool) {
-	for _, arg := range call.Args {
-		ast.Inspect(arg, func(x ast.Node) bool {
-			markClearIdent(info, x, a, out)
-			return true
-		})
-	}
-}
-
-func markClearIdent(info *types.Info, x ast.Node, a *types.Var, out map[*ast.Ident]bool) {
+func (s clearScan) mark(x ast.Node) {
 	id, ok := x.(*ast.Ident)
 	if !ok {
 		return
 	}
-	if v, ok := varOf(info, id); ok && v == a {
-		out[id] = true
+	v, ok := varOf(s.info, id)
+	if !ok {
+		return
+	}
+	if v == s.target {
+		s.out[id] = true
+		return
+	}
+	if a, ok := s.ptrs[v]; ok && a == s.target {
+		s.out[id] = true
 	}
 }
 

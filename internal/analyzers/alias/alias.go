@@ -19,7 +19,7 @@ func Analyzers() []*analysis.Analyzer {
 
 var appendclobber = &analysis.Analyzer{
 	Name:     "appendclobber",
-	Doc:      "Reports an append through b := a[:n] that overwrites local a read later; needs constant n and capacity proof. It reports when a clobbered element is read here or the slice leaves the function after the append, and it does not follow a local alias of the slice or a local pointer to it.",
+	Doc:      "Reports an append through b := a[:n] with constant n and capacity proof that overwrites local a read later or leaving after the append; it does not follow a local alias of the slice, a local pointer counts only when its single definition is the address of the slice.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runAppendclobber,
 }

@@ -405,6 +405,33 @@ func AppendclobberReportedAddrTaken() int {
 	return readThird(&a)
 }
 
+func AppendclobberReportedLocalPointerRead() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	p := &a
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return (*p)[2]
+}
+
+func AppendclobberSilentPointerReassigned() []int {
+	a := []int{1, 2, 3, 4}
+	other := []int{5, 6, 7, 8}
+	b := a[:2]
+	var p = &a
+	p = &other
+	b = append(b, 9)
+	return *p
+}
+
+func AppendclobberSilentStarReassign() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	p := &a
+	*p = make([]int, 4)
+	b = append(b, 9)
+	return a[2]
+}
+
 func AppendclobberSilentAddrLocal() ([]int, int) {
 	xs := []int{1, 2, 3, 4}
 	out := xs[:0]

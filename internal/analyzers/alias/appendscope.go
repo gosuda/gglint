@@ -25,6 +25,8 @@ type appendScope struct {
 	sliceReads  map[*types.Var][]*ast.SliceExpr
 	wholeReads  map[*types.Var][]*ast.Ident
 	loops       []loopSpan
+	wanted      map[*types.Var]bool
+	ptrs        map[*types.Var]*types.Var
 }
 
 type loopSpan struct {
@@ -46,17 +48,18 @@ func newAppendScope(pass *analysis.Pass, fn ast.Node, defs map[*types.Var]sliceD
 		plainStores: map[*types.Var]map[*ast.Ident]bool{},
 		clearArgs:   map[*types.Var]map[*ast.Ident]bool{},
 	}
+	seen := map[*types.Var]bool{}
+	for _, d := range defs {
+		seen[d.a] = true
+	}
+	s.wanted = seen
+	s.ptrs = collectPtrAliases(info, fn, seen)
 	collectAssignsAndLoops(s, info, fn)
 	s.copyDests = copyDestNodes(info, fn)
 	s.clearSlices = clearSliceNodes(info, fn)
-	seen := map[*types.Var]bool{}
-	for _, d := range defs {
-		if seen[d.a] {
-			continue
-		}
-		seen[d.a] = true
-		s.plainStores[d.a] = plainStoreBases(info, fn, d.a)
-		s.clearArgs[d.a] = clearArgIdents(info, fn, d.a)
+	for a := range seen {
+		s.plainStores[a] = plainStoreBases(info, fn, a, s.ptrs)
+		s.clearArgs[a] = clearArgIdents(info, fn, a, s.ptrs)
 	}
 	s.indexReads = map[*types.Var][]*ast.IndexExpr{}
 	s.sliceReads = map[*types.Var][]*ast.SliceExpr{}
@@ -77,16 +80,34 @@ func collectAssignsAndLoops(s *appendScope, info *types.Info, fn ast.Node) {
 		}
 		s.atPos[st.Pos()] = st
 		for _, lhs := range st.Lhs {
-			id, ok := ast.Unparen(lhs).(*ast.Ident)
-			if !ok {
-				continue
-			}
-			if v, ok := varOf(info, id); ok {
-				s.assigns[v] = append(s.assigns[v], st)
-			}
+			recordAssignTarget(s, info, lhs, st)
 		}
 		return true
 	})
+}
+
+func recordAssignTarget(s *appendScope, info *types.Info, lhs ast.Expr, st *ast.AssignStmt) {
+	if id, ok := ast.Unparen(lhs).(*ast.Ident); ok {
+		if v, ok := varOf(info, id); ok {
+			s.assigns[v] = append(s.assigns[v], st)
+		}
+		return
+	}
+	star, ok := ast.Unparen(lhs).(*ast.StarExpr)
+	if !ok {
+		return
+	}
+	inner, ok := ast.Unparen(star.X).(*ast.Ident)
+	if !ok {
+		return
+	}
+	p, ok := varOf(info, inner)
+	if !ok {
+		return
+	}
+	if a, ok := s.ptrs[p]; ok && s.wanted[a] {
+		s.assigns[a] = append(s.assigns[a], st)
+	}
 }
 
 func collectLoopSpan(s *appendScope, n ast.Node) {
@@ -120,11 +141,7 @@ func collectScopeReads(s *appendScope, wanted map[*types.Var]bool) {
 }
 
 func collectScopeIndex(s *appendScope, wanted map[*types.Var]bool, t *ast.IndexExpr) {
-	v, ok := identVar(s.info, t.X)
-	if !ok || !wanted[v] {
-		return
-	}
-	id, ok := ast.Unparen(t.X).(*ast.Ident)
+	v, id, ok := resolveIndexBase(s.info, wanted, s.ptrs, t.X)
 	if !ok || s.plainStores[v][id] {
 		return
 	}
@@ -132,11 +149,7 @@ func collectScopeIndex(s *appendScope, wanted map[*types.Var]bool, t *ast.IndexE
 }
 
 func collectScopeSlice(s *appendScope, wanted map[*types.Var]bool, t *ast.SliceExpr) {
-	v, ok := identVar(s.info, t.X)
-	if !ok || !wanted[v] {
-		return
-	}
-	id, ok := ast.Unparen(t.X).(*ast.Ident)
+	v, id, ok := resolveIndexBase(s.info, wanted, s.ptrs, t.X)
 	if !ok || s.clearArgs[v][id] {
 		return
 	}
@@ -249,6 +262,29 @@ func collectScopeComposite(s *appendScope, wanted map[*types.Var]bool, t *ast.Co
 
 func scopeWholeIdent(s *appendScope, wanted map[*types.Var]bool, e ast.Expr) (*types.Var, *ast.Ident, bool) {
 	e = ast.Unparen(e)
+	if star, ok := e.(*ast.StarExpr); ok {
+		return starWhole(s, wanted, star)
+	}
+	return plainWhole(s, wanted, e)
+}
+
+func starWhole(s *appendScope, wanted map[*types.Var]bool, star *ast.StarExpr) (*types.Var, *ast.Ident, bool) {
+	inner, ok := ast.Unparen(star.X).(*ast.Ident)
+	if !ok {
+		return nil, nil, false
+	}
+	p, ok := varOf(s.info, inner)
+	if !ok {
+		return nil, nil, false
+	}
+	a, ok := s.ptrs[p]
+	if !ok || !wanted[a] {
+		return nil, nil, false
+	}
+	return a, inner, true
+}
+
+func plainWhole(s *appendScope, wanted map[*types.Var]bool, e ast.Expr) (*types.Var, *ast.Ident, bool) {
 	if u, ok := e.(*ast.UnaryExpr); ok {
 		if u.Op != token.AND {
 			return nil, nil, false
@@ -260,10 +296,16 @@ func scopeWholeIdent(s *appendScope, wanted map[*types.Var]bool, e ast.Expr) (*t
 		return nil, nil, false
 	}
 	v, ok := varOf(s.info, id)
-	if !ok || !wanted[v] {
+	if !ok {
 		return nil, nil, false
 	}
-	return v, id, true
+	if wanted[v] {
+		return v, id, true
+	}
+	if a, ok := s.ptrs[v]; ok && wanted[a] {
+		return a, id, true
+	}
+	return nil, nil, false
 }
 
 func scopeStoredOutside(s *appendScope, lhs []ast.Expr) bool {
