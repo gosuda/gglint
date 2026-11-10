@@ -1,6 +1,7 @@
 package errdrop
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -234,4 +235,103 @@ func outReportedCloseOut(n int, b []byte) int {
 	f.Write(b)
 	f.Close(&m) // want "is read after the error of f.Close is dropped"
 	return m + n
+}
+
+type writeOnly interface {
+	Write([]byte) (int, error)
+}
+
+func verdictSilentSingleWrite(w writeOnly, b []byte) error {
+	w.Write(b)
+	return nil
+}
+
+func echoErr(err error) error { return err }
+
+func verdictSilentEcho(err error) error {
+	echoErr(err)
+	return nil
+}
+
+var savedErr error
+
+func recordErr(err error) error { savedErr = err; return savedErr }
+
+func verdictSilentSink(err error) error {
+	recordErr(err)
+	return nil
+}
+
+func doWork() error { return errors.New("boom") }
+
+func risky(err error) error {
+	_ = err
+	return doWork()
+}
+
+func verdictReportedSink(err error) error {
+	risky(err) // want "the error of risky is dropped and the next statement returns nil"
+	return nil
+}
+
+func computeErr() error { return errors.New("boom") }
+
+func wrapCompute(err error) error {
+	e := computeErr()
+	_ = err
+	return e
+}
+
+func verdictReportedComputed(err error) error {
+	wrapCompute(err) // want "the error of wrapCompute is dropped and the next statement returns nil"
+	return nil
+}
+
+func closeForwarder(c io.Closer) error {
+	if c == nil {
+		return nil
+	}
+	return c.Close()
+}
+
+func verdictSilentForwarder(c io.Closer) error {
+	closeForwarder(c)
+	return nil
+}
+
+func closeWithLog(c io.Closer) error {
+	println("closing")
+	return c.Close()
+}
+
+func verdictReportedForwarder(c io.Closer) error {
+	closeWithLog(c) // want "the error of closeWithLog is dropped and the next statement returns nil"
+	return nil
+}
+
+func verdictSilentDiscardAfterPeek(r *bufio.Reader) error {
+	buf, err := r.Peek(2)
+	if bytes.Equal(buf, []byte("\r\n")) {
+		r.Discard(2)
+		return nil
+	}
+	return err
+}
+
+func verdictReportedDiscard(r *bufio.Reader) error {
+	r.Discard(2) // want "the error of r.Discard is dropped and the next statement returns nil"
+	return nil
+}
+
+var errShort = errors.New("short")
+
+func verdictReportedDiscardAfterRead(r *bufio.Reader, p []byte) error {
+	buf, err := r.Peek(2)
+	if err != nil {
+		return err
+	}
+	_, _ = r.Read(p)
+	_ = buf
+	r.Discard(2) // want "the error of r.Discard is dropped and the next statement returns nil"
+	return nil
 }
