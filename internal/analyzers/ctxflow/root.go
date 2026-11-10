@@ -100,17 +100,62 @@ func nilGuarded(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) b
 	}
 	for icur := range cur.Enclosing((*ast.IfStmt)(nil)) {
 		ifs, ok := icur.Node().(*ast.IfStmt)
-		if !ok || ifs.Body == nil {
+		if !ok {
 			continue
 		}
-		if call.Pos() < ifs.Body.Pos() || call.End() > ifs.Body.End() {
-			continue
+		if inBody(call, ifs) && impliesNil(pass.TypesInfo, ifs.Cond, v) {
+			return true
 		}
-		if comparesNilWith(pass.TypesInfo, ifs.Cond, v) {
+		if inElse(call, ifs) && impliesLive(pass.TypesInfo, ifs.Cond, v) {
 			return true
 		}
 	}
 	return false
+}
+
+func inBody(call *ast.CallExpr, ifs *ast.IfStmt) bool {
+	return ifs.Body != nil && call.Pos() >= ifs.Body.Pos() && call.End() <= ifs.Body.End()
+}
+
+func inElse(call *ast.CallExpr, ifs *ast.IfStmt) bool {
+	return ifs.Else != nil && call.Pos() >= ifs.Else.Pos() && call.End() <= ifs.Else.End()
+}
+
+func impliesNil(info *types.Info, cond ast.Expr, v *types.Var) bool {
+	cond = stripParens(cond)
+	if b, ok := cond.(*ast.BinaryExpr); ok {
+		if b.Op == token.LOR {
+			return impliesNil(info, b.X, v) && impliesNil(info, b.Y, v)
+		}
+		if b.Op == token.LAND {
+			return impliesNil(info, b.X, v) || impliesNil(info, b.Y, v)
+		}
+	}
+	return comparesNilWith(info, cond, v)
+}
+
+func impliesLive(info *types.Info, cond ast.Expr, v *types.Var) bool {
+	cond = stripParens(cond)
+	if b, ok := cond.(*ast.BinaryExpr); ok {
+		if b.Op == token.LOR {
+			return impliesLive(info, b.X, v) || impliesLive(info, b.Y, v)
+		}
+		if b.Op == token.LAND {
+			return impliesLive(info, b.X, v) && impliesLive(info, b.Y, v)
+		}
+	}
+	return comparesLiveWith(info, cond, v)
+}
+
+func comparesLiveWith(info *types.Info, cond ast.Expr, v *types.Var) bool {
+	b, ok := stripParens(cond).(*ast.BinaryExpr)
+	if !ok || b.Op != token.NEQ {
+		return false
+	}
+	if identResolvesTo(info, b.X, v) && isNilIdent(info, b.Y) {
+		return true
+	}
+	return identResolvesTo(info, b.Y, v) && isNilIdent(info, b.X)
 }
 
 func enclosingAssign(cur inspector.Cursor, call *ast.CallExpr) *ast.AssignStmt {

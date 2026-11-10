@@ -34,7 +34,7 @@ func checkDonespin(pass *analysis.Pass, cur inspector.Cursor) {
 		return
 	}
 	comm, dflt, ok := splitDonespin(sel)
-	if !ok || !receivesDone(pass.TypesInfo, comm.Comm) || defaultHasCall(pass.TypesInfo, dflt) {
+	if !ok || !receivesDone(pass.TypesInfo, comm.Comm) || defaultBlocks(pass.TypesInfo, dflt) {
 		return
 	}
 	if !directlyInFor(cur) {
@@ -123,20 +123,30 @@ func isDoneCall(info *types.Info, call *ast.CallExpr) bool {
 	return obj.Name() == "Context" && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
 }
 
-func defaultHasCall(info *types.Info, dflt *ast.CommClause) bool {
-	found := false
+func defaultBlocks(info *types.Info, dflt *ast.CommClause) bool {
+	blocked := false
 	ast.Inspect(dflt, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return !found
+		if blocked {
+			return false
 		}
-		if isTypeConversion(info, call) || isLenOrCap(info, call) {
-			return true
+		if isBlockingOp(info, n) {
+			blocked = true
+			return false
 		}
-		found = true
-		return false
+		return true
 	})
-	return found
+	return blocked
+}
+
+func isBlockingOp(info *types.Info, n ast.Node) bool {
+	if _, ok := n.(*ast.SendStmt); ok {
+		return true
+	}
+	if u, ok := n.(*ast.UnaryExpr); ok && u.Op == token.ARROW {
+		return true
+	}
+	call, ok := n.(*ast.CallExpr)
+	return ok && !isTypeConversion(info, call) && !isLenOrCap(info, call)
 }
 
 func isTypeConversion(info *types.Info, call *ast.CallExpr) bool {

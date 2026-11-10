@@ -180,3 +180,25 @@ func donespinSilentWorkAfterFor(ctx context.Context) int {
 		}
 	}
 }
+
+func donespinSilentChanRecv(ctx context.Context, sem <-chan struct{}) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			<-sem
+		}
+	}
+}
+
+func donespinSilentChanSend(ctx context.Context, out chan int, v int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			out <- v
+		}
+	}
+}

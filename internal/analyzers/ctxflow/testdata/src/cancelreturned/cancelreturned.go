@@ -177,3 +177,37 @@ func cancelreturnedReportedCancel(ctx context.Context) context.Context {
 	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
 	return c
 }
+
+func workOf(ctx context.Context) error { return nil }
+
+func cancelreturnedSilentCallResult(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	return workOf(ctx)
+}
+
+func cancelreturnedSilentMethodResult(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	return ctx.Err()
+}
+
+func cancelreturnedSilentWrappedResult(parent context.Context) error {
+	c, cancel := context.WithCancel(parent)
+	defer cancel()
+	return workOf(c)
+}
+
+func mustCtx(ctx context.Context) context.Context { return ctx }
+
+func cancelreturnedReportedComposite(parent context.Context) *holder {
+	c, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	return &holder{c: c}
+}
+
+func cancelreturnedSilentCompositeCall(parent context.Context) *holder {
+	c, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	return &holder{c: mustCtx(c)}
+}

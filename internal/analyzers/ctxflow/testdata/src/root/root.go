@@ -134,3 +134,19 @@ type rootShared struct {
 func rootSilentSharedComposite(ctx context.Context) context.Context {
 	return &rootShared{Context: context.Background(), values: ctx}
 }
+
+func rootReportedOrGuard(ctx context.Context, debug bool) {
+	if ctx == nil || debug {
+		ctx = context.Background() // want "a context is in scope, and this root context drops its cancellation and deadline"
+	}
+	use(ctx)
+}
+
+func rootSilentElseGuard(ctx context.Context) {
+	if ctx != nil {
+		use(ctx)
+	} else {
+		ctx = context.Background()
+	}
+	use(ctx)
+}

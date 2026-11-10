@@ -188,21 +188,40 @@ func mentionsAt(pass *analysis.Pass, fn, cur inspector.Cursor, v *types.Var) boo
 		return false
 	}
 	for _, res := range ret.Results {
-		if resultMentions(pass.TypesInfo, res, v) {
+		if returnsContext(pass.TypesInfo, res, v) {
 			return true
 		}
 	}
 	return false
 }
 
-func resultMentions(info *types.Info, res ast.Expr, v *types.Var) bool {
-	found := false
-	ast.Inspect(res, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && varOf(info, id) == v {
-			found = true
-			return false
+func returnsContext(info *types.Info, res ast.Expr, v *types.Var) bool {
+	e := stripParens(res)
+	if identResolvesTo(info, e, v) {
+		return true
+	}
+	if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		e = stripParens(u.X)
+	}
+	lit, ok := e.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	return compositeMentions(info, lit, v)
+}
+
+func compositeMentions(info *types.Info, lit *ast.CompositeLit, v *types.Var) bool {
+	for _, elt := range lit.Elts {
+		if compositeEltMentions(info, stripParens(elt), v) {
+			return true
 		}
-		return !found
-	})
-	return found
+	}
+	return false
+}
+
+func compositeEltMentions(info *types.Info, elt ast.Expr, v *types.Var) bool {
+	if kv, ok := elt.(*ast.KeyValueExpr); ok {
+		return returnsContext(info, stripParens(kv.Value), v)
+	}
+	return returnsContext(info, elt, v)
 }
