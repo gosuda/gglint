@@ -1,5 +1,7 @@
 package nilop
 
+import "unsafe"
+
 func nilopReported() {
 	var ch chan int
 	ch <- 1 // want `ch is declared and never made, so this operation blocks forever \(close panics\): make the channel first`
@@ -62,4 +64,20 @@ func nilopSilentDefineReassign() int {
 		return v
 	}
 	return 0
+}
+func nilopReportedClose() {
+	var ch chan int
+	close(ch) // want `ch is declared and never made, so this operation blocks forever \(close panics\): make the channel first`
+}
+
+func nilopSilentSelectRecv() {
+	var ch chan int
+	select {
+	case <-ch:
+	default:
+	}
+}
+func nilopSilentUnsafeSizeof() uintptr {
+	var c chan int
+	return unsafe.Sizeof(<-c)
 }

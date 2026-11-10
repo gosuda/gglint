@@ -14,21 +14,20 @@ func selfdeadlockSilent() {
 
 func selfdeadlockSilentLiteral() {
 	ch := make(chan int)
-	go func() { _ = ch }()
+	go func() { <-ch }()
 	ch <- 1
-	<-ch
 }
 
-func selfdeadlockSilentSends(xs []int) {
-	ch := make(chan int)
-	ch <- 1
-	ch <- 2
-	for range xs {
-	}
-}
 
 func selfdeadlockSilentBranch(a bool) {
 	ch := make(chan int)
+	go func() {
+		if a {
+			<-ch
+		} else {
+			ch <- 1
+		}
+	}()
 	if a {
 		ch <- 1
 	} else {
@@ -50,15 +49,6 @@ func selfdeadlockSilentEscapeCall() int {
 	return <-ch
 }
 
-func selfdeadlockSilentRich() {
-	var y = 1
-	_ = y
-	xs := []int{1, 2}
-	_ = xs[1:2]
-	ch := make(chan int, 1)
-	ch <- 1
-	<-ch
-}
 
 func selfdeadlockSilentAlias() int {
 	ch := make(chan int)

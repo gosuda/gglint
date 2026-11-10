@@ -27,13 +27,11 @@ func doublecloseSilentAddress() {
 func doublecloseSilentRange(chans []chan int) {
 	ch := make(chan int)
 	close(ch)
+	if len(chans) == 0 {
+		return
+	}
 	for _, ch = range chans {
 	}
 	close(ch)
 }
 
-func doublecloseSilentGo() {
-	ch := make(chan int, 1)
-	go close(ch)
-	close(ch)
-}

@@ -14,6 +14,6 @@ func sendaftercloseSilent() {
 
 func sendaftercloseSilentGo() {
 	ch := make(chan int, 1)
-	go close(ch)
 	ch <- 1
+	go close(ch)
 }

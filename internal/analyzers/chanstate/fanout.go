@@ -2,6 +2,7 @@ package chanstate
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 
@@ -167,7 +168,16 @@ func drainLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
 	case *ast.IfStmt:
 		return drainIfRecvs(info, s, k)
 	case *ast.SwitchStmt:
-		return stmtRecvs(info, s.Init, k) + uncondRecvs(info, s.Tag, k), true
+		return drainSwitchRecvs(info, s, k)
+	case *ast.TypeSwitchStmt:
+		return drainTypeSwitchRecvs(info, s, k)
+	case *ast.SelectStmt:
+		return drainSelectRecvs(info, s, k)
+	case *ast.LabeledStmt:
+		return drainLoopRecvs(info, s.Stmt, k)
+	}
+	if hasAnyRecv(info, s, k) {
+		return 0, false
 	}
 	return 0, true
 }
@@ -175,6 +185,9 @@ func drainLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
 func drainCountedLoop(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
 	straight := drainBodyStraight(info, s, k)
 	if countLoopRecvs(info, s, k) != straight {
+		return 0, false
+	}
+	if totalLoopRecvs(info, s, k) != straight {
 		return 0, false
 	}
 	if straight == 0 {
@@ -189,6 +202,9 @@ func drainCountedLoop(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
 
 func drainIfRecvs(info *types.Info, s *ast.IfStmt, k flow.Key) (int64, bool) {
 	header := stmtRecvs(info, s.Init, k) + uncondRecvs(info, s.Cond, k)
+	if v, ok := constBool(info, s.Cond); ok {
+		return drainIfConst(info, s, k, header, v)
+	}
 	if s.Else == nil {
 		return header, true
 	}
@@ -200,10 +216,48 @@ func drainIfRecvs(info *types.Info, s *ast.IfStmt, k flow.Key) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	if bodyCount < elseCount {
-		return header + bodyCount, true
+	return minLive(header, bodyCount, elseCount, !blockEndsNoReturn(info, s.Body), !elseEndsNoReturn(info, s.Else)), true
+}
+
+func drainIfConst(info *types.Info, s *ast.IfStmt, k flow.Key, header int64, v bool) (int64, bool) {
+	if v {
+		return drainConstBody(info, s.Body, k, header)
 	}
-	return header + elseCount, true
+	if s.Else == nil {
+		return header, true
+	}
+	n, ok := drainElseRecvs(info, s.Else, k)
+	if !ok {
+		return 0, false
+	}
+	if elseEndsNoReturn(info, s.Else) {
+		return 1 << 60, true
+	}
+	return header + n, true
+}
+
+func drainConstBody(info *types.Info, body *ast.BlockStmt, k flow.Key, header int64) (int64, bool) {
+	n, ok := blockStraightRecvs(info, body, k)
+	if !ok {
+		return 0, false
+	}
+	if blockEndsNoReturn(info, body) {
+		return 1 << 60, true
+	}
+	return header + n, true
+}
+
+func minLive(header, a, b int64, aLive, bLive bool) int64 {
+	switch {
+	case aLive && bLive:
+		return header + min(a, b)
+	case aLive:
+		return header + a
+	case bLive:
+		return header + b
+	default:
+		return 1 << 60
+	}
 }
 
 func drainElseRecvs(info *types.Info, elseStmt ast.Stmt, k flow.Key) (int64, bool) {
@@ -214,6 +268,27 @@ func drainElseRecvs(info *types.Info, elseStmt ast.Stmt, k flow.Key) (int64, boo
 		return drainIfRecvs(info, s, k)
 	}
 	return 0, false
+}
+
+func elseEndsNoReturn(info *types.Info, elseStmt ast.Stmt) bool {
+	switch s := elseStmt.(type) {
+	case *ast.BlockStmt:
+		return blockEndsNoReturn(info, s)
+	case *ast.IfStmt:
+		return ifEndsNoReturn(info, s)
+	}
+	return false
+}
+
+func ifEndsNoReturn(info *types.Info, s *ast.IfStmt) bool {
+	if s.Else == nil {
+		return false
+	}
+	bodyNo := blockEndsNoReturn(info, s.Body)
+	if !bodyNo {
+		return false
+	}
+	return elseEndsNoReturn(info, s.Else)
 }
 
 func blockStraightRecvs(info *types.Info, body *ast.BlockStmt, k flow.Key) (int64, bool) {
@@ -228,6 +303,165 @@ func blockStraightRecvs(info *types.Info, body *ast.BlockStmt, k flow.Key) (int6
 		n += recvCount(info, st, k)
 	}
 	return n, true
+}
+
+func defaultEndsNoReturn(info *types.Info, body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
+	for _, c := range body.List {
+		cc, ok := c.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		if len(cc.List) != 0 {
+			continue
+		}
+		return clauseEndsNoReturn(info, cc.Body)
+	}
+	return false
+}
+
+func constBool(info *types.Info, e ast.Expr) (val, ok bool) {
+	if e == nil {
+		return false, false
+	}
+	tv, ok := info.Types[ast.Unparen(e)]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.Bool {
+		return false, false
+	}
+	return constant.BoolVal(tv.Value), true
+}
+
+func constTag(info *types.Info, e ast.Expr) (string, bool) {
+	if e == nil {
+		return "", false
+	}
+	tv, ok := info.Types[ast.Unparen(e)]
+	if !ok || tv.Value == nil {
+		return "", false
+	}
+	return tv.Value.ExactString(), true
+}
+
+func caseMatches(info *types.Info, list []ast.Expr, tag string) bool {
+	for _, e := range list {
+		tv, ok := info.Types[ast.Unparen(e)]
+		if !ok || tv.Value == nil {
+			continue
+		}
+		if tv.Value.ExactString() == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func blockEndsNoReturn(info *types.Info, body *ast.BlockStmt) bool {
+	if body == nil || len(body.List) == 0 {
+		return false
+	}
+	return stmtEndsNoReturn(info, body.List[len(body.List)-1])
+}
+
+func clauseEndsNoReturn(info *types.Info, list []ast.Stmt) bool {
+	if len(list) == 0 {
+		return false
+	}
+	return stmtEndsNoReturn(info, list[len(list)-1])
+}
+
+func stmtEndsNoReturn(info *types.Info, s ast.Stmt) bool {
+	switch s := s.(type) {
+	case *ast.ExprStmt:
+		return isNoReturnExpr(info, s.X)
+	case *ast.BlockStmt:
+		return blockEndsNoReturn(info, s)
+	case *ast.IfStmt:
+		return ifEndsNoReturn(info, s)
+	case *ast.LabeledStmt:
+		return stmtEndsNoReturn(info, s.Stmt)
+	}
+	return false
+}
+
+func isNoReturnExpr(info *types.Info, e ast.Expr) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok {
+		if b, ok := info.ObjectOf(id).(*types.Builtin); ok && b.Name() == "panic" {
+			return true
+		}
+	}
+	return isExitCall(info, call)
+}
+
+func isExitCall(info *types.Info, call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	obj, ok := info.ObjectOf(sel.Sel).(*types.Func)
+	if !ok || obj.Pkg() == nil {
+		return false
+	}
+	pkg := obj.Pkg().Path()
+	name := obj.Name()
+	switch pkg {
+	case "os":
+		return name == "Exit"
+	case "log":
+		switch name {
+		case "Fatal", "Fatalf", "Fatalln", "Panic", "Panicf", "Panicln":
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyRecv(info *types.Info, n ast.Node, k flow.Key) bool {
+	return totalNodeRecvs(info, n, k) > 0
+}
+
+func totalNodeRecvs(info *types.Info, n ast.Node, k flow.Key) int64 {
+	w := &opWalker{info: info, key: k}
+	switch n := n.(type) {
+	case *ast.BlockStmt:
+		w.stmt(n)
+	case ast.Stmt:
+		w.stmt(n)
+	case ast.Expr:
+		w.expr(n)
+	default:
+		ast.Inspect(n, func(x ast.Node) bool {
+			if s, ok := x.(ast.Stmt); ok {
+				w.stmt(s)
+				return false
+			}
+			return true
+		})
+	}
+	var total int64
+	for _, op := range w.out {
+		if op.Kind == opRecv {
+			total++
+		}
+	}
+	return total
+}
+
+func totalLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) int64 {
+	w := &opWalker{info: info, key: k}
+	w.stmt(s)
+	var total int64
+	for _, op := range w.out {
+		if op.Kind == opRecv {
+			total++
+		}
+	}
+	return total
 }
 
 func uncondRecvs(info *types.Info, x ast.Expr, k flow.Key) int64 {
@@ -270,6 +504,9 @@ func countUncondUnary(info *types.Info, x *ast.UnaryExpr, k flow.Key) int64 {
 }
 
 func countUncondCall(info *types.Info, x *ast.CallExpr, k flow.Key) int64 {
+	if isUnevaluatedUnsafe(info, x) {
+		return 0
+	}
 	n := countUncond(info, ast.Unparen(x.Fun), k)
 	for _, a := range x.Args {
 		n += countUncond(info, ast.Unparen(a), k)

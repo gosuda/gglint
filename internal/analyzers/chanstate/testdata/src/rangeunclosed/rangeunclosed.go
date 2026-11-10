@@ -23,6 +23,7 @@ func rangeunclosedSilent() {
 func rangeunclosedSilentEscape() {
 	ch := make(chan int)
 	rangeSink = ch
+	go func() { close(rangeSink.(chan int)) }()
 	for v := range ch {
 		useRange(v)
 	}
@@ -53,7 +54,7 @@ func rangeunclosedSilentField() {
 
 func rangeunclosedSilentReturn() {
 	ch := make(chan int)
-	go func() { ch <- 1; close(ch) }()
+	go func() { ch <- 1 }()
 	for v := range ch {
 		useRange(v)
 		return
@@ -62,7 +63,7 @@ func rangeunclosedSilentReturn() {
 
 func rangeunclosedSilentGoto() {
 	ch := make(chan int)
-	go func() { ch <- 1; close(ch) }()
+	go func() { ch <- 1 }()
 	for v := range ch {
 		useRange(v)
 		if v > 0 {
@@ -74,10 +75,7 @@ doneRange:
 
 func rangeunclosedSilentRich() {
 	ch := make(chan int)
-	go func() { ch <- 1; close(ch) }()
-	var y = 1
-	_ = y
-	_ = &ch
+	go func() { ch <- 1 }()
 	for v := range ch {
 		switch v {
 		case 1:

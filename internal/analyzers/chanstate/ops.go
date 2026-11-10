@@ -322,8 +322,50 @@ func (w *opWalker) call(c *ast.CallExpr) {
 		w.out = append(w.out, chanOp{Kind: opClose, Key: k, InSelect: w.inSel, Sel: w.selField(), Pos: c.Pos(), Expr: c})
 		return
 	}
+	if isUnevaluatedUnsafe(w.info, c) {
+		return
+	}
 	w.expr(c.Fun)
 	w.exprs(c.Args)
+}
+
+func isUnevaluatedUnsafe(info *types.Info, c *ast.CallExpr) bool {
+	if sel, ok := ast.Unparen(c.Fun).(*ast.SelectorExpr); ok {
+		return unsafeSelector(info, sel)
+	}
+	id, ok := ast.Unparen(c.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return unsafeIdent(info, id)
+}
+
+func unsafeSelector(info *types.Info, sel *ast.SelectorExpr) bool {
+	if !unsafeName(sel.Sel.Name) {
+		return false
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	pkg, ok := info.ObjectOf(id).(*types.PkgName)
+	if !ok || pkg.Imported().Path() != "unsafe" {
+		return false
+	}
+	_, ok = info.ObjectOf(sel.Sel).(*types.Builtin)
+	return ok
+}
+
+func unsafeIdent(info *types.Info, id *ast.Ident) bool {
+	if !unsafeName(id.Name) {
+		return false
+	}
+	_, ok := info.ObjectOf(id).(*types.Builtin)
+	return ok
+}
+
+func unsafeName(s string) bool {
+	return s == "Sizeof" || s == "Alignof" || s == "Offsetof"
 }
 
 func (w *opWalker) optExpr(x ast.Expr) {

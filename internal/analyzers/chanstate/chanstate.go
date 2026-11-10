@@ -15,12 +15,12 @@ import (
 // Analyzers returns the seven channel lifecycle checks.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{
-		mk("nilop", "reports channel operations on a local channel declared with var and never made", runNilop),
-		mk("doubleclose", "reports a close of a channel that is already closed on every path", runDoubleclose),
-		mk("sendafterclose", "reports a send to a channel that is closed on every path", runSendafterclose),
-		mk("selfdeadlock", "reports an unbuffered channel whose send and receive are both in this goroutine", runSelfdeadlock),
-		mk("rangeunclosed", "reports a range over a local channel that no code closes", runRangeunclosed),
-		mk("orphansend", "reports a spawned send that blocks forever when the parent returns through its other select case", runOrphansend),
+		mk("nilop", "reports nil-channel ops in the declaring function; select cases and literals are not reported", runNilop),
+		mk("doubleclose", "reports a close of an owned channel already closed on every path to it", runDoubleclose),
+		mk("sendafterclose", "reports a send to an owned channel closed on every path; select sends are not reported", runSendafterclose),
+		mk("selfdeadlock", "reports a send and later receive outside select on an owned unbuffered channel no literal mentions", runSelfdeadlock),
+		mk("rangeunclosed", "reports a range over an owned made channel no code closes with no loop exit", runRangeunclosed),
+		mk("orphansend", "reports a spawned send on an owned unbuffered channel drained only by a select that returns elsewhere", runOrphansend),
 		mk("firstresult", "reports more goroutine sends on a channel than the receives and capacity can drain; silent when the loop body receives", runFirstresult),
 	}
 }
