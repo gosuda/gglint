@@ -131,7 +131,7 @@ func IsLocal(info *types.Info, fn ast.Node, v *types.Var) bool {
 	if definesParam(info, ft, recv, v) {
 		return false
 	}
-	body := fnBody(fn)
+	body := Body(fn)
 	if body == nil {
 		return false
 	}
@@ -199,7 +199,7 @@ func fieldDefines(info *types.Info, fields *ast.FieldList, v *types.Var) bool {
 
 // DefinedBy reports the expression e when v is declared by v := e with no later assignment to v in fn.
 func DefinedBy(info *types.Info, fn ast.Node, v *types.Var) (ast.Expr, bool) {
-	body := fnBody(fn)
+	body := Body(fn)
 	if info == nil || body == nil || v == nil {
 		return nil, false
 	}
@@ -260,7 +260,7 @@ func defines(info *types.Info, e ast.Expr, v *types.Var) bool {
 
 func assignedLater(info *types.Info, fn ast.Node, v *types.Var, after token.Pos) bool {
 	found := false
-	ast.Inspect(fnBody(fn), func(n ast.Node) bool {
+	ast.Inspect(Body(fn), func(n ast.Node) bool {
 		if found {
 			return false
 		}
@@ -365,7 +365,7 @@ func Escapes(info *types.Info, fn ast.Node, v *types.Var) bool {
 	if info == nil || fn == nil || v == nil {
 		return false
 	}
-	body := fnBody(fn)
+	body := Body(fn)
 	if body == nil {
 		return false
 	}

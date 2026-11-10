@@ -391,16 +391,6 @@ func isChan(t types.Type) bool {
 	return ok
 }
 
-func bodyOf(fn ast.Node) *ast.BlockStmt {
-	switch fn := fn.(type) {
-	case *ast.FuncDecl:
-		return fn.Body
-	case *ast.FuncLit:
-		return fn.Body
-	}
-	return nil
-}
-
 func chanName(k flow.Key) string {
 	return k.Root.Name()
 }

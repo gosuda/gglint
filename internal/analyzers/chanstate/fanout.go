@@ -45,7 +45,7 @@ func loneSends(info *types.Info, lit *ast.FuncLit) []chanOp {
 }
 
 func loneSelectRecv(info *types.Info, fn ast.Node, k flow.Key) (*ast.SelectStmt, chanOp, bool) {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil, chanOp{}, false
 	}
@@ -172,7 +172,7 @@ func countLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) int64 {
 }
 
 func enclosingList(fn ast.Node, target ast.Stmt) []ast.Stmt {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil
 	}
@@ -239,7 +239,7 @@ func recvCount(info *types.Info, s ast.Stmt, k flow.Key) int64 {
 }
 
 func countLoops(fn ast.Node) []ast.Stmt {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil
 	}

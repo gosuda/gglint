@@ -241,16 +241,6 @@ func funcBodies(pass *analysis.Pass) []ast.Node {
 	return out
 }
 
-func bodyOf(fn ast.Node) *ast.BlockStmt {
-	switch n := fn.(type) {
-	case *ast.FuncDecl:
-		return n.Body
-	case *ast.FuncLit:
-		return n.Body
-	}
-	return nil
-}
-
 func declaredOutsideLoop(info *types.Info, fn ast.Node, v types.Object, site ast.Node) bool {
 	loop, body := innermostLoop(fn, site.Pos())
 	if body == nil || loop == nil {
@@ -302,7 +292,7 @@ func exitsListAfter(fn, site ast.Node) bool {
 
 func stmtListAfter(fn, site ast.Node) []ast.Stmt {
 	var out []ast.Stmt
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if out != nil {
 			return false
 		}
@@ -341,7 +331,7 @@ func isLoopExit(stmt ast.Stmt) bool {
 }
 
 func bodyParks(fn ast.Node) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}

@@ -20,7 +20,7 @@ func runRangemutate(pass *analysis.Pass) (any, error) {
 }
 
 func findRanges(fn ast.Node, fn2 func(*ast.RangeStmt)) {
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}

@@ -13,7 +13,7 @@ import (
 )
 
 func chanLocals(info *types.Info, fn ast.Node) []flow.Key {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil
 	}
@@ -64,7 +64,7 @@ func nilLocals(info *types.Info, fn ast.Node) []flow.Key {
 }
 
 func nilVar(info *types.Info, fn ast.Node, k flow.Key) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}
@@ -139,7 +139,7 @@ func targets(info *types.Info, lhs []ast.Expr, k flow.Key) bool {
 }
 
 func makeDefs(info *types.Info, fn ast.Node, k flow.Key) []*ast.CallExpr {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil
 	}
@@ -222,7 +222,7 @@ func unbuffered(info *types.Info, fn ast.Node, k flow.Key) bool {
 }
 
 func channelCopied(info *types.Info, fn ast.Node, k flow.Key) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}
@@ -279,7 +279,7 @@ func loopBody(st ast.Stmt) []ast.Stmt {
 }
 
 func chanRanges(info *types.Info, fn ast.Node) []*ast.RangeStmt {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil
 	}
@@ -306,7 +306,7 @@ func hasRange(info *types.Info, fn ast.Node, k flow.Key) bool {
 }
 
 func closesAnywhere(info *types.Info, fn ast.Node, k flow.Key) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}
@@ -326,7 +326,7 @@ func closesAnywhere(info *types.Info, fn ast.Node, k flow.Key) bool {
 }
 
 func literalMentions(info *types.Info, fn ast.Node, k flow.Key) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}
@@ -376,7 +376,7 @@ func mentionsKey(info *types.Info, n ast.Node, k flow.Key) bool {
 }
 
 func chanOps(info *types.Info, fn ast.Node, k flow.Key, want opKind) []chanOp {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil
 	}
@@ -490,7 +490,7 @@ func exitsOpt(s ast.Stmt, depth int) bool {
 }
 
 func spawnLits(info *types.Info, fn ast.Node) map[*ast.FuncLit]bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	out := map[*ast.FuncLit]bool{}
 	if body == nil {
 		return out
@@ -559,7 +559,7 @@ func markGroupSpawn(info *types.Info, call *ast.CallExpr, out map[*ast.FuncLit]b
 }
 
 func handsOn(info *types.Info, fn ast.Node, k flow.Key) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}

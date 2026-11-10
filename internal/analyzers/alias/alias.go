@@ -7,6 +7,7 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 
+	"github.com/gosuda/gglint/internal/flow"
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
@@ -46,21 +47,11 @@ var rangeref = &analysis.Analyzer{
 func eachFunc(pass *analysis.Pass, fn func(ast.Node)) {
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
 		n := cur.Node()
-		if bodyOf(n) == nil {
+		if flow.Body(n) == nil {
 			continue
 		}
 		fn(n)
 	}
-}
-
-func bodyOf(fn ast.Node) *ast.BlockStmt {
-	switch fn := fn.(type) {
-	case *ast.FuncDecl:
-		return fn.Body
-	case *ast.FuncLit:
-		return fn.Body
-	}
-	return nil
 }
 
 func varOf(info *types.Info, id *ast.Ident) (*types.Var, bool) {

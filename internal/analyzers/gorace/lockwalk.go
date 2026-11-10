@@ -30,7 +30,7 @@ type holder struct {
 
 func newHolder(pass *analysis.Pass, fn ast.Node) *holder {
 	h := &holder{keys: map[flow.Key]map[ast.Node]bool{}}
-	if pass == nil || pass.TypesInfo == nil || bodyOf(fn) == nil {
+	if pass == nil || pass.TypesInfo == nil || flow.Body(fn) == nil {
 		return h
 	}
 	g := flow.NewGraph(pass, fn)
@@ -132,7 +132,7 @@ func lockOpCall(info *types.Info, k flow.Key, n ast.Node) (string, bool) {
 func lockerKeys(info *types.Info, fn ast.Node) []flow.Key {
 	seen := map[flow.Key]bool{}
 	var out []flow.Key
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return n == fn
 		}
@@ -178,7 +178,7 @@ var lockerIface = sync.OnceValue(func() *types.Interface {
 
 func deferStmts(fn ast.Node) map[ast.Node]bool {
 	out := map[ast.Node]bool{}
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return out
 	}

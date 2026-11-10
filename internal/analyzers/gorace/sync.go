@@ -20,7 +20,7 @@ func runDoublecheck(pass *analysis.Pass) (any, error) {
 }
 
 func checkDoublecheck(pass *analysis.Pass, fn ast.Node) {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return
 	}
@@ -247,7 +247,7 @@ func checkSubtest(pass *analysis.Pass, fn ast.Node) {
 }
 
 func blocksOf(fn ast.Node) []*ast.BlockStmt {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil
 	}

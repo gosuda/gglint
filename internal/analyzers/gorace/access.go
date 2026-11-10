@@ -213,7 +213,7 @@ func stmtAccesses(info *types.Info, stmt ast.Stmt) []varAccess {
 
 func collectParent(info *types.Info, fn ast.Node, sites map[ast.Node]bool) []varAccess {
 	var out []varAccess
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return nil
 	}
@@ -457,7 +457,7 @@ func runMap(pass *analysis.Pass) (any, error) {
 
 func checkMap(pass *analysis.Pass, fn ast.Node) {
 	info := pass.TypesInfo
-	if passesMutex(info, fn) || bodyOf(fn) == nil {
+	if passesMutex(info, fn) || flow.Body(fn) == nil {
 		return
 	}
 	g := flow.NewGraph(pass, fn)
@@ -581,7 +581,7 @@ func runFanout(pass *analysis.Pass) (any, error) {
 
 func checkFanout(pass *analysis.Pass, fn ast.Node) {
 	info := pass.TypesInfo
-	if passesMutex(info, fn) || bodyOf(fn) == nil {
+	if passesMutex(info, fn) || flow.Body(fn) == nil {
 		return
 	}
 	for _, s := range flow.Spawns(pass, fn) {
@@ -628,7 +628,7 @@ func runShared(pass *analysis.Pass) (any, error) {
 
 func checkShared(pass *analysis.Pass, fn ast.Node) {
 	info := pass.TypesInfo
-	if passesMutex(info, fn) || bodyOf(fn) == nil {
+	if passesMutex(info, fn) || flow.Body(fn) == nil {
 		return
 	}
 	g := flow.NewGraph(pass, fn)

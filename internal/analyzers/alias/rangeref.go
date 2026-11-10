@@ -286,7 +286,7 @@ func singleTarget(info *types.Info, rs *ast.RangeStmt, l ast.Expr) (flow.Key, bo
 }
 
 func writeThrough(info *types.Info, fn ast.Node, tk flow.Key, u *ast.UnaryExpr) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}

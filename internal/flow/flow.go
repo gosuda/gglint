@@ -262,7 +262,8 @@ func firstComm(body *ast.BlockStmt) ast.Node {
 	return nil
 }
 
-func fnBody(fn ast.Node) *ast.BlockStmt {
+// Body returns the body of a function declaration or literal, or nil.
+func Body(fn ast.Node) *ast.BlockStmt {
 	switch fn := fn.(type) {
 	case *ast.FuncDecl:
 		return fn.Body

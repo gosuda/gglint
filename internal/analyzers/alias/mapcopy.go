@@ -32,7 +32,7 @@ func checkMapcopy(pass *analysis.Pass, fn ast.Node) {
 
 func collectMapDefs(info *types.Info, fn ast.Node) []mapDef {
 	var out []mapDef
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -93,7 +93,7 @@ func checkMapWrites(pass *analysis.Pass, fn ast.Node, d mapDef) {
 	if copiedElsewhere(pass.TypesInfo, fn, d) {
 		return
 	}
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -108,7 +108,7 @@ func checkMapWrites(pass *analysis.Pass, fn ast.Node, d mapDef) {
 }
 
 func copiedElsewhere(info *types.Info, fn ast.Node, d mapDef) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}

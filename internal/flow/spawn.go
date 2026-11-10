@@ -19,7 +19,7 @@ type Spawn struct {
 
 // Spawns returns the goroutine creation sites of fn in source order.
 func Spawns(pass *analysis.Pass, fn ast.Node) []Spawn {
-	body := fnBody(fn)
+	body := Body(fn)
 	if pass == nil || pass.TypesInfo == nil || body == nil {
 		return nil
 	}

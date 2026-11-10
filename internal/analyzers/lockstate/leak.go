@@ -226,21 +226,11 @@ func returnsIn(fn ast.Node) []*ast.ReturnStmt {
 }
 
 func leakEndFree(info *types.Info, fn ast.Node, key flow.Key, pre map[ast.Node]state) bool {
-	body := bodyOf(fn)
+	body := flow.Body(fn)
 	if body == nil || len(body.List) == 0 {
 		return false
 	}
 	return listEndsFree(info, body.List, key, pre)
-}
-
-func bodyOf(fn ast.Node) *ast.BlockStmt {
-	switch fn := fn.(type) {
-	case *ast.FuncDecl:
-		return fn.Body
-	case *ast.FuncLit:
-		return fn.Body
-	}
-	return nil
 }
 
 func listEndsFree(info *types.Info, list []ast.Stmt, key flow.Key, pre map[ast.Node]state) bool {

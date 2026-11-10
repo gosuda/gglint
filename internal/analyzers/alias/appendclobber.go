@@ -27,7 +27,7 @@ func checkAppendclobber(pass *analysis.Pass, fn ast.Node) {
 	if len(defs) == 0 {
 		return
 	}
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -40,7 +40,7 @@ func checkAppendclobber(pass *analysis.Pass, fn ast.Node) {
 
 func collectSliceDefs(info *types.Info, fn ast.Node) map[*types.Var]sliceDef {
 	defs := map[*types.Var]sliceDef{}
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -140,7 +140,7 @@ func appendTarget(info *types.Info, st *ast.AssignStmt, call *ast.CallExpr) (*ty
 
 func assignedBetween(info *types.Info, fn ast.Node, v *types.Var, from, to token.Pos) bool {
 	hit := false
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if hit {
 			return false
 		}
@@ -178,7 +178,7 @@ func isVarTarget(info *types.Info, e ast.Expr, v *types.Var) bool {
 
 func mentionedAfter(info *types.Info, fn ast.Node, v *types.Var, after token.Pos) bool {
 	found := false
-	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if found {
 			return false
 		}

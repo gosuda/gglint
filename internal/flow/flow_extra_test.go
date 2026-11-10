@@ -386,7 +386,7 @@ func checkGuardMeta(t *testing.T) {
 	if NewGraph(nil, nil) != nil {
 		t.Fatalf("nil graph")
 	}
-	if fnBody(&ast.BadStmt{}) != nil {
+	if Body(&ast.BadStmt{}) != nil {
 		t.Fatalf("bad body")
 	}
 	if ft, _ := funcSig(&ast.BadStmt{}); ft != nil {
@@ -417,7 +417,7 @@ func checkGuardBodies(t *testing.T) {
 	t.Helper()
 	f, _ := checkTypes(t, "package p\nfunc f() { go func() {}() }\n")
 	decl := findDecl(f, "f")
-	if fnBody(decl) == nil {
+	if Body(decl) == nil {
 		t.Fatalf("decl body nil")
 	}
 	gs, ok := decl.Body.List[0].(*ast.GoStmt)
@@ -428,7 +428,7 @@ func checkGuardBodies(t *testing.T) {
 	if !ok {
 		t.Fatalf("literal missing")
 	}
-	if fnBody(lit) == nil {
+	if Body(lit) == nil {
 		t.Fatalf("literal body nil")
 	}
 	if ft, _ := funcSig(decl); ft == nil {
