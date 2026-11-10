@@ -68,6 +68,12 @@ func checkRangemutate(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, seen 
 	if !isSlice(info, rs.X) {
 		return
 	}
+	if !hasRangeAppend(info, rs, key) {
+		return
+	}
+	if bodyReassigns(info, rs, key) {
+		return
+	}
 	g := flow.NewGraph(pass, fn)
 	if g == nil {
 		return
@@ -78,6 +84,52 @@ func checkRangemutate(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, seen 
 	}
 	scan := &rangeScan{pass: pass, scope: rangeScope{key: key, name: types.ExprString(rs.X), seen: seen}, graph: g, entry: entry, root: rs}
 	scan.scanList(rs.Body.List)
+}
+
+func hasRangeAppend(info *types.Info, rs *ast.RangeStmt, key flow.Key) bool {
+	found := false
+	ast.Inspect(rs.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if st, ok := n.(*ast.AssignStmt); ok {
+			if _, ok := rangeAppendCall(info, st, key); ok {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func bodyReassigns(info *types.Info, rs *ast.RangeStmt, key flow.Key) bool {
+	reassign := false
+	ast.Inspect(rs.Body, func(n ast.Node) bool {
+		if reassign {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		st, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		if _, ok := rangeAppendCall(info, st, key); ok {
+			return true
+		}
+		for _, lhs := range st.Lhs {
+			if k, ok := flow.KeyOf(info, lhs); ok && k == key {
+				reassign = true
+				return false
+			}
+		}
+		return true
+	})
+	return reassign
 }
 
 func loopEntry(rs *ast.RangeStmt) ast.Stmt {
@@ -117,7 +169,7 @@ func (s *rangeScan) checkAppend(st *ast.AssignStmt) {
 		return
 	}
 	s.scope.seen[call.Pos()] = true
-	s.pass.Reportf(call.Pos(), "appending to %s while ranging over it leaves the loop on the old length and can reallocate: collect into another slice", s.scope.name)
+	s.pass.Reportf(call.Pos(), "appending to %s while ranging over it leaves the loop on the old length and can reallocate, so the loop does not visit the appended elements: collect into another slice", s.scope.name)
 }
 
 func rangeAppendCall(info *types.Info, st *ast.AssignStmt, key flow.Key) (*ast.CallExpr, bool) {

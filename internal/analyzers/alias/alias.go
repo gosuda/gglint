@@ -12,6 +12,8 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
+const lenName = "len"
+
 // Analyzers returns the four alias checks.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{appendclobber, mapcopy, rangemutate, rangeref}
@@ -19,28 +21,28 @@ func Analyzers() []*analysis.Analyzer {
 
 var appendclobber = &analysis.Analyzer{
 	Name:     "appendclobber",
-	Doc:      "reports appends that clobber a slice read later; covers only appendclobber, mapcopy, rangemutate, rangeref",
+	Doc:      "Reports an append through b := a[:n] that overwrites local a read later; needs constant n and capacity proof.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runAppendclobber,
 }
 
 var mapcopy = &analysis.Analyzer{
 	Name:     "mapcopy",
-	Doc:      "reports writes to a copy of a map element; covers only appendclobber, mapcopy, rangemutate, rangeref",
+	Doc:      "Reports a field write to v := m[k] lost when v never used as a whole; only :=, struct elements.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runMapcopy,
 }
 
 var rangemutate = &analysis.Analyzer{
 	Name:     "rangemutate",
-	Doc:      "reports appends to a slice while ranging over it; covers only appendclobber, mapcopy, rangemutate, rangeref",
+	Doc:      "Reports s = append(s, ...) in a range over local slice s that reaches the next iteration; silent if body assigns s.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runRangemutate,
 }
 
 var rangeref = &analysis.Analyzer{
 	Name:     "rangeref",
-	Doc:      "reports addresses of a range copy that escape; covers only appendclobber, mapcopy, rangemutate, rangeref",
+	Doc:      "Reports &v of range copy v that escapes by append, send, map store, or written outer store; only local slices.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runRangeref,
 }
@@ -101,6 +103,9 @@ func passesPointer(info *types.Info, e ast.Expr) bool {
 	if passesPointer(info, sel.X) {
 		return true
 	}
+	if hasPointerHop(info, sel) {
+		return true
+	}
 	t := info.TypeOf(sel.X)
 	if t == nil {
 		return false
@@ -112,4 +117,43 @@ func passesPointer(info *types.Info, e ast.Expr) bool {
 		return true
 	}
 	return false
+}
+
+func hasPointerHop(info *types.Info, sel *ast.SelectorExpr) bool {
+	s := info.Selections[sel]
+	if s == nil {
+		return false
+	}
+	idx := s.Index()
+	if len(idx) <= 1 {
+		return false
+	}
+	t := s.Recv()
+	for _, i := range idx[:len(idx)-1] {
+		st, ok := derefStruct(t)
+		if !ok || i < 0 || i >= st.NumFields() {
+			return false
+		}
+		ft := st.Field(i).Type()
+		if _, ok := ft.(*types.Pointer); ok {
+			return true
+		}
+		t = ft
+	}
+	return false
+}
+
+func derefStruct(t types.Type) (*types.Struct, bool) {
+	for {
+		p, ok := t.(*types.Pointer)
+		if !ok {
+			break
+		}
+		t = p.Elem()
+	}
+	if t == nil {
+		return nil, false
+	}
+	st, ok := t.Underlying().(*types.Struct)
+	return st, ok
 }

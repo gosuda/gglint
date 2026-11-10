@@ -31,7 +31,7 @@ func checkRangeref(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt) {
 	}
 	for _, u := range ampNodes(info, rs.Body, v) {
 		if escapesRange(pass, fn, rs, u) {
-			pass.Reportf(u.Pos(), "this is the address of the per-iteration copy %s, not of the slice element: index the slice and take the address of the element", v.Name())
+			pass.Reportf(u.Pos(), "this is the address of the per-iteration copy %s, not of the slice element, so a write through it does not reach the slice element: index the slice and take the address of the element", v.Name())
 		}
 	}
 }

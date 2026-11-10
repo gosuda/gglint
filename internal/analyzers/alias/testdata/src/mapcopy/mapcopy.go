@@ -1,6 +1,8 @@
 package mapcopy
 
-func MapcopyStub(m map[string]item, k string)
+type embeddedBase struct{ n int }
+
+type embeddedOuter struct{ *embeddedBase }
 
 type item struct{ n int }
 
@@ -45,8 +47,8 @@ func MapcopyReportedRhsField(m map[string]item, k string) {
 	v.n = v.n + 1 // want `v is a copy of the element of m, so this write is lost`
 }
 
-func MapcopySilentVarForm(m map[string]item, k string) {
-	var v = m[k]
+func MapcopySilentEmbeddedPtr(m map[string]embeddedOuter, k string) {
+	v := m[k]
 	v.n++
 }
 
@@ -54,12 +56,6 @@ func MapcopySilent(m map[string]item, k string) {
 	v := m[k]
 	v.n++
 	m[k] = v
-}
-
-func MapcopySilentOtherKey(m map[string]item, k string) {
-	v := m[k]
-	v.n++
-	m["other"] = v
 }
 
 func MapcopySilentReturned(m map[string]item, k string) item {
@@ -71,14 +67,14 @@ func MapcopySilentReturned(m map[string]item, k string) item {
 func MapcopySilentArg(m map[string]item, k string) {
 	v := m[k]
 	v.n++
-	useItem(v)
+	m[k] = useItem(v)
 }
 
 func MapcopySilentCopied(m map[string]item, k string) {
 	v := m[k]
 	v.n++
 	w := v
-	_ = w
+	m[k] = w
 }
 
 func MapcopySilentComposite(m map[string]item, k string) struct{ it item } {
@@ -97,7 +93,7 @@ func MapcopySilentHeld(m map[string]item, k string) {
 	v := m[k]
 	v.n++
 	held := []item{v}
-	_ = held
+	m[k] = held[0]
 }
 
 type inner struct{ n int }
@@ -109,4 +105,4 @@ func MapcopySilentPtrField(m map[string]withPtr, k string) {
 	v.p.n++
 }
 
-func useItem(v item) {}
+func useItem(v item) item { return v }

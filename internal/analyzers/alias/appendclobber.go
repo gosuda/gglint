@@ -31,12 +31,13 @@ func checkAppendclobber(pass *analysis.Pass, fn ast.Node) {
 	if len(defs) == 0 {
 		return
 	}
+	silent := map[*types.Var]bool{}
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		if st, ok := n.(*ast.AssignStmt); ok {
-			checkAppendAssign(pass, fn, st, defs)
+			checkAppendAssign(pass, fn, st, defs, silent)
 		}
 		return true
 	})
@@ -121,7 +122,7 @@ func isLenOf(info *types.Info, e ast.Expr, target *types.Var) bool {
 	return ok && v == target
 }
 
-func checkAppendAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, defs map[*types.Var]sliceDef) {
+func checkAppendAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, defs map[*types.Var]sliceDef, silent map[*types.Var]bool) {
 	b, def, call, ok := appendDef(pass.TypesInfo, st, defs)
 	if !ok {
 		return
@@ -129,7 +130,7 @@ func checkAppendAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, def
 	if !def.highKnown || call.Ellipsis.IsValid() {
 		return
 	}
-	if inPlaceSilent(pass, fn, b, def) {
+	if inPlaceCached(pass, fn, b, def, silent) {
 		return
 	}
 	if assignedBetween(pass.TypesInfo, fn, b, def.pos, st.Pos()) {
@@ -144,27 +145,71 @@ func checkAppendAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, def
 	tryUnknownCap(pass, fn, st, b, def, call)
 }
 
+func inPlaceCached(pass *analysis.Pass, fn ast.Node, b *types.Var, def sliceDef, silent map[*types.Var]bool) bool {
+	if v, ok := silent[b]; ok {
+		return v
+	}
+	v := inPlaceSilent(pass, fn, b, def)
+	silent[b] = v
+	return v
+}
+
 func tryKnownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) bool {
 	need := def.high + len(call.Args) - 1
 	caps := reachingCaps(pass, fn, def.a, def.pos)
 	if len(caps) == 0 {
 		return false
 	}
+	if !allKnown(caps) {
+		return false
+	}
 	for _, c := range caps {
-		if c.known && c.cap >= need {
-			if !mentionedAfter(pass, fn, def.a, st, st.End()) {
-				return true
-			}
-			reportClobber(pass, call, b, def.a)
+		if c.cap < need {
+			continue
+		}
+		if !knownCapProven(pass, fn, def, st) {
 			return true
 		}
+		reportClobber(pass, call, b, def.a)
+		return true
 	}
+	return true
+}
+
+func allKnown(caps []capResult) bool {
 	for _, c := range caps {
 		if !c.known {
 			return false
 		}
 	}
 	return true
+}
+
+func knownCapProven(pass *analysis.Pass, fn ast.Node, def sliceDef, st *ast.AssignStmt) bool {
+	if assignedAfter(pass.TypesInfo, fn, def.a, st.End()) {
+		return false
+	}
+	if !mentionedAfter(pass, fn, def.a, st, st.End()) {
+		return false
+	}
+	return hasIndexProof(pass, fn, def.a, st, def.high)
+}
+
+func assignedAfter(info *types.Info, fn ast.Node, v *types.Var, after token.Pos) bool {
+	hit := false
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if hit {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if st, ok := n.(*ast.AssignStmt); ok && st.Pos() > after {
+			hit = assignHits(info, st, v, after, token.Pos(1<<30))
+		}
+		return !hit
+	})
+	return hit
 }
 
 type capResult struct {
@@ -250,6 +295,9 @@ func capOfAssignment(info *types.Info, st *ast.AssignStmt, a *types.Var) (int, b
 }
 
 func tryUnknownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) {
+	if assignedAfter(pass.TypesInfo, fn, def.a, st.End()) {
+		return
+	}
 	if !mentionedAfter(pass, fn, def.a, st, st.End()) {
 		return
 	}
@@ -481,89 +529,6 @@ func indexOf(info *types.Info, idx *ast.IndexExpr, a *types.Var, threshold int) 
 	}
 	k, ok := constInt(info, idx.Index)
 	return ok && k >= threshold
-}
-
-func inPlaceSilent(pass *analysis.Pass, fn ast.Node, b *types.Var, def sliceDef) bool {
-	info := pass.TypesInfo
-	if !def.highKnown || def.high != 0 || !def.zeroLow {
-		return false
-	}
-	appends := appendsTo(info, fn, b)
-	if len(appends) == 0 {
-		return false
-	}
-	for _, st := range appends {
-		if !singleInReadingLoop(info, fn, st, def.a) {
-			return false
-		}
-	}
-	if !atMostOnePerIteration(pass, fn, appends) {
-		return false
-	}
-	return !hasElementReadAfterLoop(pass, fn, def.a, appends)
-}
-
-func hasElementReadAfterLoop(pass *analysis.Pass, fn ast.Node, a *types.Var, appends []*ast.AssignStmt) bool {
-	g := flow.NewGraph(pass, fn)
-	if g == nil {
-		return true
-	}
-	writes := lhsIdents(fn)
-	skip := lenCapIdents(pass.TypesInfo, fn, a)
-	for _, st := range appends {
-		loop := enclosingLoop(fn, st)
-		if loop == nil {
-			return true
-		}
-		scan := afterLoopScan{pass: pass, fn: fn, graph: g, writes: writes, skip: skip, target: a, from: st, loop: loop}
-		if scan.found() {
-			return true
-		}
-	}
-	return false
-}
-
-type afterLoopScan struct {
-	pass   *analysis.Pass
-	fn     ast.Node
-	graph  *flow.Graph
-	writes map[*ast.Ident]bool
-	skip   map[*ast.Ident]bool
-	target *types.Var
-	from   *ast.AssignStmt
-	loop   ast.Node
-}
-
-func (s afterLoopScan) found() bool {
-	hit := false
-	ast.Inspect(flow.Body(s.fn), func(n ast.Node) bool {
-		if hit {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		id, ok := n.(*ast.Ident)
-		if !ok || !s.isRead(id) {
-			return true
-		}
-		if s.reaches(id) {
-			hit = true
-		}
-		return !hit
-	})
-	return hit
-}
-
-func (s afterLoopScan) isRead(id *ast.Ident) bool {
-	if id.Pos() <= s.loop.End() || s.skip[id] || s.writes[id] {
-		return false
-	}
-	return s.pass.TypesInfo.Uses[id] == s.target
-}
-
-func (s afterLoopScan) reaches(to ast.Node) bool {
-	return reachesForCap(s.graph, s.pass.TypesInfo, s.target, s.from, to)
 }
 
 func lenCapIdents(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {

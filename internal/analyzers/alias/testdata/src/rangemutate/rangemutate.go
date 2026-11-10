@@ -1,70 +1,85 @@
 package rangemutate
 
-func RangemutateStub(s []int) []int
-
 func RangemutateReported() []int {
-	s := []int{1, -2, 3}
+	s := []int{1, 2}
+	var seen []int
 	for _, x := range s {
-		if x > 0 {
-			s = append(s, -x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
-		}
+		seen = append(seen, x)
+		s = append(s, 0) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate, so the loop does not visit the appended elements`
+		s[1] = 50
 	}
-	return s
+	return seen
 }
+
 func RangemutateReportedBlock() []int {
-	s := []int{1, 2, 3}
+	s := []int{1, 2}
+	var seen []int
 	for _, x := range s {
+		seen = append(seen, x)
 		{
-			s = append(s, x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+			s = append(s, x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate, so the loop does not visit the appended elements`
+			s[1] = 50
 		}
 	}
-	return s
+	return seen
 }
 
 func RangemutateReportedLabeled() []int {
-	s := []int{1, 2, 3}
+	s := []int{1, 2}
+	var seen []int
 	for _, x := range s {
+		seen = append(seen, x)
 	outer:
 		for j := 0; j < 1; j++ {
-			s = append(s, x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+			s = append(s, x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate, so the loop does not visit the appended elements`
+			s[1] = 50
 			continue outer
 		}
 	}
-	return s
+	return seen
 }
 
 func RangemutateReportedNestedFor() []int {
-	s := []int{1, 2, 3}
+	s := []int{1, 2}
+	var seen []int
 	for _, x := range s {
+		seen = append(seen, x)
 		for y := 0; y < x; y++ {
-			s = append(s, y) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+			s = append(s, y) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate, so the loop does not visit the appended elements`
+			s[1] = 50
 		}
 	}
-	return s
+	return seen
 }
 
 func RangemutateReportedSwitch() []int {
-	s := []int{1, 2, 3}
+	s := []int{1, 2}
+	var seen []int
 	for _, x := range s {
+		seen = append(seen, x)
 		switch x {
 		case 1:
-			s = append(s, x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+			s = append(s, x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate, so the loop does not visit the appended elements`
+			s[1] = 50
 		}
 	}
-	return s
+	return seen
 }
 
 func RangemutateReportedSelect(ch chan int) []int {
-	s := []int{1, 2, 3}
+	s := []int{1, 2}
+	var seen []int
 	for _, x := range s {
+		seen = append(seen, x)
 		select {
 		case v := <-ch:
-			s = append(s, v) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+			s = append(s, v) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate, so the loop does not visit the appended elements`
+			s[1] = 50
 		default:
 			_ = x
 		}
 	}
-	return s
+	return seen
 }
 
 func RangemutateSilent() []int {
@@ -103,42 +118,37 @@ func RangemutateSilentParam(s []int) []int {
 	return s
 }
 
-func RangemutateSilentMap(m map[string]int) {
-	for _, x := range m {
-		_ = x
-	}
-}
-
-func RangemutateSilentLabeledBreak() []int {
-	s := []int{1, 2, 3}
+func RangemutateSilentReassign(s []int) []int {
 	for _, x := range s {
-		goto done
-	done:
+		s = nil
 		s = append(s, x)
-		break
 	}
 	return s
 }
 
-func RangemutateSilentBlockBreak() []int {
+func RangemutateSilentLabeledBreak() []int {
 	s := []int{1, 2, 3}
+outer:
 	for _, x := range s {
-		{
+		for range 1 {
 			s = append(s, x)
+			break outer
 		}
-		break
 	}
 	return s
 }
 
 func RangemutateReportedNestedSame() []int {
-	s := []int{1, 2, 3}
+	s := []int{1, 2}
+	var seen []int
 	for _, x := range s {
+		seen = append(seen, x)
 		for _, y := range s {
-			s = append(s, y+x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+			s = append(s, y+x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate, so the loop does not visit the appended elements`
+			s[1] = 50
 		}
 	}
-	return s
+	return seen
 }
 
 func RangemutateSilentReturnInside() []int {

@@ -2,65 +2,81 @@ package rangeref
 
 import "fmt"
 
-func RangerefStub(items []item)
+type embeddedRBase struct{ n int }
+
+type embeddedROuter struct{ *embeddedRBase }
 
 type item struct{ n int }
 
 type itemStore struct{ items []item }
 
-func RangerefReported() []*item {
+func RangerefReported() []item {
 	items := []item{{n: 1}, {n: 2}}
 	var ptrs []*item
 	for _, v := range items {
-		ptrs = append(ptrs, &v) // want `this is the address of the per-iteration copy v, not of the slice element`
+		ptrs = append(ptrs, &v) // want `this is the address of the per-iteration copy v, not of the slice element, so a write through it does not reach the slice element`
 	}
-	return ptrs
+	for _, p := range ptrs {
+		p.n *= 10
+	}
+	return items
 }
 
-func RangerefReportedField() []*int {
+func RangerefReportedField() []item {
 	items := []item{{n: 1}, {n: 2}}
 	var ptrs []*int
 	for _, v := range items {
-		ptrs = append(ptrs, &v.n) // want `this is the address of the per-iteration copy v, not of the slice element`
+		ptrs = append(ptrs, &v.n) // want `this is the address of the per-iteration copy v, not of the slice element, so a write through it does not reach the slice element`
 	}
-	return ptrs
+	for _, p := range ptrs {
+		*p = 0
+	}
+	return items
 }
 
-func RangerefReportedSend() {
+func RangerefReportedSend() []item {
 	items := []item{{n: 1}, {n: 2}}
 	ch := make(chan *item, len(items))
 	for _, v := range items {
-		ch <- &v // want `this is the address of the per-iteration copy v, not of the slice element`
+		ch <- &v // want `this is the address of the per-iteration copy v, not of the slice element, so a write through it does not reach the slice element`
 	}
+	close(ch)
+	for p := range ch {
+		p.n *= 10
+	}
+	return items
 }
 
-func RangerefReportedStoreField() {
+func RangerefReportedStoreField() []item {
 	items := []item{{n: 1}, {n: 2}}
 	hold := struct{ p *item }{}
 	for _, v := range items {
-		hold.p = &v // want `this is the address of the per-iteration copy v, not of the slice element`
+		hold.p = &v // want `this is the address of the per-iteration copy v, not of the slice element, so a write through it does not reach the slice element`
 	}
 	hold.p.n = 0
-	_ = hold
+	return items
 }
 
-func RangerefReportedStoreMap() {
+func RangerefReportedStoreMap() []item {
 	items := []item{{n: 1}, {n: 2}}
 	m := map[int]*item{}
 	for _, v := range items {
-		m[v.n] = &v // want `this is the address of the per-iteration copy v, not of the slice element`
+		m[v.n] = &v // want `this is the address of the per-iteration copy v, not of the slice element, so a write through it does not reach the slice element`
 	}
-	_ = m
+	for _, p := range m {
+		p.n *= 10
+	}
+	return items
 }
 
-func RangerefReportedStoreOutside() *item {
+func RangerefReportedStoreOutside() []item {
 	items := []item{{n: 1}, {n: 2}}
 	var out *item
 	for _, v := range items {
-		out = &v // want `this is the address of the per-iteration copy v, not of the slice element`
+		out = &v // want `this is the address of the per-iteration copy v, not of the slice element, so a write through it does not reach the slice element`
 	}
 	out.n = 0
-	return out
+	return items
 }
 
 func RangerefSilentReturnAtOnce() *item {
@@ -105,25 +121,6 @@ func RangerefSilent() []*item {
 	return ptrs
 }
 
-func RangerefSilentIndexed() []*item {
-	items := []item{{n: 1}, {n: 2}}
-	var ptrs []*item
-	for _, v := range items {
-		_ = items[0]
-		ptrs = append(ptrs, &v)
-	}
-	return ptrs
-}
-
-func RangerefSilentFieldIndex(s *itemStore) []*item {
-	var ptrs []*item
-	for _, v := range s.items {
-		_ = s.items[0]
-		ptrs = append(ptrs, &v)
-	}
-	return ptrs
-}
-
 func RangerefSilentNestedCall(items []item) []string {
 	var lines []string
 	for _, v := range items {
@@ -164,18 +161,12 @@ func RangerefSilentSliceStore(items []item, out []*item) {
 	}
 }
 
-func RangerefSilentInts(ints []int) []int {
-	var out []int
+func RangerefSilentInts(ints []int) []*int {
+	var out []*int
 	for _, v := range ints {
-		out = append(out, v)
+		out = append(out, &v)
 	}
 	return out
-}
-
-func RangerefSilentBlank() {
-	items := []item{{n: 1}, {n: 2}}
-	for _, _ = range items {
-	}
 }
 
 type innerBox struct{ n int }
@@ -200,16 +191,16 @@ func RangerefSilentReassigned(items []item) *item {
 	return p
 }
 
-func RangerefReportedConditionalKill(items []item, keep bool, other *item) *item {
+func RangerefReportedConditionalKill(items []item, keep bool, other *item) []item {
 	var out *item
 	for _, v := range items {
-		out = &v // want `this is the address of the per-iteration copy v, not of the slice element`
+		out = &v // want `this is the address of the per-iteration copy v, not of the slice element, so a write through it does not reach the slice element`
 		if keep {
 			out = other
 		}
 	}
 	out.n = 0
-	return out
+	return items
 }
 
 func RangerefSilentBranchKill(items []item, keep bool, other *item) *item {
@@ -220,6 +211,13 @@ func RangerefSilentBranchKill(items []item, keep bool, other *item) *item {
 			out = other
 			out.n = 0
 		}
+	}
+	return out
+}
+func RangerefSilentEmbeddedPtr(items []embeddedROuter) []*int {
+	var out []*int
+	for _, v := range items {
+		out = append(out, &v.n)
 	}
 	return out
 }

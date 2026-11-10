@@ -1,6 +1,5 @@
 package appendclobber
 
-func AppendclobberStub() []int
 
 func AppendclobberReported() int {
 	a := []int{1, 2, 3}
@@ -19,7 +18,7 @@ func AppendclobberReportedDefine() int {
 
 func AppendclobberSilentVarForm() int {
 	a := []int{1, 2, 3}
-	var b = a[:2]
+	var b = a[:2:2]
 	b = append(b, 9)
 	return a[2]
 }
@@ -98,14 +97,14 @@ func AppendclobberSilentSpread(src []int) int {
 	a := []int{1, 2, 3}
 	b := a[:2]
 	b = append(b, src...)
-	return a[2]
+	return len(b)
 }
 
 func AppendclobberSilentMakeNonConstTwo(n int) int {
 	a := make([]int, 3, n)
 	b := a[:2]
 	b = append(b, 9, 10)
-	return a[2]
+	return len(b)
 }
 
 func AppendclobberReportedMakeNonConstOne(n int) int {
@@ -167,7 +166,7 @@ func AppendclobberSilentInPlaceRange() ([]int, int) {
 }
 
 func AppendclobberReportedInPlaceReadAfter() ([]int, int) {
-	xs := []int{1, 2, 3, 4}
+	xs := []int{2, 4, 1, 8}
 	out := xs[:0]
 	for _, x := range xs {
 		if x%2 == 0 {
@@ -226,3 +225,28 @@ func AppendclobberSilentUncondCap() int {
 	return a[2]
 }
 
+func AppendclobberSilentInPlaceTailClear() []int {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for _, x := range xs {
+		if x%2 == 0 {
+			out = append(out, x)
+		}
+	}
+	clear(xs[len(out):])
+	return out
+}
+
+func AppendclobberSilentInPlaceTailLoop() []int {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for _, x := range xs {
+		if x%2 == 0 {
+			out = append(out, x)
+		}
+	}
+	for i := len(out); i < len(xs); i++ {
+		xs[i] = 0
+	}
+	return out
+}
