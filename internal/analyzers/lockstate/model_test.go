@@ -26,6 +26,11 @@ const (
 type modState struct {
 	kind  modKind
 	depth int
+	exact bool
+}
+
+func modInexactRead() modState {
+	return modState{kind: modRead, depth: 1}
 }
 
 func modStep(op string, cur modState) modState {
@@ -37,17 +42,26 @@ func modStep(op string, cur modState) modState {
 			return modState{kind: modUnknown}
 		}
 		if cur.kind == modRead {
-			return modState{kind: modRead, depth: cur.depth + 1}
+			if !cur.exact {
+				return cur
+			}
+			return modState{kind: modRead, depth: cur.depth + 1, exact: true}
 		}
-		return modState{kind: modRead, depth: 1}
+		if cur.kind == modUnknown {
+			return modInexactRead()
+		}
+		return modState{kind: modRead, depth: 1, exact: true}
 	case "Unlock":
 		if cur.kind == modWrite {
 			return modState{kind: modFree}
 		}
 		return modState{kind: modUnknown}
 	case "RUnlock":
+		if cur.kind == modRead && !cur.exact {
+			return modState{kind: modUnknown}
+		}
 		if cur.kind == modRead && cur.depth > 1 {
-			return modState{kind: modRead, depth: cur.depth - 1}
+			return modState{kind: modRead, depth: cur.depth - 1, exact: true}
 		}
 		if cur.kind == modRead {
 			return modState{kind: modFree}

@@ -165,3 +165,15 @@ func pairDeepReadSilent() {
 	mu.RUnlock()
 	mu.RUnlock()
 }
+
+func pairInexactTakeTwoReads(mu *sync.RWMutex) {
+	mu.RLock()
+	mu.RLock()
+}
+
+func pairInexactRUnlockSilent(mu *sync.RWMutex) {
+	pairInexactTakeTwoReads(mu)
+	mu.RLock()
+	mu.RUnlock()
+	mu.RUnlock()
+}

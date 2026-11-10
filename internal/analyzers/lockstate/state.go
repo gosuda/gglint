@@ -23,6 +23,7 @@ const (
 type state struct {
 	kind  stateKind
 	depth int
+	exact bool
 }
 
 var (
@@ -32,10 +33,12 @@ var (
 	unknownState = state{kind: unknownKind}
 )
 
-const maxReadDepth = 64
-
 func readState(depth int) state {
-	return state{kind: readKind, depth: depth}
+	return state{kind: readKind, depth: depth, exact: true}
+}
+
+func inexactReadState() state {
+	return state{kind: readKind, depth: 1}
 }
 
 const (
@@ -342,13 +345,13 @@ func stepRLock(cur state) state {
 		return unknownState
 	}
 	if cur.kind == readKind {
-		if cur.depth > maxReadDepth {
+		if !cur.exact {
 			return cur
 		}
-		if cur.depth >= maxReadDepth {
-			return readState(maxReadDepth + 1)
-		}
 		return readState(cur.depth + 1)
+	}
+	if cur.kind == unknownKind {
+		return inexactReadState()
 	}
 	return readState(1)
 }
@@ -361,7 +364,7 @@ func stepUnlock(cur state) state {
 }
 
 func stepRUnlock(cur state) state {
-	if cur.kind == readKind && cur.depth > maxReadDepth {
+	if cur.kind == readKind && !cur.exact {
 		return unknownState
 	}
 	if cur.kind == readKind && cur.depth > 1 {
