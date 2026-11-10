@@ -55,8 +55,12 @@ type collectScan struct {
 }
 
 func (s collectScan) visit(n ast.Node, out *[]ast.Node) bool {
-	switch n.(type) {
-	case *ast.GoStmt, *ast.DeferStmt:
+	switch n := n.(type) {
+	case *ast.GoStmt:
+		s.callArgs(n.Call, out)
+		return false
+	case *ast.DeferStmt:
+		s.callArgs(n.Call, out)
 		return false
 	}
 	if lit, ok := n.(*ast.FuncLit); ok && lit != s.scan.graph.fn {
@@ -72,6 +76,17 @@ func (s collectScan) visit(n ast.Node, out *[]ast.Node) bool {
 		return true
 	}
 	return s.appendCall(c, out)
+}
+
+func (s collectScan) callArgs(call *ast.CallExpr, out *[]ast.Node) {
+	if call == nil {
+		return
+	}
+	for _, a := range call.Args {
+		ast.Inspect(a, func(x ast.Node) bool {
+			return s.visit(x, out)
+		})
+	}
 }
 
 func (s collectScan) appendCall(c *ast.CallExpr, out *[]ast.Node) bool {

@@ -108,10 +108,13 @@ func promotionNames(sel *types.Selection, fallback string) string {
 
 // Graph is the control-flow graph of one function with a node index.
 type Graph struct {
-	fn     ast.Node
-	blocks []*cfg.Block
-	index  map[ast.Node]*cfg.Block
-	rep    map[ast.Node]ast.Node
+	fn        ast.Node
+	blocks    []*cfg.Block
+	index     map[ast.Node]*cfg.Block
+	pos       map[ast.Node]int
+	nestedSet map[ast.Node]bool
+	owner     map[ast.Node]ast.Node
+	rep       map[ast.Node]ast.Node
 
 	closureOnce sync.Once
 	closureVars map[*ast.FuncLit]*types.Var
@@ -121,14 +124,37 @@ func newGraph(fn ast.Node, c *cfg.CFG) *Graph {
 	if c == nil {
 		return nil
 	}
-	g := &Graph{fn: fn, blocks: c.Blocks, index: make(map[ast.Node]*cfg.Block), rep: make(map[ast.Node]ast.Node)}
+	g := &Graph{fn: fn, blocks: c.Blocks, index: make(map[ast.Node]*cfg.Block), pos: make(map[ast.Node]int), nestedSet: make(map[ast.Node]bool), owner: make(map[ast.Node]ast.Node), rep: make(map[ast.Node]ast.Node)}
 	for _, b := range c.Blocks {
-		for _, n := range b.Nodes {
+		for i, n := range b.Nodes {
 			g.index[n] = b
+			g.pos[n] = i
+			g.owner[n] = n
 		}
 	}
+	g.buildNested()
+	g.buildOwner()
 	g.mapEntries(fn)
 	return g
+}
+
+func (g *Graph) buildNested() {
+	ast.Inspect(g.fn, func(n ast.Node) bool {
+		lit, ok := n.(*ast.FuncLit)
+		if !ok || lit == g.fn {
+			return true
+		}
+		ast.Inspect(lit, func(x ast.Node) bool {
+			if x != lit {
+				g.nestedSet[x] = true
+			}
+			return true
+		})
+		return false
+	})
+}
+
+func (g *Graph) buildOwner() {
 }
 
 func (g *Graph) mapEntries(fn ast.Node) {
@@ -302,7 +328,10 @@ func NewGraph(pass *analysis.Pass, fn ast.Node) *Graph {
 }
 
 func (g *Graph) locate(n ast.Node) ast.Node {
-	if n == nil || g.nested(n) {
+	if n == nil {
+		return nil
+	}
+	if g.nestedSet[n] {
 		return nil
 	}
 	if r, ok := g.rep[n]; ok {
@@ -314,25 +343,18 @@ func (g *Graph) locate(n ast.Node) ast.Node {
 	if _, ok := g.index[n]; ok {
 		return n
 	}
-	return g.container(n)
+	if o, ok := g.owner[n]; ok {
+		return o
+	}
+	best := g.container(n)
+	if best != nil {
+		g.owner[n] = best
+	}
+	return best
 }
 
 func (g *Graph) nested(n ast.Node) bool {
-	found := false
-	ast.Inspect(g.fn, func(x ast.Node) bool {
-		if found {
-			return false
-		}
-		if lit, ok := x.(*ast.FuncLit); ok && lit != g.fn {
-			if n != lit && within(lit, n) {
-				found = true
-				return false
-			}
-			return false
-		}
-		return true
-	})
-	return found
+	return n != nil && g.nestedSet[n]
 }
 
 func (g *Graph) container(n ast.Node) ast.Node {
@@ -398,21 +420,19 @@ func (g *Graph) next(n ast.Node) []ast.Node {
 	if b == nil {
 		return nil
 	}
-	for i, c := range b.Nodes {
-		if c != n {
-			continue
-		}
-		if i+1 < len(b.Nodes) {
-			return []ast.Node{b.Nodes[i+1]}
-		}
-		var out []ast.Node
-		seen := map[*cfg.Block]bool{}
-		for _, s := range b.Succs {
-			g.entries(s, seen, &out)
-		}
-		return out
+	i, ok := g.pos[n]
+	if !ok {
+		return nil
 	}
-	return nil
+	if i+1 < len(b.Nodes) {
+		return []ast.Node{b.Nodes[i+1]}
+	}
+	var out []ast.Node
+	seen := map[*cfg.Block]bool{}
+	for _, s := range b.Succs {
+		g.entries(s, seen, &out)
+	}
+	return out
 }
 
 func (g *Graph) entries(b *cfg.Block, seen map[*cfg.Block]bool, out *[]ast.Node) {

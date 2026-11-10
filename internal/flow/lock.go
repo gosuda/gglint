@@ -3,6 +3,7 @@ package flow
 import (
 	"cmp"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"slices"
 
@@ -179,12 +180,58 @@ func inPlaceEffect(info *types.Info, lit *ast.FuncLit, k Key, incoming bool) boo
 }
 
 func directLockHeld(info *types.Info, lit *ast.FuncLit, k Key) bool {
-	for _, s := range lit.Body.List {
-		if stmtLocks(info, s, k) {
-			return true
+	for i, s := range lit.Body.List {
+		if !stmtLocks(info, s, k) {
+			continue
 		}
+		for _, p := range lit.Body.List[:i] {
+			if stmtExits(info, p) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
+}
+
+func stmtExits(info *types.Info, s ast.Node) bool {
+	exits := false
+	ast.Inspect(s, func(x ast.Node) bool {
+		if exits {
+			return false
+		}
+		switch y := x.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			exits = true
+			return false
+		case *ast.BranchStmt:
+			if y.Tok == token.GOTO {
+				exits = true
+				return false
+			}
+		case *ast.CallExpr:
+			if isPanicCall(info, y) {
+				exits = true
+				return false
+			}
+		}
+		return true
+	})
+	return exits
+}
+
+func isPanicCall(info *types.Info, c *ast.CallExpr) bool {
+	id, ok := ast.Unparen(c.Fun).(*ast.Ident)
+	if !ok || id.Name != "panic" {
+		return false
+	}
+	if info == nil {
+		return true
+	}
+	_, ok = info.Uses[id].(*types.Builtin)
+	return ok
 }
 
 func stmtLocks(info *types.Info, s ast.Node, k Key) bool {
@@ -193,12 +240,11 @@ func stmtLocks(info *types.Info, s ast.Node, k Key) bool {
 		if locked {
 			return false
 		}
-		switch x.(type) {
+		switch y := x.(type) {
 		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt, *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
 			return false
-		}
-		if call, ok := x.(*ast.CallExpr); ok {
-			if isLockOp(info, call, k) {
+		case *ast.CallExpr:
+			if isLockOp(info, y, k) {
 				locked = true
 				return false
 			}

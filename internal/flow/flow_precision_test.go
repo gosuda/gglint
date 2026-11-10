@@ -647,3 +647,79 @@ func TestSpawnGroupNestedDone(t *testing.T) {
 		})
 	}
 }
+
+func TestWaitGroupAliasJoins(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"alias", "package p\nimport \"sync\"\ntype WG = sync.WaitGroup\nfunc fill(wg *WG) { defer wg.Done() }\nfunc f() int {\nvar wg WG\nn := 0\nwg.Add(1)\ngo func() { fill(&wg); n = 1 }()\nwg.Wait()\nreturn n\n}\n", true},
+		{"direct", "package p\nimport \"sync\"\nfunc f() int {\nvar wg sync.WaitGroup\nn := 0\nwg.Add(1)\ngo func() { defer wg.Done(); n = 1 }()\nwg.Wait()\nreturn n\n}\n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			pass := ctrlPass(t, pkg)
+			var fd *ast.FuncDecl
+			for _, d := range pkg.Syntax[0].Decls {
+				if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+					fd = f
+				}
+			}
+			sp := Spawns(pass, fd)[0]
+			if sp.Group.zero() {
+				t.Fatalf("%s: alias WaitGroup group is zero", tc.name)
+			}
+			g := NewGraph(pass, fd)
+			if got := Joined(pass, g, sp, fd.Body.List[5]); got != tc.want {
+				t.Fatalf("%s: Joined = %v want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpaqueJoinGoArgs(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc get(wg *sync.WaitGroup) int { wg.Wait(); return 0 }\nfunc run(n int) {}\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\ngo run(get(&wg))\ns = \"b\"\nreturn s\n}\n")
+	pass, fd, target := joinedTarget(t, pkg)
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if !Joined(pass, g, sp, target) {
+		t.Fatalf("go arg wait does not join")
+	}
+}
+
+func TestInPlaceLockEarlyExit(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"earlyReturn", "package p\nimport \"sync\"\nfunc f(mu *sync.Mutex, c bool) {\nfunc() { if c { return }; mu.Lock() }()\n_ = c\n}\n", 0},
+		{"earlyGoto", "package p\nimport \"sync\"\nfunc f(mu *sync.Mutex, c bool) {\nfunc() { if c { goto done }; mu.Lock()\ndone:\n}()\n_ = c\n}\n", 0},
+		{"earlyPanic", "package p\nimport \"sync\"\nfunc f(mu *sync.Mutex, c bool) {\nfunc() { if c { panic(\"x\") }; mu.Lock() }()\n_ = c\n}\n", 0},
+		{"branchAfter", "package p\nimport \"sync\"\nvar n int\nfunc f(mu *sync.Mutex, c bool) {\nfunc() { mu.Lock(); if c { n++ } }()\n_ = c\n}\n", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			pass := ctrlPass(t, pkg)
+			var fd *ast.FuncDecl
+			for _, d := range pkg.Syntax[0].Decls {
+				if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+					fd = f
+				}
+			}
+			held := HeldAt(pass, NewGraph(pass, fd))
+			got := held(fd.Body.List[1])
+			if len(got) != tc.want {
+				t.Fatalf("%s: held = %v want %d", tc.name, got, tc.want)
+			}
+		})
+	}
+}

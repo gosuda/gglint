@@ -362,8 +362,11 @@ func isWaitGroup(info *types.Info, e ast.Expr) bool {
 	if t == nil {
 		return false
 	}
-	if p, ok := t.Underlying().(*types.Pointer); ok {
-		t = p.Elem()
+	t = types.Unalias(t)
+	if p, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(p.Elem())
+	} else if p, ok := t.Underlying().(*types.Pointer); ok {
+		t = types.Unalias(p.Elem())
 	}
 	n, ok := t.(*types.Named)
 	if !ok || n.Obj().Pkg() == nil {
@@ -672,6 +675,16 @@ func (g *Graph) markSignals(pass *analysis.Pass, body *ast.FuncLit, out map[ast.
 }
 
 func hasWait(info *types.Info, n ast.Node, group Key) bool {
+	if gs, ok := n.(*ast.GoStmt); ok {
+		return argsHaveWait(info, gs.Call, group)
+	}
+	if ds, ok := n.(*ast.DeferStmt); ok {
+		return argsHaveWait(info, ds.Call, group)
+	}
+	return scanWait(info, n, collectCalled(n), group)
+}
+
+func collectCalled(n ast.Node) map[*ast.FuncLit]bool {
 	called := map[*ast.FuncLit]bool{}
 	ast.Inspect(n, func(x ast.Node) bool {
 		if call, ok := x.(*ast.CallExpr); ok {
@@ -681,6 +694,10 @@ func hasWait(info *types.Info, n ast.Node, group Key) bool {
 		}
 		return true
 	})
+	return called
+}
+
+func scanWait(info *types.Info, n ast.Node, called map[*ast.FuncLit]bool, group Key) bool {
 	found := false
 	ast.Inspect(n, func(x ast.Node) bool {
 		if lit, ok := x.(*ast.FuncLit); ok {
@@ -702,6 +719,40 @@ func hasWait(info *types.Info, n ast.Node, group Key) bool {
 	return found
 }
 
+func argsHaveWait(info *types.Info, call *ast.CallExpr, group Key) bool {
+	if call == nil {
+		return false
+	}
+	for _, a := range call.Args {
+		if argHasWait(info, a, group) {
+			return true
+		}
+	}
+	return false
+}
+
+func argHasWait(info *types.Info, arg ast.Node, group Key) bool {
+	hit := false
+	ast.Inspect(arg, func(x ast.Node) bool {
+		if hit {
+			return false
+		}
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		c, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if isGroupWait(info, c, group) {
+			hit = true
+			return false
+		}
+		return true
+	})
+	return hit
+}
+
 func pruned(n ast.Node) bool {
 	switch n.(type) {
 	case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
@@ -721,86 +772,6 @@ func isGroupWait(info *types.Info, call *ast.CallExpr, group Key) bool {
 	}
 	fn := typeutil.StaticCallee(info, call)
 	return fn == nil || fn.FullName() == "(*sync.WaitGroup).Wait" || fn.FullName() == "(*golang.org/x/sync/errgroup.Group).Wait"
-}
-
-func signaled(pass *analysis.Pass, body *ast.FuncLit) []Key {
-	info := pass.TypesInfo
-	var out []Key
-	seen := map[Key]bool{}
-	add := func(k Key, ok bool) {
-		if ok && !seen[k] {
-			seen[k] = true
-			out = append(out, k)
-		}
-	}
-	deferredCloses(info, body, add)
-	lastClose(info, body, add)
-	return out
-}
-
-func deferredCloses(info *types.Info, body *ast.FuncLit, add func(Key, bool)) {
-	for _, s := range body.Body.List {
-		d, ok := s.(*ast.DeferStmt)
-		if !ok {
-			continue
-		}
-		add(closeChan(info, d.Call))
-		lit, ok := ast.Unparen(d.Call.Fun).(*ast.FuncLit)
-		if !ok || lit.Body == nil {
-			continue
-		}
-		deferredLitSignals(info, lit.Body, add)
-	}
-}
-
-func deferredLitSignals(info *types.Info, body *ast.BlockStmt, add func(Key, bool)) {
-	called := calledLiterals(body)
-	ast.Inspect(body, func(x ast.Node) bool {
-		if _, ok := x.(*ast.GoStmt); ok {
-			return false
-		}
-		if lit, ok := x.(*ast.FuncLit); ok {
-			if _, ok := called[lit]; !ok {
-				return false
-			}
-			return true
-		}
-		if call, ok := x.(*ast.CallExpr); ok {
-			add(closeChan(info, call))
-			return true
-		}
-		if st, ok := x.(*ast.SendStmt); ok {
-			add(KeyOf(info, st.Chan))
-			return true
-		}
-		return true
-	})
-}
-
-func lastClose(info *types.Info, body *ast.FuncLit, add func(Key, bool)) {
-	n := len(body.Body.List)
-	if n == 0 {
-		return
-	}
-	switch s := body.Body.List[n-1].(type) {
-	case *ast.ExprStmt:
-		if call, ok := ast.Unparen(s.X).(*ast.CallExpr); ok {
-			add(closeChan(info, call))
-		}
-	case *ast.SendStmt:
-		add(KeyOf(info, s.Chan))
-	}
-}
-
-func closeChan(info *types.Info, call *ast.CallExpr) (Key, bool) {
-	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
-	if !ok || id.Name != closeFun || len(call.Args) != 1 {
-		return Key{}, false
-	}
-	if b, ok := info.Uses[id].(*types.Builtin); !ok || b.Name() != closeFun {
-		return Key{}, false
-	}
-	return KeyOf(info, call.Args[0])
 }
 
 func (g *Graph) receives(info *types.Info, fn ast.Node, k Key) []ast.Node {
@@ -864,8 +835,12 @@ func (s *recvScan) walk(fn ast.Node) {
 func calledLiterals(fn ast.Node) map[*ast.FuncLit]bool {
 	out := map[*ast.FuncLit]bool{}
 	ast.Inspect(fn, func(n ast.Node) bool {
-		switch n.(type) {
-		case *ast.GoStmt, *ast.DeferStmt:
+		switch n := n.(type) {
+		case *ast.GoStmt:
+			markCalledArgs(n.Call, out)
+			return false
+		case *ast.DeferStmt:
+			markCalledArgs(n.Call, out)
 			return false
 		}
 		if call, ok := n.(*ast.CallExpr); ok {
@@ -876,6 +851,22 @@ func calledLiterals(fn ast.Node) map[*ast.FuncLit]bool {
 		return true
 	})
 	return out
+}
+
+func markCalledArgs(call *ast.CallExpr, out map[*ast.FuncLit]bool) {
+	if call == nil {
+		return
+	}
+	for _, a := range call.Args {
+		ast.Inspect(a, func(x ast.Node) bool {
+			if c, ok := x.(*ast.CallExpr); ok {
+				if lit, ok := ast.Unparen(c.Fun).(*ast.FuncLit); ok {
+					out[lit] = true
+				}
+			}
+			return true
+		})
+	}
 }
 
 func (g *Graph) at(n ast.Node) ast.Node {
