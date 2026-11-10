@@ -160,3 +160,12 @@ func rootSilentElseGuard(ctx context.Context) {
 func rootSilentBlankParam(_ context.Context) {
 	use(context.Background())
 }
+
+func rootReportedLandElse(ctx context.Context, flag bool) {
+	if ctx != nil && flag {
+		use(ctx)
+	} else {
+		ctx = context.Background() // want "a context is in scope, and this root context drops its cancellation and deadline"
+	}
+	use(ctx)
+}

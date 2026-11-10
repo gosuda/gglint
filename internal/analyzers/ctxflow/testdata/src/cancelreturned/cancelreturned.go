@@ -238,3 +238,10 @@ func cancelreturnedReportedDerivedTimeout(parent context.Context) (context.Conte
 	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
 	return context.WithTimeout(c, time.Second)
 }
+
+func cancelreturnedSilentNestedReturn() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := func() context.Context { return ctx }
+	useAny(f)
+}

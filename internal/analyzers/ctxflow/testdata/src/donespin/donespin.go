@@ -355,3 +355,14 @@ func donespinReportedShadowSkip(ctx context.Context, n int) {
 		}
 	}
 }
+
+func donespinSilentPostLoop(ctx context.Context, n int) {
+	i := 0
+	for ; i < n; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+}

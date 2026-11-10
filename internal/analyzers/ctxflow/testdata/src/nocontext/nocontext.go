@@ -172,3 +172,8 @@ func nocontextSilentScopedLocal(db *sql.DB, ok bool) error {
 	_, err := db.Query("SELECT 1")
 	return err
 }
+
+func DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	_ = ctx
+	return net.Dial(network, address)
+}
