@@ -228,6 +228,9 @@ func firstresultGo(pass *analysis.Pass, info *types.Info, fn ast.Node, loop ast.
 	if !ok {
 		return
 	}
+	if makeInLoop(info, fn, loop, op.Key) {
+		return
+	}
 	if !firstresultReady(info, fn, loop, op.Key) {
 		return
 	}
@@ -238,6 +241,14 @@ func firstresultGo(pass *analysis.Pass, info *types.Info, fn ast.Node, loop ast.
 	if n > r+kcap {
 		pass.Reportf(goStmt.Pos(), msgFirstresult, n, chanName(op.Key), r, kcap)
 	}
+}
+
+func makeInLoop(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) bool {
+	call, ok := makeDef(info, fn, k)
+	if !ok {
+		return false
+	}
+	return withinNode(loop, call)
 }
 
 func firstresultReady(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) bool {

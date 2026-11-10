@@ -1,5 +1,7 @@
 package firstresult
 
+import "time"
+
 func useFirst(v int) { _ = v }
 
 func workFirst() {}
@@ -328,4 +330,26 @@ func firstresultSilentIfElseBalanced(c bool) int {
 		<-ch
 	}
 	return 0
+}
+
+func firstresultSilentMakeInLoop() {
+	for i := 0; i < 1000; i++ {
+		out := make(chan error)
+		go func() { out <- nil }()
+		select {
+		case <-out:
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func firstresultSilentSelectRecvInLoop() {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }()
+		select {
+		case <-ch:
+		default:
+		}
+	}
 }

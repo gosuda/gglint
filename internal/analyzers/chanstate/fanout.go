@@ -475,11 +475,10 @@ func directGos(l []ast.Stmt) []*ast.GoStmt {
 }
 
 func loopHasRecv(info *types.Info, loop ast.Stmt, k flow.Key) bool {
-	for _, s := range loopBody(loop) {
-		if !isStraightStmt(s) {
-			continue
-		}
-		if recvCount(info, s, k) > 0 {
+	w := &opWalker{info: info, key: k}
+	w.stmts(loopBody(loop))
+	for _, op := range w.out {
+		if op.Kind == opRecv {
 			return true
 		}
 	}
