@@ -47,6 +47,9 @@ func isNilSafeMethod(pass *analysis.Pass, fn *ast.FuncDecl, obj *types.Func) boo
 	if !endsInReturn(guard.Body) {
 		return false
 	}
+	if mentionsRecv(pass, guard.Body, recv) {
+		return false
+	}
 	return guardsNil(pass, guard.Cond, recv)
 }
 
@@ -78,7 +81,23 @@ func guardsNil(pass *analysis.Pass, cond ast.Expr, recv *types.Var) bool {
 	if !ok || lor.Op != token.LOR {
 		return false
 	}
-	return guardsNil(pass, lor.X, recv) || guardsNil(pass, lor.Y, recv)
+	return guardsNil(pass, lor.X, recv)
+}
+
+func mentionsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if pass.TypesInfo.Uses[id] == recv || pass.TypesInfo.Defs[id] == recv {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func isNilCompare(pass *analysis.Pass, cond ast.Expr, recv *types.Var) bool {

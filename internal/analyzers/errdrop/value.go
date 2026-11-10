@@ -198,28 +198,38 @@ func isDeref(pass *analysis.Pass, cur inspector.Cursor, v *types.Var, safe map[*
 func isNilSafeCall(pass *analysis.Pass, up inspector.Cursor, sel *ast.SelectorExpr, safe map[*types.Func]bool) bool {
 	gp := skipParens(up.Parent())
 	call, ok := gp.Node().(*ast.CallExpr)
+	if !ok || ast.Unparen(call.Fun) != up.Node() {
+		return false
+	}
+	fn, ok := directMethod(pass, sel)
 	if !ok {
 		return false
 	}
-	if ast.Unparen(call.Fun) != up.Node() {
+	if !isPointerRecv(fn) {
 		return false
 	}
+	return hasNilSafe(pass, originOf(fn), safe)
+}
+
+func directMethod(pass *analysis.Pass, sel *ast.SelectorExpr) (*types.Func, bool) {
 	choice, ok := pass.TypesInfo.Selections[sel]
-	if !ok || choice == nil {
-		return false
+	if !ok || choice == nil || len(choice.Index()) > 1 {
+		return nil, false
 	}
 	fn, ok := choice.Obj().(*types.Func)
 	if !ok {
-		return false
+		return nil, false
 	}
+	return fn, true
+}
+
+func isPointerRecv(fn *types.Func) bool {
 	sig, ok := fn.Type().(*types.Signature)
 	if !ok || sig.Recv() == nil {
 		return false
 	}
-	if _, isPtr := sig.Recv().Type().(*types.Pointer); !isPtr {
-		return false
-	}
-	return hasNilSafe(pass, originOf(fn), safe)
+	_, isPtr := sig.Recv().Type().(*types.Pointer)
+	return isPtr
 }
 
 func unparenIdentEquals(e ast.Expr, id *ast.Ident) bool {

@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
@@ -106,7 +107,79 @@ func isLocalPtrStruct(fn inspector.Cursor, x *types.Var) bool {
 }
 
 func writtenInFunc(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	return assignedFromCreate(pass, fn, x) || writtenByMethod(pass, fn, x) || writtenByFirstArg(pass, fn, x)
+	return assignedFromCreate(pass, fn, x) || writtenByMethod(pass, fn, x) || writtenByFirstArg(pass, fn, x) || rdwrWithEvidence(pass, fn, x)
+}
+
+func rdwrWithEvidence(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	if !assignedFromRdwrOnly(pass, fn, x) {
+		return false
+	}
+	return passedAsArg(pass, fn, x)
+}
+
+func assignedFromRdwrOnly(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		if isRdwrOpenAssign(pass, inspection.As[*ast.AssignStmt](cur.Node()), x) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRdwrOpenAssign(pass *analysis.Pass, as *ast.AssignStmt, x *types.Var) bool {
+	if !assignTargetsVar(pass.TypesInfo, as, x) || len(as.Rhs) != 1 {
+		return false
+	}
+	call := callOf(as.Rhs[0])
+	if call == nil {
+		return false
+	}
+	return isRdwrOpenCall(pass, call)
+}
+
+func isRdwrOpenCall(pass *analysis.Pass, call *ast.CallExpr) bool {
+	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fnobj == nil || fnobj.FullName() != "os.OpenFile" {
+		return false
+	}
+	return len(call.Args) >= 2 && flagRdwrOnly(pass.TypesInfo, call.Args[1])
+}
+
+func flagRdwrOnly(info *types.Info, e ast.Expr) bool {
+	v := info.Types[ast.Unparen(e)].Value
+	if v == nil {
+		return false
+	}
+	n, ok := constant.Int64Val(v)
+	if !ok {
+		return false
+	}
+	if n&int64(os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND) != 0 {
+		return false
+	}
+	return n&int64(os.O_RDWR) != 0
+}
+
+func passedAsArg(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		call := inspection.As[*ast.CallExpr](cur.Node())
+		for _, arg := range call.Args {
+			id, ok := ast.Unparen(arg).(*ast.Ident)
+			if !ok {
+				continue
+			}
+			if pass.TypesInfo.ObjectOf(id) == types.Object(x) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func assignedFromCreate(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
@@ -184,12 +257,18 @@ func writtenByMethod(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) boo
 		if pass.TypesInfo.ObjectOf(id) != types.Object(x) {
 			continue
 		}
-		switch sel.Sel.Name {
-		case writeMethodName, "WriteAt", "WriteString", "ReadFrom":
+		if isWriteMethodName(sel.Sel.Name) {
 			return true
 		}
 	}
 	return false
+}
+
+func isWriteMethodName(name string) bool {
+	if name == "ReadFrom" {
+		return true
+	}
+	return name != "WriteTo" && strings.HasPrefix(name, "Write")
 }
 
 func writtenByFirstArg(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {

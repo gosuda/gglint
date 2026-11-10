@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
 	"net/url"
 	"os"
 	"strconv"
@@ -410,4 +411,96 @@ func valueSilentNilSafe(s string) int {
 func valueSilentNilSafeDep(s string) int {
 	n, _ := dep.FindSafe(s)
 	return n.Len()
+}
+type nilRight struct{ n int }
+
+func (t *nilRight) Len() int {
+	if t.n == 0 || t == nil {
+		return 0
+	}
+	return t.n
+}
+
+func parseRight(s string) (*nilRight, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &nilRight{}, nil
+}
+
+func valueReportedNilRightOr(s string) int {
+	t, _ := parseRight(s) // want "is used after the error of parseRight is dropped"
+	return t.Len()
+}
+
+type nilBody struct{ n int }
+
+func (t *nilBody) Len() int {
+	if t == nil {
+		return t.n
+	}
+	return t.n
+}
+
+func parseBody(s string) (*nilBody, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &nilBody{}, nil
+}
+
+func valueReportedNilGuardBody(s string) int {
+	t, _ := parseBody(s) // want "is used after the error of parseBody is dropped"
+	return t.Len()
+}
+
+type innerSafe struct{}
+
+func (i *innerSafe) Len() int {
+	if i == nil {
+		return 0
+	}
+	return 1
+}
+
+type outerPromoted struct{ *innerSafe }
+
+func newOuterPromoted(s string) (*outerPromoted, error) { return nil, errors.New(s) }
+
+func valueReportedPromoted(s string) int {
+	o, _ := newOuterPromoted(s) // want "is used after the error of newOuterPromoted is dropped"
+	return o.Len()
+}
+
+type recordFile struct{ err error }
+
+func (f *recordFile) WriteRecord(b []byte) error { return nil }
+
+func (f *recordFile) Close() error { return f.err }
+
+func durableReportedWriteRecord(b []byte, err error) error {
+	f := &recordFile{err: err}
+	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
+	return f.WriteRecord(b)
+}
+
+func outReportedPrintfAddr(b []byte) Config {
+	var c Config
+	log.Printf("loading into %p", &c)
+	json.Unmarshal(b, &c) // want "is read after the error of json.Unmarshal is dropped"
+	return c
+}
+
+func writeAllHelper(f *os.File, b []byte) error {
+	_, err := f.Write(b)
+	return err
+}
+
+func durableReportedRdwrHelper(p string, b []byte) error {
+	f, err := os.OpenFile(p, os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
+	return writeAllHelper(f, b)
 }

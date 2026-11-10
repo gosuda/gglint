@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
+	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/inspection"
 )
@@ -83,23 +84,87 @@ func outHolds(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, x *t
 }
 
 func takenBefore(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, before token.Pos) bool {
-	for cur := range fn.Preorder((*ast.UnaryExpr)(nil)) {
+	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		u := inspection.As[*ast.UnaryExpr](cur.Node())
-		if u.Op != token.AND || u.Pos() >= before {
+		call := inspection.As[*ast.CallExpr](cur.Node())
+		if call.Pos() >= before {
 			continue
 		}
-		id, ok := ast.Unparen(u.X).(*ast.Ident)
-		if !ok {
-			continue
-		}
-		if pass.TypesInfo.ObjectOf(id) == types.Object(x) {
+		if callTakesPointer(pass, call, x) {
 			return true
 		}
 	}
 	return false
+}
+
+func callTakesPointer(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
+	for i, arg := range call.Args {
+		if takesPointerAt(pass, call, i, arg, x) {
+			return true
+		}
+	}
+	return false
+}
+
+func takesPointerAt(pass *analysis.Pass, call *ast.CallExpr, idx int, arg ast.Expr, x *types.Var) bool {
+	u, ok := ast.Unparen(arg).(*ast.UnaryExpr)
+	if !ok || u.Op != token.AND {
+		return false
+	}
+	id, ok := ast.Unparen(u.X).(*ast.Ident)
+	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
+		return false
+	}
+	return paramTakesPointer(pass, call, idx)
+}
+
+func paramTakesPointer(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
+	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fnobj == nil {
+		return false
+	}
+	sig, ok := fnobj.Type().(*types.Signature)
+	if !ok || sig.Params() == nil {
+		return false
+	}
+	pt, ok := paramTypeAt(sig, idx, call)
+	if !ok {
+		return false
+	}
+	if _, isIface := types.Unalias(pt).Underlying().(*types.Interface); isIface {
+		return false
+	}
+	_, isPtr := types.Unalias(pt).Underlying().(*types.Pointer)
+	return isPtr
+}
+
+func paramTypeAt(sig *types.Signature, idx int, call *ast.CallExpr) (types.Type, bool) {
+	n := sig.Params().Len()
+	if n == 0 {
+		return nil, false
+	}
+	if !sig.Variadic() {
+		if idx >= n {
+			return nil, false
+		}
+		return sig.Params().At(idx).Type(), true
+	}
+	if idx < n-1 {
+		return sig.Params().At(idx).Type(), true
+	}
+	if call.Ellipsis.IsValid() {
+		if idx != n-1 {
+			return nil, false
+		}
+		return sig.Params().At(n - 1).Type(), true
+	}
+	slice, ok := types.Unalias(sig.Params().At(n - 1).Type()).(*types.Slice)
+	if !ok {
+		return nil, false
+	}
+	return slice.Elem(), true
 }
 
 func isBareVarDecl(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
