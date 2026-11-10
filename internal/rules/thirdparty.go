@@ -214,7 +214,7 @@ func (g globalAnalyzer) deferredFlags(overrides map[string]string) []*deferredFl
 	return deferred
 }
 
-func buildGocritic(cfg config.Config) []*analysis.Analyzer {
+func buildGocritic(config.Config) []*analysis.Analyzer {
 	disableGocriticCache()
 	var enabled []string
 	for _, info := range linter.GetCheckersInfo() {

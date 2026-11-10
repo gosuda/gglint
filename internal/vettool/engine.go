@@ -117,13 +117,7 @@ func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysi
 		return false
 	}
 	filename := realName(pass.Fset, d.Pos)
-	if r.Reports == rules.ReportOutsideTests && strings.HasSuffix(filename, "_test.go") {
-		return false
-	}
-	if r.Reports == rules.ReportWithFix && !hasEdits(d) {
-		return false
-	}
-	if !e.cfg.Tests && strings.HasSuffix(filename, "_test.go") || e.excluded(filename, r.Name, check, d.Message) {
+	if e.filtered(r, filename, d) || e.excluded(filename, r.Name, check, d.Message) {
 		return false
 	}
 	file := fileAt(pass.Files, d.Pos)
@@ -132,6 +126,16 @@ func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysi
 	}
 	state := e.stateOf(pass, file)
 	return !state.generated && (r.Name == rules.NolintName || !e.suppressed(state, pass.Fset.Position(d.Pos).Line, r.Name, check))
+}
+
+func (e *engine) filtered(r rules.Rule, filename string, d analysis.Diagnostic) bool {
+	if r.Reports == rules.ReportWithFix && !hasEdits(d) {
+		return true
+	}
+	if !strings.HasSuffix(filename, "_test.go") {
+		return false
+	}
+	return !e.cfg.Tests || r.Reports == rules.ReportOutsideTests
 }
 
 func hasEdits(d analysis.Diagnostic) bool {
