@@ -225,3 +225,32 @@ func addlateReportedLitAddNoOrder() {
 	wg.Add(1) // want "negative WaitGroup counter"
 	wg.Wait()
 }
+
+func addlateSilentLitCall() {
+	var wg sync.WaitGroup
+	add := func() {
+		wg.Add(1)
+	}
+	add()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateSilentLitInPlace() {
+	var wg sync.WaitGroup
+	func() {
+		wg.Add(1)
+	}()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	wg.Done()
+	wg.Wait()
+}

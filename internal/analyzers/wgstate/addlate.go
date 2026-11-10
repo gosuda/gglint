@@ -72,7 +72,170 @@ func firstAddPositions(pass *analysis.Pass, fn ast.Node) map[flow.Key]token.Pos 
 		}
 		return true
 	})
+	mergeInPlaceAdds(pass, body, out)
+	mergeVarLitAdds(pass, fn, body, out)
 	return out
+}
+
+func litAddKeys(pass *analysis.Pass, lit *ast.FuncLit) []flow.Key {
+	seen := map[flow.Key]bool{}
+	var out []flow.Key
+	if lit.Body == nil {
+		return out
+	}
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		k, _, ok := wgKey(pass.TypesInfo, call, "Add")
+		if !ok || seen[k] {
+			return true
+		}
+		seen[k] = true
+		out = append(out, k)
+		return true
+	})
+	return out
+}
+
+func mergeInPlaceAdds(pass *analysis.Pass, body *ast.BlockStmt, out map[flow.Key]token.Pos) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		for _, k := range litAddKeys(pass, lit) {
+			if p, dup := out[k]; !dup || call.Pos() < p {
+				out[k] = call.Pos()
+			}
+		}
+		return true
+	})
+}
+
+func mergeVarLitAdds(pass *analysis.Pass, fn ast.Node, body *ast.BlockStmt, out map[flow.Key]token.Pos) {
+	set := newVarLitSet()
+	collectVarLits(pass.TypesInfo, body, set)
+	applyVarLits(pass, fn, set, out)
+}
+
+type varLitSet struct {
+	counts map[*types.Var]int
+	lits   map[*types.Var]*ast.FuncLit
+	calls  map[*types.Var]token.Pos
+}
+
+func newVarLitSet() *varLitSet {
+	return &varLitSet{counts: map[*types.Var]int{}, lits: map[*types.Var]*ast.FuncLit{}, calls: map[*types.Var]token.Pos{}}
+}
+
+func collectVarLits(info *types.Info, body *ast.BlockStmt, set *varLitSet) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.GoStmt:
+			return false
+		case *ast.DeferStmt:
+			return false
+		case *ast.AssignStmt:
+			noteAssignLit(info, n, set)
+			return true
+		case *ast.ValueSpec:
+			noteValueLit(info, n, set)
+			return true
+		case *ast.CallExpr:
+			noteVarCall(info, n, set.calls)
+			return true
+		}
+		return true
+	})
+}
+
+func applyVarLits(pass *analysis.Pass, fn ast.Node, set *varLitSet, out map[flow.Key]token.Pos) {
+	for v, lit := range set.lits {
+		applyOneVarLit(pass, fn, v, lit, set, out)
+	}
+}
+
+func applyOneVarLit(pass *analysis.Pass, fn ast.Node, v *types.Var, lit *ast.FuncLit, set *varLitSet, out map[flow.Key]token.Pos) {
+	if set.counts[v] != 1 {
+		return
+	}
+	if !flow.IsLocal(pass.TypesInfo, fn, v) {
+		return
+	}
+	cp, ok := set.calls[v]
+	if !ok {
+		return
+	}
+	for _, k := range litAddKeys(pass, lit) {
+		if p, dup := out[k]; !dup || cp < p {
+			out[k] = cp
+		}
+	}
+}
+
+func noteAssignLit(info *types.Info, s *ast.AssignStmt, set *varLitSet) {
+	for i, lhs := range s.Lhs {
+		id, ok := lhs.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		v, ok := info.ObjectOf(id).(*types.Var)
+		if !ok {
+			continue
+		}
+		set.counts[v]++
+		if len(s.Lhs) == 1 && len(s.Rhs) == 1 && i == 0 {
+			if lit, ok := ast.Unparen(s.Rhs[0]).(*ast.FuncLit); ok {
+				set.lits[v] = lit
+			}
+		}
+	}
+}
+
+func noteValueLit(info *types.Info, s *ast.ValueSpec, set *varLitSet) {
+	if len(s.Values) == 0 {
+		return
+	}
+	for i, name := range s.Names {
+		v, ok := info.ObjectOf(name).(*types.Var)
+		if !ok {
+			continue
+		}
+		set.counts[v]++
+		if len(s.Names) == 1 && len(s.Values) == 1 && i == 0 {
+			if lit, ok := ast.Unparen(s.Values[0]).(*ast.FuncLit); ok {
+				set.lits[v] = lit
+			}
+		}
+	}
+}
+
+func noteVarCall(info *types.Info, call *ast.CallExpr, calls map[*types.Var]token.Pos) {
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return
+	}
+	v, ok := info.ObjectOf(id).(*types.Var)
+	if !ok {
+		return
+	}
+	if p, dup := calls[v]; !dup || call.Pos() < p {
+		calls[v] = call.Pos()
+	}
 }
 
 func checkGoAddlate(pass *analysis.Pass, g *ast.GoStmt, list []ast.Stmt, goIdx int, seen map[token.Pos]bool, first map[flow.Key]token.Pos) {
