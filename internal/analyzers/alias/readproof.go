@@ -13,6 +13,7 @@ import (
 type clobberQuery struct {
 	graph       *flow.Graph
 	info        *types.Info
+	fn          ast.Node
 	target      *types.Var
 	from        ast.Node
 	after       token.Pos
@@ -41,6 +42,7 @@ func overwrittenReadAfter(pass *analysis.Pass, fn ast.Node, a *types.Var, site r
 	q := &clobberQuery{
 		graph:       g,
 		info:        info,
+		fn:          fn,
 		target:      a,
 		from:        site.from,
 		after:       site.after,
@@ -96,6 +98,8 @@ func (q *clobberQuery) wholeNode(n ast.Node) bool {
 		return q.literalWholeRead(t)
 	case *ast.ValueSpec:
 		return q.valueWholeRead(t)
+	case *ast.UnaryExpr:
+		return q.addrTaken(t)
 	}
 	return false
 }
@@ -161,16 +165,25 @@ func (q *clobberQuery) callWholeRead(call *ast.CallExpr) bool {
 	if isLenCapCall(q.info, call) || isClearCall(q.info, call) {
 		return false
 	}
-	isCopy := isCopyCall(q.info, call)
+	return q.recvRead(call) || q.argsRead(call)
+}
+
+func (q *clobberQuery) recvRead(call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := q.wholeIdent(sel.X)
+	return ok && q.reachesIdent(id)
+}
+
+func (q *clobberQuery) argsRead(call *ast.CallExpr) bool {
+	skip := isCopyCall(q.info, call)
 	for i, arg := range call.Args {
-		if isCopy && i == 0 {
+		if skip && i == 0 {
 			continue
 		}
-		id, ok := q.wholeIdent(arg)
-		if !ok {
-			continue
-		}
-		if q.reachesIdent(id) {
+		if id, ok := q.wholeIdent(arg); ok && q.reachesIdent(id) {
 			return true
 		}
 	}
@@ -205,6 +218,9 @@ func (q *clobberQuery) rangeWholeRead(st *ast.RangeStmt) bool {
 }
 
 func (q *clobberQuery) assignWholeRead(st *ast.AssignStmt) bool {
+	if !q.storedOutside(st.Lhs) {
+		return false
+	}
 	for _, rhs := range st.Rhs {
 		id, ok := q.wholeIdent(rhs)
 		if !ok {
@@ -240,6 +256,9 @@ func (q *clobberQuery) literalWholeRead(lit *ast.CompositeLit) bool {
 }
 
 func (q *clobberQuery) valueWholeRead(spec *ast.ValueSpec) bool {
+	if !q.namesOutside(spec.Names) {
+		return false
+	}
 	for _, val := range spec.Values {
 		id, ok := q.wholeIdent(val)
 		if !ok {
@@ -250,6 +269,65 @@ func (q *clobberQuery) valueWholeRead(spec *ast.ValueSpec) bool {
 		}
 	}
 	return false
+}
+
+func (q *clobberQuery) addrTaken(u *ast.UnaryExpr) bool {
+	if u.Op != token.AND {
+		return false
+	}
+	id, ok := q.wholeIdent(u.X)
+	if !ok {
+		return false
+	}
+	return q.reachesIdent(id)
+}
+
+func (q *clobberQuery) storedOutside(lhs []ast.Expr) bool {
+	for _, e := range lhs {
+		if _, plain := q.plainLocal(ast.Unparen(e)); !plain {
+			return true
+		}
+	}
+	return false
+}
+
+func (q *clobberQuery) namesOutside(names []*ast.Ident) bool {
+	for _, id := range names {
+		if id.Name == "_" {
+			continue
+		}
+		v, ok := varOf(q.info, id)
+		if !ok || !q.functionScoped(v) {
+			return true
+		}
+	}
+	return false
+}
+
+func (q *clobberQuery) plainLocal(e ast.Expr) (*types.Var, bool) {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	if id.Name == "_" {
+		return nil, true
+	}
+	v, ok := varOf(q.info, id)
+	if !ok {
+		return nil, false
+	}
+	return v, q.functionScoped(v)
+}
+
+func (q *clobberQuery) functionScoped(v *types.Var) bool {
+	if v == nil {
+		return false
+	}
+	pkg := v.Pkg()
+	if pkg == nil {
+		return false
+	}
+	return v.Parent() != pkg.Scope()
 }
 
 func (q *clobberQuery) indexOutside(idx *ast.IndexExpr) bool {

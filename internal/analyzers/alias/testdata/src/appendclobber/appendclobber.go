@@ -1,6 +1,5 @@
 package appendclobber
 
-
 func AppendclobberReported() int {
 	a := []int{1, 2, 3}
 	b := a[:2]
@@ -357,12 +356,20 @@ func AppendclobberReportedSend(ch chan []int) {
 	ch <- a
 }
 
-func AppendclobberReportedVarDef() int {
+func AppendclobberSilentLocalAlias() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	var x = a
+	return len(x)
+}
+
+func AppendclobberReportedAliasRead() int {
 	a := []int{1, 2, 3, 4}
 	b := a[:2]
 	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
-	var x = a
-	return len(x)
+	x := a[2]
+	return x
 }
 
 func AppendclobberSilentSliceHigh() int {
@@ -370,4 +377,29 @@ func AppendclobberSilentSliceHigh() int {
 	b := a[:2]
 	b = append(b, 9)
 	return a[0:1][0]
+}
+
+type appendIntSlice []int
+
+func (s appendIntSlice) Sum() int {
+	t := 0
+	for _, x := range s {
+		t += x
+	}
+	return t
+}
+
+func AppendclobberReportedMethodRecv() int {
+	a := appendIntSlice{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a.Sum()
+}
+
+func AppendclobberReportedAddrTaken() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	p := &a
+	return (*p)[2]
 }
