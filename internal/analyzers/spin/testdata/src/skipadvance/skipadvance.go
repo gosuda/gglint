@@ -214,3 +214,14 @@ func skipadvanceReportedCounter(xs []int) {
 	}
 	_ = failures
 }
+
+func skipadvanceSilentAdvanceBeforeAndAfter() {
+	i := 0
+	for i < len(xs) {
+		i++
+		if stepErr != nil {
+			continue
+		}
+		i++
+	}
+}
