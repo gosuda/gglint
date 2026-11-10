@@ -27,6 +27,9 @@ func drainSwitchConst(info *types.Info, s *ast.SwitchStmt, k flow.Key, header in
 		return header + best, true
 	}
 	if !hasDefault {
+		if switchCaseListsRecv(info, s, k) {
+			return 0, false
+		}
 		return header, true
 	}
 	return drainSwitchDefault(info, s, k, header)
@@ -88,7 +91,7 @@ func drainSwitchMin(info *types.Info, s *ast.SwitchStmt, k flow.Key, header int6
 		return 0, false
 	}
 	if !hasDefault {
-		return switchNoDefault(header, best, foundLive)
+		return switchNoDefault(info, s, k, header, best, foundLive)
 	}
 	if !foundLive {
 		return 1 << 60, true
@@ -131,7 +134,10 @@ func switchLiveCount(info *types.Info, cc *ast.CaseClause, k flow.Key) (n int64,
 	return n, true, true
 }
 
-func switchNoDefault(header, best int64, foundLive bool) (int64, bool) {
+func switchNoDefault(info *types.Info, s ast.Node, k flow.Key, header, best int64, foundLive bool) (int64, bool) {
+	if switchCaseListsRecv(info, s, k) {
+		return 0, false
+	}
 	if !foundLive {
 		return header, true
 	}
@@ -139,6 +145,27 @@ func switchNoDefault(header, best int64, foundLive bool) (int64, bool) {
 		return header, true
 	}
 	return header + best, true
+}
+
+func switchCaseListsRecv(info *types.Info, s ast.Node, k flow.Key) bool {
+	found := false
+	ast.Inspect(s, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		cc, ok := n.(*ast.CaseClause)
+		if !ok {
+			return true
+		}
+		for _, e := range cc.List {
+			if uncondRecvs(info, e, k) > 0 {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 func drainTypeSwitchRecvs(info *types.Info, s *ast.TypeSwitchStmt, k flow.Key) (int64, bool) {
@@ -151,7 +178,7 @@ func drainTypeSwitchRecvs(info *types.Info, s *ast.TypeSwitchStmt, k flow.Key) (
 		return 0, false
 	}
 	if !hasDefault {
-		return switchNoDefault(header, best, foundLive)
+		return switchNoDefault(info, s, k, header, best, foundLive)
 	}
 	if !foundLive {
 		return 1 << 60, true
@@ -199,6 +226,12 @@ func drainSelectRecvs(info *types.Info, s *ast.SelectStmt, k flow.Key) (int64, b
 		}
 		return best, true
 	}
+	if selectDefaultDead(info, s) {
+		if !foundLive {
+			return 1 << 60, true
+		}
+		return best, true
+	}
 	if !foundLive {
 		return 1 << 60, true
 	}
@@ -206,6 +239,17 @@ func drainSelectRecvs(info *types.Info, s *ast.SelectStmt, k flow.Key) (int64, b
 		return 0, true
 	}
 	return best, true
+}
+
+func selectDefaultDead(info *types.Info, s *ast.SelectStmt) bool {
+	for _, c := range s.Body.List {
+		cc, ok := c.(*ast.CommClause)
+		if !ok || cc.Comm != nil {
+			continue
+		}
+		return clauseEndsNoReturn(info, cc.Body)
+	}
+	return false
 }
 
 func selectMin(info *types.Info, s *ast.SelectStmt, k flow.Key) (best int64, foundLive, hasDefault, ok bool) {

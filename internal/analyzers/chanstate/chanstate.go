@@ -238,7 +238,7 @@ func firstresultGo(pass *analysis.Pass, info *types.Info, fn ast.Node, loop ast.
 	if !ok {
 		return
 	}
-	if n > r+kcap {
+	if n > r && n-r > kcap {
 		pass.Reportf(goStmt.Pos(), msgFirstresult, n, chanName(op.Key), r, kcap)
 	}
 }

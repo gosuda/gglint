@@ -70,6 +70,7 @@ func (w *opWalker) stmt(s ast.Stmt) {
 	case *ast.DeclStmt:
 		w.decl(s)
 	case *ast.GoStmt:
+		w.expr(s.Call)
 	default:
 		w.structured(s)
 	}

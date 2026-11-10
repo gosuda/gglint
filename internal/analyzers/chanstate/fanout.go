@@ -116,6 +116,15 @@ func indexOfLoop(l []ast.Stmt, target ast.Stmt) int {
 	return -1
 }
 
+type afterWalk struct {
+	info      *types.Info
+	fn        ast.Node
+	rep       ast.Stmt
+	key       flow.Key
+	count     int64
+	accounted map[token.Pos]struct{}
+}
+
 func straightRecvs(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) (int64, bool) {
 	list := enclosingList(fn, loop)
 	if list == nil {
@@ -125,10 +134,11 @@ func straightRecvs(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) (in
 	if start < 0 {
 		return 0, false
 	}
-	rep := list[start]
-	var count int64
+	w := afterWalk{info: info, fn: fn, rep: list[start], key: k, accounted: map[token.Pos]struct{}{}}
+	walked := 0
 	for _, s := range list[start+1:] {
-		stop, fail := stepAfterLoop(info, fn, rep, s, k, &count)
+		walked++
+		stop, fail := w.step(s)
 		if fail {
 			return 0, false
 		}
@@ -136,29 +146,104 @@ func straightRecvs(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) (in
 			break
 		}
 	}
-	return count, true
+	for _, s := range list[start+1 : start+1+walked] {
+		for _, p := range recvPositions(info, s, k) {
+			if _, ok := w.accounted[p]; !ok {
+				return 0, false
+			}
+		}
+	}
+	return w.count, true
 }
 
-func stepAfterLoop(info *types.Info, fn ast.Node, loop, s ast.Stmt, k flow.Key, count *int64) (stop, failed bool) {
+func (w *afterWalk) step(s ast.Stmt) (stop, failed bool) {
 	if _, ok := s.(*ast.ReturnStmt); ok {
-		if flow.StraightLine(fn, loop, s) {
-			*count += recvCount(info, s, k)
-		}
-		return true, false
+		return w.stepReturn(s)
 	}
 	if !isStraightStmt(s) {
-		add, ok := drainLoopRecvs(info, s, k)
-		if !ok {
+		return w.stepBranch(s)
+	}
+	return w.stepStraight(s)
+}
+
+func (w *afterWalk) stepReturn(s ast.Stmt) (stop, failed bool) {
+	if flow.StraightLine(w.fn, w.rep, s) {
+		w.count += recvCount(w.info, s, w.key)
+		markAllRecvs(w.info, s, w.key, w.accounted)
+		return true, false
+	}
+	if totalNodeRecvs(w.info, s, w.key) > 0 {
+		return true, true
+	}
+	return true, false
+}
+
+func (w *afterWalk) stepBranch(s ast.Stmt) (stop, failed bool) {
+	add, ok := drainLoopRecvs(w.info, s, w.key)
+	if !ok {
+		return false, true
+	}
+	w.count += add
+	if isDrainable(s) {
+		markAllRecvs(w.info, s, w.key, w.accounted)
+	}
+	return false, false
+}
+
+func (w *afterWalk) stepStraight(s ast.Stmt) (stop, failed bool) {
+	if !flow.StraightLine(w.fn, w.rep, s) {
+		if totalNodeRecvs(w.info, s, w.key) > 0 {
 			return false, true
 		}
-		*count += add
 		return false, false
 	}
-	if !flow.StraightLine(fn, loop, s) {
-		return false, false
-	}
-	*count += recvCount(info, s, k)
+	w.count += recvCount(w.info, s, w.key)
+	markAllRecvs(w.info, s, w.key, w.accounted)
 	return false, false
+}
+
+func isDrainable(s ast.Stmt) bool {
+	switch t := s.(type) {
+	case *ast.ForStmt, *ast.RangeStmt, *ast.IfStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+		return true
+	case *ast.LabeledStmt:
+		return isDrainable(t.Stmt)
+	default:
+		return false
+	}
+}
+
+func markAllRecvs(info *types.Info, n ast.Node, k flow.Key, accounted map[token.Pos]struct{}) {
+	for _, p := range recvPositions(info, n, k) {
+		accounted[p] = struct{}{}
+	}
+}
+
+func recvPositions(info *types.Info, n ast.Node, k flow.Key) []token.Pos {
+	w := &opWalker{info: info, key: k}
+	switch n := n.(type) {
+	case *ast.BlockStmt:
+		w.stmt(n)
+	case ast.Stmt:
+		w.stmt(n)
+	case ast.Expr:
+		w.expr(n)
+	default:
+		ast.Inspect(n, func(x ast.Node) bool {
+			if s, ok := x.(ast.Stmt); ok {
+				w.stmt(s)
+				return false
+			}
+			return true
+		})
+	}
+	var out []token.Pos
+	for _, op := range w.out {
+		if op.Kind == opRecv {
+			out = append(out, op.Pos)
+		}
+	}
+	return out
 }
 
 func drainLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
@@ -175,9 +260,6 @@ func drainLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
 		return drainSelectRecvs(info, s, k)
 	case *ast.LabeledStmt:
 		return drainLoopRecvs(info, s.Stmt, k)
-	}
-	if hasAnyRecv(info, s, k) {
-		return 0, false
 	}
 	return 0, true
 }
@@ -196,6 +278,9 @@ func drainCountedLoop(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
 	trip, ok := loopTrip(info, s)
 	if !ok {
 		return 0, false
+	}
+	if trip > (1<<60)/straight {
+		return 1 << 60, true
 	}
 	return trip * straight, true
 }
@@ -419,10 +504,6 @@ func isExitCall(info *types.Info, call *ast.CallExpr) bool {
 		}
 	}
 	return false
-}
-
-func hasAnyRecv(info *types.Info, n ast.Node, k flow.Key) bool {
-	return totalNodeRecvs(info, n, k) > 0
 }
 
 func totalNodeRecvs(info *types.Info, n ast.Node, k flow.Key) int64 {

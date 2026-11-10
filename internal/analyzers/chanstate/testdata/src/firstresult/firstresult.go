@@ -231,6 +231,8 @@ func firstresultSilentAddrTake() int {
 		*p = 2
 		go func() { ch <- i }()
 	}
+	<-ch
+	<-ch
 	return <-ch
 }
 
@@ -241,6 +243,8 @@ func firstresultSilentClosureAssign() int {
 		bump()
 		go func() { ch <- i }()
 	}
+	<-ch
+	<-ch
 	return <-ch
 }
 
@@ -677,5 +681,75 @@ func firstresultSilentDeferRecv() int {
 	defer useFirst(<-ch)
 	<-ch
 	<-ch
+	return 0
+}
+
+func firstresultSilentAfterIf(debug bool) int {
+	ch := make(chan int)
+	for i := 0; i < 2; i++ {
+		go func() { ch <- i }()
+	}
+	if debug {
+		useFirst(1)
+	}
+	<-ch
+	<-ch
+	return 0
+}
+func firstresultSilentGoRecv() int {
+	ch := make(chan int)
+	for i := 0; i < 1; i++ {
+		go func() { ch <- i }()
+	}
+	go useFirst(<-ch)
+	return 0
+}
+
+func firstresultSilentSwitchCaseRecv() int {
+	ch := make(chan int)
+	for i := 0; i < 1; i++ {
+		go func() { ch <- i }()
+	}
+	switch {
+	case (<-ch) == 0:
+		useFirst(0)
+	}
+	return 0
+}
+
+func firstresultSilentSelectDefaultExit() int {
+	ch := make(chan int)
+	for i := 0; i < 1; i++ {
+		go func() { ch <- i }()
+	}
+	select {
+	case v := <-ch:
+		_ = v
+		return 1
+	default:
+		log.Fatal("none")
+	}
+	return 0
+}
+
+func firstresultSilentHugeCap() int {
+	ch := make(chan struct{}, 9223372036854775807)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- struct{}{} }()
+	}
+	<-ch
+	return 0
+}
+
+func firstresultSilentLabeledDrain() int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }()
+	}
+	goto drain
+drain:
+	for j := 0; j < 3; j++ {
+		<-ch
+	}
 	return 0
 }
