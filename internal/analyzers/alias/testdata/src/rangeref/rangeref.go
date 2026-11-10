@@ -199,3 +199,15 @@ func RangerefSilentReassigned(items []item) *item {
 	p.n = 1
 	return p
 }
+
+func RangerefReportedConditionalKill(items []item, keep bool, other *item) *item {
+	var out *item
+	for _, v := range items {
+		out = &v // want `this is the address of the per-iteration copy v, not of the slice element`
+		if keep {
+			out = other
+		}
+	}
+	out.n = 0
+	return out
+}

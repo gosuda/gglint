@@ -151,24 +151,19 @@ func appendDef(info *types.Info, st *ast.AssignStmt, defs map[*types.Var]sliceDe
 }
 
 func reallocates(info *types.Info, fn ast.Node, def sliceDef, call *ast.CallExpr) bool {
-	if call.Ellipsis.IsValid() {
-		return true
-	}
 	if !def.highKnown {
 		return false
 	}
+	if call.Ellipsis.IsValid() {
+		capacity, capKnown := arrayLenCap(info, fn, def.a, def.pos)
+		return capKnown && def.high == capacity
+	}
 	n := len(call.Args) - 1
-	length, capacity, lenKnown, capKnown := arrayLenCap(info, fn, def.a, def.pos)
-	if capKnown && def.high+n > capacity {
-		return true
-	}
-	if !capKnown && lenKnown && def.high+n > length {
-		return true
-	}
-	return false
+	capacity, capKnown := arrayLenCap(info, fn, def.a, def.pos)
+	return capKnown && def.high+n > capacity
 }
 
-func arrayLenCap(info *types.Info, fn ast.Node, a *types.Var, before token.Pos) (length, capacity int, lenKnown, capKnown bool) {
+func arrayLenCap(info *types.Info, fn ast.Node, a *types.Var, before token.Pos) (capacity int, capKnown bool) {
 	best := token.NoPos
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
@@ -178,28 +173,62 @@ func arrayLenCap(info *types.Info, fn ast.Node, a *types.Var, before token.Pos) 
 		if !ok {
 			return true
 		}
-		l, c, lk, ck, ok := defBefore(info, st, a, before, best)
+		c, ck, ok := defBefore(info, st, a, before, best)
 		if !ok {
 			return true
 		}
-		best, length, capacity, lenKnown, capKnown = st.Pos(), l, c, lk, ck
+		best, capacity, capKnown = st.Pos(), c, ck
 		return true
 	})
-	return length, capacity, lenKnown, capKnown
+	if best == token.NoPos {
+		return 0, false
+	}
+	if reassignedBefore(info, fn, a, before, best) {
+		return 0, false
+	}
+	return capacity, capKnown
 }
 
-func defBefore(info *types.Info, st *ast.AssignStmt, a *types.Var, before, best token.Pos) (length, capacity int, lenKnown, capKnown, ok bool) {
+func reassignedBefore(info *types.Info, fn ast.Node, a *types.Var, before, best token.Pos) bool {
+	hit := false
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if hit {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		st, ok := n.(*ast.AssignStmt)
+		if !ok || st.Pos() == best || st.Pos() >= before {
+			return true
+		}
+		hit = assignsVar(info, st, a)
+		return !hit
+	})
+	return hit
+}
+
+func assignsVar(info *types.Info, st *ast.AssignStmt, a *types.Var) bool {
+	for _, lhs := range st.Lhs {
+		if isVarTarget(info, lhs, a) {
+			return true
+		}
+	}
+	return false
+}
+
+func defBefore(info *types.Info, st *ast.AssignStmt, a *types.Var, before, best token.Pos) (capacity int, capKnown, ok bool) {
 	if !isDefOf(info, st, a) {
-		return 0, 0, false, false, false
+		return 0, false, false
 	}
 	if st.Pos() >= before || st.Pos() <= best {
-		return 0, 0, false, false, false
+		return 0, false, false
 	}
-	l, c, lk, ck := defLenCap(info, st.Rhs[0])
-	if !lk && !ck {
-		return 0, 0, false, false, false
+	c, ck := defLenCap(info, st.Rhs[0])
+	if !ck {
+		return 0, false, false
 	}
-	return l, c, lk, ck, true
+	return c, ck, true
 }
 
 func isDefOf(info *types.Info, st *ast.AssignStmt, a *types.Var) bool {
@@ -210,16 +239,36 @@ func isDefOf(info *types.Info, st *ast.AssignStmt, a *types.Var) bool {
 	return ok && v == a
 }
 
-func defLenCap(info *types.Info, rhs ast.Expr) (length, capacity int, lenKnown, capKnown bool) {
+func defLenCap(info *types.Info, rhs ast.Expr) (capacity int, capKnown bool) {
 	if comp, ok := ast.Unparen(rhs).(*ast.CompositeLit); ok {
-		n := len(comp.Elts)
-		return n, n, true, true
+		return compositeCap(info, comp)
 	}
 	call, ok := ast.Unparen(rhs).(*ast.CallExpr)
 	if !ok || !isMake(info, call) || len(call.Args) < 2 {
-		return 0, 0, false, false
+		return 0, false
 	}
 	return makeLenCap(info, call)
+}
+
+func compositeCap(info *types.Info, comp *ast.CompositeLit) (capacity int, capKnown bool) {
+	if typ := info.TypeOf(comp); typ != nil {
+		if arr, ok := typ.Underlying().(*types.Array); ok {
+			return int(arr.Len()), true
+		}
+	}
+	if hasKeyed(comp) {
+		return 0, false
+	}
+	return len(comp.Elts), true
+}
+
+func hasKeyed(comp *ast.CompositeLit) bool {
+	for _, e := range comp.Elts {
+		if _, ok := ast.Unparen(e).(*ast.KeyValueExpr); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func isMake(info *types.Info, call *ast.CallExpr) bool {
@@ -231,19 +280,16 @@ func isMake(info *types.Info, call *ast.CallExpr) bool {
 	return ok && b.Name() == "make"
 }
 
-func makeLenCap(info *types.Info, call *ast.CallExpr) (length, capacity int, lenKnown, capKnown bool) {
+func makeLenCap(info *types.Info, call *ast.CallExpr) (capacity int, capKnown bool) {
 	l, lok := constInt(info, call.Args[1])
 	if len(call.Args) < 3 {
-		return l, l, lok, lok
+		return l, lok
 	}
 	c, cok := constInt(info, call.Args[2])
-	if !lok {
-		return 0, c, false, cok
+	if !lok || !cok {
+		return 0, false
 	}
-	if !cok {
-		return l, l, true, true
-	}
-	return l, c, true, true
+	return c, true
 }
 
 func appendTarget(info *types.Info, st *ast.AssignStmt, call *ast.CallExpr) (*types.Var, bool) {
@@ -342,13 +388,13 @@ func lhsIdents(fn ast.Node) map[*ast.Ident]bool {
 		if !ok {
 			return true
 		}
+		if st.Tok != token.ASSIGN && st.Tok != token.DEFINE {
+			return true
+		}
 		for _, lhs := range st.Lhs {
-			ast.Inspect(lhs, func(m ast.Node) bool {
-				if id, ok := m.(*ast.Ident); ok {
-					out[id] = true
-				}
-				return true
-			})
+			if id, ok := ast.Unparen(lhs).(*ast.Ident); ok {
+				out[id] = true
+			}
 		}
 		return true
 	})

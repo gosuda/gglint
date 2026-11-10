@@ -293,15 +293,26 @@ func writeThrough(info *types.Info, fn ast.Node, tk flow.Key, u *ast.UnaryExpr) 
 	if body == nil {
 		return false
 	}
-	scan := throughScan{info: info, target: tk, stop: u}
+	scan := throughScan{info: info, target: tk, stop: u, top: topAssigns(body)}
 	ast.Inspect(body, scan.visit)
 	return scan.found
+}
+
+func topAssigns(body *ast.BlockStmt) map[*ast.AssignStmt]bool {
+	out := map[*ast.AssignStmt]bool{}
+	for _, st := range body.List {
+		if assign, ok := st.(*ast.AssignStmt); ok {
+			out[assign] = true
+		}
+	}
+	return out
 }
 
 type throughScan struct {
 	info   *types.Info
 	target flow.Key
 	stop   *ast.UnaryExpr
+	top    map[*ast.AssignStmt]bool
 	killed bool
 	found  bool
 }
@@ -323,16 +334,18 @@ func (s *throughScan) visit(n ast.Node) bool {
 
 func (s *throughScan) statement(st *ast.AssignStmt) {
 	for _, lhs := range st.Lhs {
-		s.assign(lhs)
+		s.assign(st, lhs)
 	}
 }
 
-func (s *throughScan) assign(lhs ast.Expr) {
+func (s *throughScan) assign(st *ast.AssignStmt, lhs ast.Expr) {
 	if lhs.Pos() <= s.stop.End() {
 		return
 	}
 	if isWholeTarget(s.info, lhs, s.target) {
-		s.killed = true
+		if s.top[st] {
+			s.killed = true
+		}
 		return
 	}
 	if !s.killed && matchesWrite(s.info, lhs, s.target, s.stop) {

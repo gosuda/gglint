@@ -94,3 +94,46 @@ func AppendclobberSilentUnreachable(cond bool) int {
 	return a[2]
 }
 
+func AppendclobberReportedSpread(src []int) int {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	b = append(b, src...) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a[2]
+}
+
+func AppendclobberReportedMakeNonConst(n int) int {
+	a := make([]int, 3, n)
+	b := a[:2]
+	b = append(b, 9, 10) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a[2]
+}
+
+func AppendclobberReportedArray() int {
+	a := [5]int{}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a[2]
+}
+
+func AppendclobberReportedKeyed() int {
+	a := []int{4: 0}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a[2]
+}
+
+func AppendclobberReportedIndexRead(m map[int]int) {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	m[a[2]] = 1
+}
+
+func AppendclobberReportedGrown() int {
+	a := make([]int, 3)
+	a = append(a, 1, 2, 3)
+	b := a[:2]
+	b = append(b, 9, 10, 11) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a[2]
+}
+
