@@ -1,0 +1,457 @@
+package flow
+
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/types/typeutil"
+)
+
+// Spawn describes one goroutine creation site in a function.
+type Spawn struct {
+	Site   ast.Node     // *ast.GoStmt, or the Go/TryGo call expression
+	Body   *ast.FuncLit // nil when the spawned function is not a literal
+	InLoop bool         // Site is inside a for or range body of the enclosing function
+	Group  Key          // WaitGroup or errgroup the spawn belongs to; zero when none
+}
+
+// Spawns returns the goroutine creation sites of fn in source order.
+func Spawns(pass *analysis.Pass, fn ast.Node) []Spawn {
+	body := fnBody(fn)
+	if pass == nil || pass.TypesInfo == nil || body == nil {
+		return nil
+	}
+	w := spawnWalker{info: pass.TypesInfo}
+	for _, s := range body.List {
+		w.stmt(s, false)
+	}
+	return w.out
+}
+
+type spawnWalker struct {
+	info *types.Info
+	out  []Spawn
+}
+
+func (w *spawnWalker) stmt(s ast.Stmt, inLoop bool) {
+	switch s := s.(type) {
+	case *ast.GoStmt:
+		w.addGo(s, inLoop)
+	case *ast.BlockStmt:
+		w.list(s.List, inLoop)
+	case *ast.IfStmt:
+		w.optStmt(s.Init, inLoop)
+		w.stmt(s.Body, inLoop)
+		w.optStmt(s.Else, inLoop)
+	case *ast.ForStmt:
+		w.optStmt(s.Init, inLoop)
+		w.optStmt(s.Post, true)
+		w.stmt(s.Body, true)
+	case *ast.RangeStmt:
+		w.stmt(s.Body, true)
+	case *ast.LabeledStmt:
+		w.stmt(s.Stmt, inLoop)
+	case *ast.SelectStmt:
+		w.stmt(s.Body, inLoop)
+	default:
+		w.rest(s, inLoop)
+	}
+}
+
+func (w *spawnWalker) list(l []ast.Stmt, inLoop bool) {
+	for _, s := range l {
+		w.stmt(s, inLoop)
+	}
+}
+
+func (w *spawnWalker) rest(s ast.Stmt, inLoop bool) {
+	switch s := s.(type) {
+	case *ast.SwitchStmt:
+		w.optStmt(s.Init, inLoop)
+		w.stmt(s.Body, inLoop)
+	case *ast.TypeSwitchStmt:
+		w.optStmt(s.Init, inLoop)
+		w.stmt(s.Assign, inLoop)
+		w.stmt(s.Body, inLoop)
+	case *ast.CaseClause:
+		for _, c := range s.Body {
+			w.stmt(c, inLoop)
+		}
+	case *ast.CommClause:
+		for _, c := range s.Body {
+			w.stmt(c, inLoop)
+		}
+	case *ast.ExprStmt:
+		w.method(s.X, inLoop)
+	case *ast.DeferStmt:
+		w.method(s.Call, inLoop)
+	}
+}
+
+func (w *spawnWalker) optStmt(s ast.Stmt, inLoop bool) {
+	if s != nil {
+		w.stmt(s, inLoop)
+	}
+}
+
+func (w *spawnWalker) method(e ast.Expr, inLoop bool) {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return
+	}
+	callee := typeutil.StaticCallee(w.info, call)
+	if callee == nil {
+		return
+	}
+	var key Key
+	switch callee.FullName() {
+	case "(*sync.WaitGroup).Go", "(*golang.org/x/sync/errgroup.Group).Go", "(*golang.org/x/sync/errgroup.Group).TryGo":
+		key, _ = MethodKey(w.info, call)
+	default:
+		return
+	}
+	var body *ast.FuncLit
+	if len(call.Args) > 0 {
+		if lit, ok := ast.Unparen(call.Args[0]).(*ast.FuncLit); ok {
+			body = lit
+		}
+	}
+	w.out = append(w.out, Spawn{Site: call, Body: body, InLoop: inLoop, Group: key})
+}
+
+func (w *spawnWalker) addGo(s *ast.GoStmt, inLoop bool) {
+	var body *ast.FuncLit
+	if lit, ok := ast.Unparen(s.Call.Fun).(*ast.FuncLit); ok {
+		body = lit
+	}
+	w.out = append(w.out, Spawn{Site: s, Body: body, InLoop: inLoop, Group: w.goGroup(s, body)})
+}
+
+func (w *spawnWalker) goGroup(s *ast.GoStmt, body *ast.FuncLit) Key {
+	seen := map[Key]bool{}
+	var cands []Key
+	add := func(k Key, ok bool) {
+		if ok && !seen[k] {
+			seen[k] = true
+			cands = append(cands, k)
+		}
+	}
+	if body == nil {
+		for _, a := range s.Call.Args {
+			if isWaitGroup(w.info, a) {
+				add(KeyOf(w.info, a))
+			}
+		}
+	} else {
+		ast.Inspect(body.Body, func(n ast.Node) bool {
+			if _, ok := n.(*ast.FuncLit); ok {
+				return false
+			}
+			return w.literalCall(s, body, n, add)
+		})
+	}
+	if len(cands) == 1 {
+		return cands[0]
+	}
+	return Key{}
+}
+
+func (w *spawnWalker) literalCall(s *ast.GoStmt, body *ast.FuncLit, n ast.Node, add func(Key, bool)) bool {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return true
+	}
+	callee := typeutil.StaticCallee(w.info, call)
+	if callee == nil {
+		return true
+	}
+	if callee.FullName() == "(*sync.WaitGroup).Done" {
+		k, ok := MethodKey(w.info, call)
+		add(w.subst(body, s.Call, k, ok))
+		return true
+	}
+	for _, a := range call.Args {
+		if isWaitGroup(w.info, a) {
+			add(KeyOf(w.info, a))
+		}
+	}
+	return true
+}
+
+func (w *spawnWalker) subst(body *ast.FuncLit, call *ast.CallExpr, k Key, ok bool) (Key, bool) {
+	if !ok {
+		return Key{}, false
+	}
+	sig, isSig := w.info.TypeOf(body).(*types.Signature)
+	if !isSig || sig == nil {
+		return k, true
+	}
+	for i := range sig.Params().Len() {
+		if sig.Params().At(i) != k.Root {
+			continue
+		}
+		param := sig.Params().At(i)
+		if _, isPtr := param.Type().Underlying().(*types.Pointer); !isPtr || i >= len(call.Args) {
+			return k, true
+		}
+		return KeyOf(w.info, call.Args[i])
+	}
+	return k, true
+}
+
+func isWaitGroup(info *types.Info, e ast.Expr) bool {
+	t := info.TypeOf(e)
+	if t == nil {
+		return false
+	}
+	if p, ok := t.Underlying().(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	n, ok := t.(*types.Named)
+	if !ok || n.Obj().Pkg() == nil {
+		return false
+	}
+	return n.Obj().Pkg().Path() == "sync" && n.Obj().Name() == "WaitGroup"
+}
+
+// Joined reports whether every path from s.Site to at crosses a join of s.
+func Joined(pass *analysis.Pass, g *Graph, s Spawn, at ast.Node) bool {
+	if pass == nil || pass.TypesInfo == nil || g == nil || s.Site == nil || at == nil {
+		return false
+	}
+	f, t, ok := g.endpoints(s.Site, at)
+	if !ok {
+		return false
+	}
+	joins := g.joins(pass, s)
+	if joins[t] {
+		return true
+	}
+	return !g.reach(f, t, func(n ast.Node) bool { return joins[n] })
+}
+
+func (g *Graph) endpoints(from, to ast.Node) (start, end ast.Node, ok bool) {
+	f := g.locate(from)
+	t := g.locate(to)
+	if f == nil || t == nil || f == t || !g.reach(f, t, nil) {
+		return nil, nil, false
+	}
+	return f, t, true
+}
+
+func (g *Graph) joins(pass *analysis.Pass, s Spawn) map[ast.Node]bool {
+	out := map[ast.Node]bool{}
+	if !s.Group.zero() {
+		g.markWaits(pass.TypesInfo, s.Group, out)
+	}
+	if s.Body != nil {
+		g.markSignals(pass, s.Body, out)
+	}
+	return out
+}
+
+func (g *Graph) markWaits(info *types.Info, group Key, out map[ast.Node]bool) {
+	for _, b := range g.blocks {
+		for _, n := range b.Nodes {
+			if hasWait(info, n, group) {
+				out[n] = true
+			}
+		}
+	}
+}
+
+func (g *Graph) markSignals(pass *analysis.Pass, body *ast.FuncLit, out map[ast.Node]bool) {
+	for _, k := range signaled(pass, body) {
+		for _, n := range g.receives(pass.TypesInfo, g.fn, k) {
+			out[n] = true
+		}
+	}
+}
+
+func hasWait(info *types.Info, n ast.Node, group Key) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if pruned(x) {
+			return false
+		}
+		call, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if isGroupWait(info, call, group) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func pruned(n ast.Node) bool {
+	switch n.(type) {
+	case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+		return true
+	}
+	return false
+}
+
+func isGroupWait(info *types.Info, call *ast.CallExpr, group Key) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Wait" {
+		return false
+	}
+	k, ok := MethodKey(info, call)
+	if !ok || k != group {
+		return false
+	}
+	fn := typeutil.StaticCallee(info, call)
+	return fn == nil || fn.FullName() == "(*sync.WaitGroup).Wait" || fn.FullName() == "(*golang.org/x/sync/errgroup.Group).Wait"
+}
+
+func signaled(pass *analysis.Pass, body *ast.FuncLit) []Key {
+	info := pass.TypesInfo
+	var out []Key
+	seen := map[Key]bool{}
+	add := func(k Key, ok bool) {
+		if ok && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	for _, s := range body.Body.List {
+		if d, ok := s.(*ast.DeferStmt); ok {
+			add(closeChan(info, d.Call))
+		}
+	}
+	if n := len(body.Body.List); n > 0 {
+		switch s := body.Body.List[n-1].(type) {
+		case *ast.ExprStmt:
+			if call, ok := ast.Unparen(s.X).(*ast.CallExpr); ok {
+				add(closeChan(info, call))
+			}
+		case *ast.SendStmt:
+			add(KeyOf(info, s.Chan))
+		}
+	}
+	return out
+}
+
+func closeChan(info *types.Info, call *ast.CallExpr) (Key, bool) {
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok || id.Name != "close" || len(call.Args) != 1 {
+		return Key{}, false
+	}
+	if b, ok := info.Uses[id].(*types.Builtin); !ok || b.Name() != "close" {
+		return Key{}, false
+	}
+	return KeyOf(info, call.Args[0])
+}
+
+func (g *Graph) receives(info *types.Info, fn ast.Node, k Key) []ast.Node {
+	skip := map[*ast.UnaryExpr]bool{}
+	var refined []ast.Node
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		sel, ok := n.(*ast.SelectStmt)
+		if !ok {
+			return true
+		}
+		for _, cc := range sel.Body.List {
+			c, ok := cc.(*ast.CommClause)
+			if !ok {
+				continue
+			}
+			g.refineClause(info, c, k, skip, &refined)
+		}
+		return true
+	})
+	var out []ast.Node
+	for _, r := range refined {
+		if rn := g.locate(r); rn != nil {
+			out = append(out, rn)
+		}
+	}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch n.(type) {
+		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+			return false
+		}
+		g.markRecv(info, n, k, skip, &out)
+		return true
+	})
+	return out
+}
+
+func (g *Graph) refineClause(info *types.Info, c *ast.CommClause, k Key, skip map[*ast.UnaryExpr]bool, refined *[]ast.Node) {
+	if c.Comm == nil {
+		return
+	}
+	u := recvOf(info, c.Comm, k)
+	if u == nil {
+		return
+	}
+	skip[u] = true
+	if len(c.Body) > 0 {
+		*refined = append(*refined, c.Body[0])
+	} else {
+		*refined = append(*refined, c.Comm)
+	}
+}
+
+func (g *Graph) markRecv(info *types.Info, n ast.Node, k Key, skip map[*ast.UnaryExpr]bool, out *[]ast.Node) {
+	g.markUnary(info, n, k, skip, out)
+	g.markRange(info, n, k, out)
+}
+
+func (g *Graph) markUnary(info *types.Info, n ast.Node, k Key, skip map[*ast.UnaryExpr]bool, out *[]ast.Node) {
+	u, ok := n.(*ast.UnaryExpr)
+	if !ok || u.Op != token.ARROW || skip[u] {
+		return
+	}
+	ck, ok := KeyOf(info, u.X)
+	if !ok || ck != k {
+		return
+	}
+	if rn := g.locate(u); rn != nil {
+		*out = append(*out, rn)
+	}
+}
+
+func (g *Graph) markRange(info *types.Info, n ast.Node, k Key, out *[]ast.Node) {
+	rs, ok := n.(*ast.RangeStmt)
+	if !ok {
+		return
+	}
+	ck, ok := KeyOf(info, rs.X)
+	if !ok || ck != k {
+		return
+	}
+	if rn := g.locate(rs.X); rn != nil {
+		*out = append(*out, rn)
+	}
+}
+
+func recvOf(info *types.Info, comm ast.Stmt, k Key) *ast.UnaryExpr {
+	var found *ast.UnaryExpr
+	ast.Inspect(comm, func(n ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		u, ok := n.(*ast.UnaryExpr)
+		if !ok || u.Op != token.ARROW {
+			return true
+		}
+		if ck, ok := KeyOf(info, u.X); ok && ck == k {
+			found = u
+		}
+		return false
+	})
+	return found
+}
