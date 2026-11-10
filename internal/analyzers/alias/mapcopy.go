@@ -19,7 +19,6 @@ func runMapcopy(pass *analysis.Pass) (any, error) {
 
 type mapDef struct {
 	v    *types.Var
-	m    *types.Var
 	text string
 	pos  token.Pos
 	stmt ast.Node
@@ -37,13 +36,8 @@ func collectMapDefs(info *types.Info, fn ast.Node) []mapDef {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		switch n := n.(type) {
-		case *ast.AssignStmt:
-			if d, ok := mapAssignDef(info, n); ok {
-				out = append(out, d)
-			}
-		case *ast.ValueSpec:
-			if d, ok := mapValueDef(info, n); ok {
+		if st, ok := n.(*ast.AssignStmt); ok {
+			if d, ok := mapAssignDef(info, st); ok {
 				out = append(out, d)
 			}
 		}
@@ -64,29 +58,14 @@ func mapAssignDef(info *types.Info, st *ast.AssignStmt) (mapDef, bool) {
 	if !ok {
 		return mapDef{}, false
 	}
-	m, text, ok := mapIndex(info, st.Rhs[0])
+	text, ok := mapIndex(info, st.Rhs[0])
 	if !ok {
 		return mapDef{}, false
 	}
-	return mapDef{v: v, m: m, text: text, pos: st.Pos(), stmt: st}, true
+	return mapDef{v: v, text: text, pos: st.Pos(), stmt: st}, true
 }
 
-func mapValueDef(info *types.Info, sp *ast.ValueSpec) (mapDef, bool) {
-	if len(sp.Names) != 1 || len(sp.Values) != 1 || sp.Names[0].Name == "_" {
-		return mapDef{}, false
-	}
-	v, ok := info.Defs[sp.Names[0]].(*types.Var)
-	if !ok {
-		return mapDef{}, false
-	}
-	m, text, ok := mapIndex(info, sp.Values[0])
-	if !ok {
-		return mapDef{}, false
-	}
-	return mapDef{v: v, m: m, text: text, pos: sp.Pos(), stmt: sp}, true
-}
-
-func mapIndex(info *types.Info, e ast.Expr) (*types.Var, string, bool) {
+func mapIndex(info *types.Info, e ast.Expr) (string, bool) {
 	var x ast.Expr
 	switch n := ast.Unparen(e).(type) {
 	case *ast.IndexExpr:
@@ -94,24 +73,20 @@ func mapIndex(info *types.Info, e ast.Expr) (*types.Var, string, bool) {
 	case *ast.IndexListExpr:
 		x = n.X
 	default:
-		return nil, "", false
-	}
-	m, ok := identVar(info, x)
-	if !ok {
-		return nil, "", false
+		return "", false
 	}
 	t := info.TypeOf(x)
 	if t == nil {
-		return nil, "", false
+		return "", false
 	}
 	mp, ok := t.Underlying().(*types.Map)
 	if !ok {
-		return nil, "", false
+		return "", false
 	}
 	if _, ok := mp.Elem().Underlying().(*types.Struct); !ok {
-		return nil, "", false
+		return "", false
 	}
-	return m, types.ExprString(x), true
+	return types.ExprString(x), true
 }
 
 func checkMapWrites(pass *analysis.Pass, fn ast.Node, d mapDef) {
@@ -124,9 +99,9 @@ func checkMapWrites(pass *analysis.Pass, fn ast.Node, d mapDef) {
 		}
 		switch n := n.(type) {
 		case *ast.AssignStmt:
-			checkMapAssign(pass, fn, n, d)
+			checkMapAssign(pass, n, d)
 		case *ast.IncDecStmt:
-			checkMapIncDec(pass, fn, n, d)
+			checkMapIncDec(pass, n, d)
 		}
 		return true
 	})
@@ -144,7 +119,7 @@ func copiedElsewhere(info *types.Info, fn ast.Node, d mapDef) bool {
 		}
 		switch n := n.(type) {
 		case *ast.ReturnStmt:
-			found = usesVar(info, n, d.v)
+			found = resultsUseVar(info, n, d.v)
 		case *ast.CallExpr:
 			found = argsUseVar(info, n, d.v)
 		case *ast.AssignStmt:
@@ -155,9 +130,57 @@ func copiedElsewhere(info *types.Info, fn ast.Node, d mapDef) bool {
 	return found
 }
 
+func resultsUseVar(info *types.Info, st *ast.ReturnStmt, v *types.Var) bool {
+	for _, r := range st.Results {
+		if exprUsesVar(info, r, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprUsesVar(info *types.Info, e ast.Expr, v *types.Var) bool {
+	found := false
+	var stack []ast.Node
+	ast.Inspect(e, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if id, ok := n.(*ast.Ident); ok {
+			if info.Uses[id] == v && !isFieldBase(stack, id) {
+				found = true
+				return false
+			}
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return found
+}
+
+func isFieldBase(stack []ast.Node, id *ast.Ident) bool {
+	child := ast.Node(id)
+	rest := stack
+	for len(rest) > 0 {
+		top := rest[len(rest)-1]
+		par, ok := top.(*ast.ParenExpr)
+		if !ok || par.X != child {
+			break
+		}
+		child = par
+		rest = rest[:len(rest)-1]
+	}
+	if len(rest) == 0 {
+		return false
+	}
+	sel, ok := rest[len(rest)-1].(*ast.SelectorExpr)
+	return ok && sel.X == child
+}
+
 func argsUseVar(info *types.Info, call *ast.CallExpr, v *types.Var) bool {
 	for _, a := range call.Args {
-		if usesVar(info, a, v) {
+		if exprUsesVar(info, a, v) {
 			return true
 		}
 	}
@@ -169,14 +192,14 @@ func rhsUsesVar(info *types.Info, st *ast.AssignStmt, d mapDef) bool {
 		return false
 	}
 	for _, rhs := range st.Rhs {
-		if usesVar(info, rhs, d.v) {
+		if exprUsesVar(info, rhs, d.v) {
 			return true
 		}
 	}
 	return false
 }
 
-func checkMapAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, d mapDef) {
+func checkMapAssign(pass *analysis.Pass, st *ast.AssignStmt, d mapDef) {
 	if st.Pos() <= d.pos {
 		return
 	}
@@ -188,7 +211,7 @@ func checkMapAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, d mapD
 	}
 }
 
-func checkMapIncDec(pass *analysis.Pass, fn ast.Node, st *ast.IncDecStmt, d mapDef) {
+func checkMapIncDec(pass *analysis.Pass, st *ast.IncDecStmt, d mapDef) {
 	if st.Pos() <= d.pos {
 		return
 	}

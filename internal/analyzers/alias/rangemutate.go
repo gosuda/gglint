@@ -12,14 +12,14 @@ import (
 
 func runRangemutate(pass *analysis.Pass) (any, error) {
 	eachFunc(pass, func(fn ast.Node) {
-		findRanges(pass, fn, func(rs *ast.RangeStmt) {
+		findRanges(fn, func(rs *ast.RangeStmt) {
 			checkRangemutate(pass, fn, rs)
 		})
 	})
 	return nil, nil
 }
 
-func findRanges(pass *analysis.Pass, fn ast.Node, fn2 func(*ast.RangeStmt)) {
+func findRanges(fn ast.Node, fn2 func(*ast.RangeStmt)) {
 	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
@@ -44,7 +44,7 @@ func checkRangemutate(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt) {
 	if !isSlice(info, rs.X) {
 		return
 	}
-	scanRangeBody(pass, rs.Body.List, key, root.Name())
+	scanRangeList(pass, rs.Body.List, nil, key, root.Name())
 }
 
 func isSlice(info *types.Info, e ast.Expr) bool {
@@ -56,18 +56,30 @@ func isSlice(info *types.Info, e ast.Expr) bool {
 	return ok
 }
 
-func scanRangeBody(pass *analysis.Pass, list []ast.Stmt, key flow.Key, name string) {
+func scanRangeList(pass *analysis.Pass, list []ast.Stmt, after ast.Stmt, key flow.Key, name string) {
 	for i, st := range list {
+		next := after
+		if i+1 < len(list) {
+			next = list[i+1]
+		}
 		if as, ok := st.(*ast.AssignStmt); ok {
-			checkRangeAppend(pass, list, i, as, key, name)
+			checkRangeAppend(pass, as, next, key, name)
 		}
 		for _, child := range childLists(st) {
-			scanRangeBody(pass, child, key, name)
+			scanRangeList(pass, child, childAfter(st, next), key, name)
 		}
 	}
 }
 
-func checkRangeAppend(pass *analysis.Pass, list []ast.Stmt, i int, st *ast.AssignStmt, key flow.Key, name string) {
+func childAfter(st, next ast.Stmt) ast.Stmt {
+	switch st.(type) {
+	case *ast.BlockStmt, *ast.LabeledStmt:
+		return next
+	}
+	return nil
+}
+
+func checkRangeAppend(pass *analysis.Pass, st *ast.AssignStmt, next ast.Stmt, key flow.Key, name string) {
 	info := pass.TypesInfo
 	if st.Tok != token.ASSIGN || len(st.Lhs) != 1 || len(st.Rhs) != 1 {
 		return
@@ -76,18 +88,22 @@ func checkRangeAppend(pass *analysis.Pass, list []ast.Stmt, i int, st *ast.Assig
 	if !ok || len(call.Args) < 2 {
 		return
 	}
-	first, ok := flow.KeyOf(info, call.Args[0])
-	if !ok || first != key {
+	if !rangeAppendTargets(info, st, call, key) {
 		return
 	}
-	lhs, ok := flow.KeyOf(info, st.Lhs[0])
-	if !ok || lhs != key {
-		return
-	}
-	if i+1 < len(list) && exitsLoop(list[i+1]) {
+	if next != nil && exitsLoop(next) {
 		return
 	}
 	pass.Reportf(call.Pos(), "appending to %s while ranging over it leaves the loop on the old length and can reallocate: collect into another slice", name)
+}
+
+func rangeAppendTargets(info *types.Info, st *ast.AssignStmt, call *ast.CallExpr, key flow.Key) bool {
+	first, ok := flow.KeyOf(info, call.Args[0])
+	if !ok || first != key {
+		return false
+	}
+	lhs, ok := flow.KeyOf(info, st.Lhs[0])
+	return ok && lhs == key
 }
 
 func exitsLoop(st ast.Stmt) bool {
@@ -100,18 +116,32 @@ func exitsLoop(st ast.Stmt) bool {
 
 func childLists(st ast.Stmt) [][]ast.Stmt {
 	switch n := st.(type) {
+	case *ast.BlockStmt:
+		return [][]ast.Stmt{n.List}
+	case *ast.LabeledStmt:
+		if n.Stmt != nil {
+			return [][]ast.Stmt{{n.Stmt}}
+		}
 	case *ast.IfStmt:
 		return append([][]ast.Stmt{n.Body.List}, elseBranch(n.Else)...)
-	case *ast.ForStmt:
-		return [][]ast.Stmt{n.Body.List}
-	case *ast.RangeStmt:
-		return [][]ast.Stmt{n.Body.List}
+	case *ast.ForStmt, *ast.RangeStmt:
+		return loopLists(st)
 	case *ast.SwitchStmt:
 		return blockClauses(n.Body)
 	case *ast.TypeSwitchStmt:
 		return blockClauses(n.Body)
 	case *ast.SelectStmt:
 		return blockClauses(n.Body)
+	}
+	return nil
+}
+
+func loopLists(st ast.Stmt) [][]ast.Stmt {
+	switch n := st.(type) {
+	case *ast.ForStmt:
+		return [][]ast.Stmt{n.Body.List}
+	case *ast.RangeStmt:
+		return [][]ast.Stmt{n.Body.List}
 	}
 	return nil
 }

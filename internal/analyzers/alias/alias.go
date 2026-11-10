@@ -45,7 +45,11 @@ var rangeref = &analysis.Analyzer{
 
 func eachFunc(pass *analysis.Pass, fn func(ast.Node)) {
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		fn(cur.Node())
+		n := cur.Node()
+		if bodyOf(n) == nil {
+			continue
+		}
+		fn(n)
 	}
 }
 
@@ -91,22 +95,4 @@ func isAppend(info *types.Info, e ast.Expr) (*ast.CallExpr, bool) {
 		return nil, false
 	}
 	return call, true
-}
-
-func usesVar(info *types.Info, root ast.Node, v *types.Var) bool {
-	found := false
-	ast.Inspect(root, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		id, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if info.Uses[id] == v {
-			found = true
-		}
-		return !found
-	})
-	return found
 }

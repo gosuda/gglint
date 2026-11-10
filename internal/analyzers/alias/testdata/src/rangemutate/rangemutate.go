@@ -1,10 +1,33 @@
 package rangemutate
 
+func RangemutateStub(s []int) []int
+
 func RangemutateReported() []int {
 	s := []int{1, -2, 3}
 	for _, x := range s {
 		if x > 0 {
 			s = append(s, -x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+		}
+	}
+	return s
+}
+func RangemutateReportedBlock() []int {
+	s := []int{1, 2, 3}
+	for _, x := range s {
+		{
+			s = append(s, x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+		}
+	}
+	return s
+}
+
+func RangemutateReportedLabeled() []int {
+	s := []int{1, 2, 3}
+	for _, x := range s {
+	outer:
+		for j := 0; j < 1; j++ {
+			s = append(s, x) // want `appending to s while ranging over it leaves the loop on the old length and can reallocate`
+			continue outer
 		}
 	}
 	return s
@@ -84,4 +107,26 @@ func RangemutateSilentMap(m map[string]int) {
 	for _, x := range m {
 		_ = x
 	}
+}
+
+func RangemutateSilentLabeledBreak() []int {
+	s := []int{1, 2, 3}
+	for _, x := range s {
+		goto done
+	done:
+		s = append(s, x)
+		break
+	}
+	return s
+}
+
+func RangemutateSilentBlockBreak() []int {
+	s := []int{1, 2, 3}
+	for _, x := range s {
+		{
+			s = append(s, x)
+		}
+		break
+	}
+	return s
 }

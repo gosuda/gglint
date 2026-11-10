@@ -1,5 +1,7 @@
 package appendclobber
 
+func AppendclobberStub() []int
+
 func AppendclobberReported() int {
 	a := []int{1, 2, 3}
 	b := a[:2]
@@ -15,10 +17,10 @@ func AppendclobberReportedDefine() int {
 	return a[2]
 }
 
-func AppendclobberReportedVar() int {
+func AppendclobberSilentVarForm() int {
 	a := []int{1, 2, 3}
 	var b = a[:2]
-	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	b = append(b, 9)
 	return a[2]
 }
 

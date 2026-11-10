@@ -12,7 +12,7 @@ import (
 
 func runRangeref(pass *analysis.Pass) (any, error) {
 	eachFunc(pass, func(fn ast.Node) {
-		findRanges(pass, fn, func(rs *ast.RangeStmt) {
+		findRanges(fn, func(rs *ast.RangeStmt) {
 			checkRangeref(pass, rs)
 		})
 	})
@@ -65,7 +65,7 @@ func rangeStructElem(info *types.Info, rs *ast.RangeStmt) bool {
 }
 
 func indexedSlice(info *types.Info, rs *ast.RangeStmt) bool {
-	s, ok := identVar(info, rs.X)
+	target, ok := flow.KeyOf(info, rs.X)
 	if !ok {
 		return false
 	}
@@ -76,18 +76,18 @@ func indexedSlice(info *types.Info, rs *ast.RangeStmt) bool {
 		}
 		switch n := n.(type) {
 		case *ast.IndexExpr:
-			found = indexHits(info, n.X, s)
+			found = keyHits(info, n.X, target)
 		case *ast.IndexListExpr:
-			found = indexHits(info, n.X, s)
+			found = keyHits(info, n.X, target)
 		}
 		return !found
 	})
 	return found
 }
 
-func indexHits(info *types.Info, e ast.Expr, target *types.Var) bool {
-	v, ok := identVar(info, e)
-	return ok && v == target
+func keyHits(info *types.Info, e ast.Expr, target flow.Key) bool {
+	k, ok := flow.KeyOf(info, e)
+	return ok && k == target
 }
 
 func ampNodes(info *types.Info, body *ast.BlockStmt, v *types.Var) []*ast.UnaryExpr {
@@ -150,25 +150,11 @@ func elemArg(info *types.Info, call *ast.CallExpr, u *ast.UnaryExpr) bool {
 		return false
 	}
 	for _, a := range call.Args[1:] {
-		if containsNode(a, u) {
+		if ast.Unparen(a) == u {
 			return true
 		}
 	}
 	return false
-}
-
-func containsNode(root, target ast.Node) bool {
-	found := false
-	ast.Inspect(root, func(n ast.Node) bool {
-		if found || n == nil {
-			return false
-		}
-		if n == target {
-			found = true
-		}
-		return !found
-	})
-	return found
 }
 
 func sendValue(body *ast.BlockStmt, u *ast.UnaryExpr) bool {
@@ -184,7 +170,7 @@ func sendValue(body *ast.BlockStmt, u *ast.UnaryExpr) bool {
 		if !ok {
 			return true
 		}
-		found = containsNode(st.Value, u)
+		found = ast.Unparen(st.Value) == u
 		return !found
 	})
 	return found
@@ -210,9 +196,18 @@ func storedRangeAddr(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) bool
 }
 
 func storesAddr(info *types.Info, rs *ast.RangeStmt, st *ast.AssignStmt, u *ast.UnaryExpr) bool {
-	for _, rhs := range st.Rhs {
-		if containsNode(rhs, u) {
-			return storesTarget(info, rs, st.Lhs)
+	for i, rhs := range st.Rhs {
+		if ast.Unparen(rhs) != u {
+			continue
+		}
+		if len(st.Lhs) == len(st.Rhs) {
+			if storesOne(info, rs, st.Lhs[i]) {
+				return true
+			}
+			continue
+		}
+		if storesTarget(info, rs, st.Lhs) {
+			return true
 		}
 	}
 	return false
@@ -220,22 +215,42 @@ func storesAddr(info *types.Info, rs *ast.RangeStmt, st *ast.AssignStmt, u *ast.
 
 func storesTarget(info *types.Info, rs *ast.RangeStmt, lhs []ast.Expr) bool {
 	for _, l := range lhs {
-		if isFieldOrIndex(l) {
-			return true
-		}
-		if v, ok := identVar(info, l); ok && outsideRange(v, rs) {
+		if storesOne(info, rs, l) {
 			return true
 		}
 	}
 	return false
 }
 
-func isFieldOrIndex(e ast.Expr) bool {
-	switch ast.Unparen(e).(type) {
-	case *ast.SelectorExpr, *ast.IndexExpr, *ast.IndexListExpr:
+func storesOne(info *types.Info, rs *ast.RangeStmt, l ast.Expr) bool {
+	if isFieldOrIndex(info, l) {
+		return true
+	}
+	if v, ok := identVar(info, l); ok && outsideRange(v, rs) {
 		return true
 	}
 	return false
+}
+
+func isFieldOrIndex(info *types.Info, e ast.Expr) bool {
+	switch n := ast.Unparen(e).(type) {
+	case *ast.SelectorExpr:
+		return true
+	case *ast.IndexExpr:
+		return isMapIndex(info, n.X)
+	case *ast.IndexListExpr:
+		return isMapIndex(info, n.X)
+	}
+	return false
+}
+
+func isMapIndex(info *types.Info, x ast.Expr) bool {
+	t := info.TypeOf(x)
+	if t == nil {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Map)
+	return ok
 }
 
 func outsideRange(v *types.Var, rs *ast.RangeStmt) bool {
@@ -256,7 +271,7 @@ func returnedAddr(body *ast.BlockStmt, u *ast.UnaryExpr) bool {
 			return true
 		}
 		for _, r := range st.Results {
-			if containsNode(r, u) {
+			if ast.Unparen(r) == u {
 				found = true
 			}
 		}

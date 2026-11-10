@@ -1,6 +1,12 @@
 package rangeref
 
+import "fmt"
+
+func RangerefStub(items []item)
+
 type item struct{ n int }
+
+type itemStore struct{ items []item }
 
 func RangerefReported() []*item {
 	items := []item{{n: 1}, {n: 2}}
@@ -82,6 +88,55 @@ func RangerefSilentIndexed() []*item {
 		ptrs = append(ptrs, &v)
 	}
 	return ptrs
+}
+
+func RangerefSilentFieldIndex(s *itemStore) []*item {
+	var ptrs []*item
+	for _, v := range s.items {
+		_ = s.items[0]
+		ptrs = append(ptrs, &v)
+	}
+	return ptrs
+}
+
+func RangerefSilentNestedCall(items []item) []string {
+	var lines []string
+	for _, v := range items {
+		lines = append(lines, fmt.Sprint(&v))
+	}
+	return lines
+}
+
+func RangerefSilentNestedSend(items []item) {
+	ch := make(chan string, len(items))
+	for _, v := range items {
+		ch <- fmt.Sprint(&v)
+	}
+}
+
+func RangerefSilentNestedReturn(items []item) string {
+	for _, v := range items {
+		if v.n > 0 {
+			return fmt.Sprint(&v)
+		}
+	}
+	return ""
+}
+
+func RangerefSilentSplitAssign(items []item) int {
+	count := 0
+	for _, v := range items {
+		var p *item
+		count, p = 1, &v
+		_ = p
+	}
+	return count
+}
+
+func RangerefSilentSliceStore(items []item, out []*item) {
+	for i, v := range items {
+		out[i] = &v
+	}
 }
 
 func RangerefSilentInts(ints []int) []int {

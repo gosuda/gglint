@@ -44,11 +44,8 @@ func collectSliceDefs(info *types.Info, fn ast.Node) map[*types.Var]sliceDef {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		switch n := n.(type) {
-		case *ast.AssignStmt:
-			addSliceAssign(info, fn, n, defs)
-		case *ast.ValueSpec:
-			addSliceValue(info, fn, n, defs)
+		if st, ok := n.(*ast.AssignStmt); ok {
+			addSliceAssign(info, fn, st, defs)
 		}
 		return true
 	})
@@ -64,17 +61,6 @@ func addSliceAssign(info *types.Info, fn ast.Node, st *ast.AssignStmt, defs map[
 		return
 	}
 	addSliceExpr(info, fn, st.Rhs[0], b, st.Pos(), defs)
-}
-
-func addSliceValue(info *types.Info, fn ast.Node, sp *ast.ValueSpec, defs map[*types.Var]sliceDef) {
-	if len(sp.Names) != 1 || len(sp.Values) != 1 {
-		return
-	}
-	b, ok := varOf(info, sp.Names[0])
-	if !ok || !flow.IsLocal(info, fn, b) {
-		return
-	}
-	addSliceExpr(info, fn, sp.Values[0], b, sp.Pos(), defs)
 }
 
 func addSliceExpr(info *types.Info, fn ast.Node, e ast.Expr, b *types.Var, pos token.Pos, defs map[*types.Var]sliceDef) {

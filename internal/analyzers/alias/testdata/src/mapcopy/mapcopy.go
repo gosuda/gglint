@@ -1,6 +1,12 @@
 package mapcopy
 
+func MapcopyStub(m map[string]item, k string)
+
 type item struct{ n int }
+
+type mapHolder struct{ m map[string]item }
+
+func useInt(n int) {}
 
 func MapcopyReported(m map[string]item, k string) {
 	v := m[k]
@@ -17,9 +23,31 @@ func MapcopyReportedDec(m map[string]item, k string) {
 	v.n-- // want `v is a copy of the element of m, so this write is lost`
 }
 
-func MapcopyReportedVar(m map[string]item, k string) {
-	var v = m[k]
+func MapcopyReportedFieldMap(s *mapHolder, k string) {
+	v := s.m[k]
+	v.n++ // want `v is a copy of the element of s.m, so this write is lost`
+}
+
+func MapcopyReportedReturnField(m map[string]item, k string) int {
+	v := m[k]
 	v.n++ // want `v is a copy of the element of m, so this write is lost`
+	return v.n
+}
+
+func MapcopyReportedArgField(m map[string]item, k string) {
+	v := m[k]
+	v.n++ // want `v is a copy of the element of m, so this write is lost`
+	useInt(v.n)
+}
+
+func MapcopyReportedRhsField(m map[string]item, k string) {
+	v := m[k]
+	v.n = v.n + 1 // want `v is a copy of the element of m, so this write is lost`
+}
+
+func MapcopySilentVarForm(m map[string]item, k string) {
+	var v = m[k]
+	v.n++
 }
 
 func MapcopySilent(m map[string]item, k string) {
@@ -51,6 +79,25 @@ func MapcopySilentCopied(m map[string]item, k string) {
 	v.n++
 	w := v
 	_ = w
+}
+
+func MapcopySilentComposite(m map[string]item, k string) struct{ it item } {
+	v := m[k]
+	v.n++
+	return struct{ it item }{it: v}
+}
+
+func MapcopySilentAddr(m map[string]item, k string) *item {
+	v := m[k]
+	v.n++
+	return &v
+}
+
+func MapcopySilentHeld(m map[string]item, k string) {
+	v := m[k]
+	v.n++
+	held := []item{v}
+	_ = held
 }
 
 func useItem(v item) {}
