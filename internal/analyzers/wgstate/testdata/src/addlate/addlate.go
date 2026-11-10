@@ -75,73 +75,6 @@ func addlateSilentMutexGate() {
 	mu.Unlock()
 	wg.Wait()
 }
-func addlateSilentWrongGate() {
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	other := make(chan struct{})
-	go func() {
-		<-other
-		defer wg.Done()
-		work()
-	}()
-	wg.Add(1)
-	close(start)
-	wg.Wait()
-}
-func addlateSilentCloseBefore() {
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	go func() {
-		<-start
-		defer wg.Done()
-		work()
-	}()
-	close(start)
-	wg.Add(1)
-	wg.Wait()
-}
-func addlateSilentRLockGate() {
-	var wg sync.WaitGroup
-	var mu sync.RWMutex
-	go func() {
-		mu.RLock()
-		defer wg.Done()
-		mu.RUnlock()
-		work()
-	}()
-	mu.RLock()
-	wg.Add(1)
-	mu.RUnlock()
-	wg.Wait()
-}
-func addlateSilentLockAfter() {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	go func() {
-		mu.Lock()
-		defer wg.Done()
-		mu.Unlock()
-		work()
-	}()
-	wg.Add(1)
-	mu.Lock()
-	mu.Unlock()
-	wg.Wait()
-}
-func addlateSilentBranchGate(ok bool) {
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	go func() {
-		if ok {
-			<-start
-		}
-		defer wg.Done()
-		work()
-	}()
-	wg.Add(1)
-	close(start)
-	wg.Wait()
-}
 func addlateSilentDeferredGate() {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
@@ -182,5 +115,52 @@ func addlateSilentSelectGate() {
 	}()
 	wg.Add(1)
 	close(start)
+	wg.Wait()
+}
+func addlateSilentRangeRecv() {
+	var wg sync.WaitGroup
+	start := make(chan int)
+	go func() {
+		defer wg.Done()
+		for range start {
+			work()
+		}
+	}()
+	wg.Add(1)
+	close(start)
+	wg.Wait()
+}
+func addlateSilentWaitGroupGate() {
+	var wg sync.WaitGroup
+	var ready sync.WaitGroup
+	ready.Add(1)
+	go func() {
+		ready.Wait()
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	ready.Done()
+	wg.Wait()
+}
+func addlateSilentCondGate() {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	ready := false
+	cond := sync.NewCond(&mu)
+	go func() {
+		defer wg.Done()
+		mu.Lock()
+		for !ready {
+			cond.Wait()
+		}
+		mu.Unlock()
+		work()
+	}()
+	wg.Add(1)
+	mu.Lock()
+	ready = true
+	mu.Unlock()
+	cond.Broadcast()
 	wg.Wait()
 }

@@ -17,7 +17,7 @@ import (
 
 var addlateAnalyzer = &analysis.Analyzer{
 	Name:     "addlate",
-	Doc:      "report a WaitGroup Add that runs after the counted goroutine has started; a goroutine that waits on a channel or a mutex is not reported",
+	Doc:      "report a WaitGroup Add that runs after the counted goroutine has started; a goroutine that receives from a channel or waits on a mutex, a WaitGroup, or a Cond is not reported, because that wait can order the Add",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runAddlate,
 }
@@ -94,7 +94,7 @@ func nodeWaits(pass *analysis.Pass, n ast.Node) bool {
 	case *ast.RangeStmt:
 		return isChanRange(pass, n)
 	case *ast.CallExpr:
-		return isMutexWait(pass, n)
+		return isSyncWait(pass, n)
 	}
 	return false
 }
@@ -108,14 +108,13 @@ func isChanRange(pass *analysis.Pass, n *ast.RangeStmt) bool {
 	return ok
 }
 
-func isMutexWait(pass *analysis.Pass, call *ast.CallExpr) bool {
+func isSyncWait(pass *analysis.Pass, call *ast.CallExpr) bool {
 	fn := typeutil.StaticCallee(pass.TypesInfo, call)
 	if fn == nil {
 		return false
 	}
 	switch fn.FullName() {
-	case "(*sync.Mutex).Lock", "(*sync.RWMutex).Lock", "(*sync.Mutex).RLock", "(*sync.RWMutex).RLock",
-		"(sync.Mutex).Lock", "(sync.RWMutex).Lock", "(sync.Mutex).RLock", "(sync.RWMutex).RLock":
+	case "(*sync.Mutex).Lock", "(*sync.RWMutex).Lock", "(*sync.RWMutex).RLock", "(*sync.WaitGroup).Wait", "(*sync.Cond).Wait":
 		return true
 	}
 	return false
