@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 
@@ -13,13 +14,13 @@ import (
 func runRangeref(pass *analysis.Pass) (any, error) {
 	eachFunc(pass, func(fn ast.Node) {
 		findRanges(fn, func(rs *ast.RangeStmt) {
-			checkRangeref(pass, rs)
+			checkRangeref(pass, fn, rs)
 		})
 	})
 	return nil, nil
 }
 
-func checkRangeref(pass *analysis.Pass, rs *ast.RangeStmt) {
+func checkRangeref(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt) {
 	info := pass.TypesInfo
 	v, ok := rangeValue(info, rs)
 	if !ok || !rangeStructElem(info, rs) {
@@ -29,7 +30,7 @@ func checkRangeref(pass *analysis.Pass, rs *ast.RangeStmt) {
 		return
 	}
 	for _, u := range ampNodes(info, rs.Body, v) {
-		if escapesRange(info, rs, u) {
+		if escapesRange(pass, fn, rs, u) {
 			pass.Reportf(u.Pos(), "this is the address of the per-iteration copy %s, not of the slice element: index the slice and take the address of the element", v.Name())
 		}
 	}
@@ -113,17 +114,22 @@ func ampOf(info *types.Info, u *ast.UnaryExpr, v *types.Var) bool {
 	return ok && k.Root == v
 }
 
-func escapesRange(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) bool {
+func escapesRange(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, u *ast.UnaryExpr) bool {
+	info := pass.TypesInfo
 	if appendElemArg(info, rs.Body, u) {
 		return true
 	}
 	if sendValue(rs.Body, u) {
 		return true
 	}
-	if storedRangeAddr(info, rs, u) {
+	if storedMapAddr(info, rs, u) {
 		return true
 	}
-	return returnedAddr(rs.Body, u)
+	tk, ok := singleStoreTarget(info, rs, u)
+	if !ok {
+		return false
+	}
+	return writeThrough(info, fn, tk, u)
 }
 
 func appendElemArg(info *types.Info, body *ast.BlockStmt, u *ast.UnaryExpr) bool {
@@ -176,7 +182,7 @@ func sendValue(body *ast.BlockStmt, u *ast.UnaryExpr) bool {
 	return found
 }
 
-func storedRangeAddr(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) bool {
+func storedMapAddr(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) bool {
 	found := false
 	ast.Inspect(rs.Body, func(n ast.Node) bool {
 		if found {
@@ -189,59 +195,149 @@ func storedRangeAddr(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) bool
 		if !ok {
 			return true
 		}
-		found = storesAddr(info, rs, st, u)
+		found = storesMap(info, st, u)
 		return !found
 	})
 	return found
 }
 
-func storesAddr(info *types.Info, rs *ast.RangeStmt, st *ast.AssignStmt, u *ast.UnaryExpr) bool {
+func storesMap(info *types.Info, st *ast.AssignStmt, u *ast.UnaryExpr) bool {
 	for i, rhs := range st.Rhs {
 		if ast.Unparen(rhs) != u {
 			continue
 		}
 		if len(st.Lhs) == len(st.Rhs) {
-			if storesOne(info, rs, st.Lhs[i]) {
+			if isMapStore(info, st.Lhs[i]) {
 				return true
 			}
 			continue
 		}
-		if storesTarget(info, rs, st.Lhs) {
-			return true
+		for _, l := range st.Lhs {
+			if isMapStore(info, l) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func storesTarget(info *types.Info, rs *ast.RangeStmt, lhs []ast.Expr) bool {
-	for _, l := range lhs {
-		if storesOne(info, rs, l) {
-			return true
-		}
-	}
-	return false
-}
-
-func storesOne(info *types.Info, rs *ast.RangeStmt, l ast.Expr) bool {
-	if isFieldOrIndex(info, l) {
-		return true
-	}
-	if v, ok := identVar(info, l); ok && outsideRange(v, rs) {
-		return true
-	}
-	return false
-}
-
-func isFieldOrIndex(info *types.Info, e ast.Expr) bool {
-	switch n := ast.Unparen(e).(type) {
-	case *ast.SelectorExpr:
-		return true
+func isMapStore(info *types.Info, l ast.Expr) bool {
+	switch n := ast.Unparen(l).(type) {
 	case *ast.IndexExpr:
 		return isMapIndex(info, n.X)
 	case *ast.IndexListExpr:
 		return isMapIndex(info, n.X)
 	}
 	return false
+}
+
+func singleStoreTarget(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) (flow.Key, bool) {
+	var tk flow.Key
+	found := false
+	ast.Inspect(rs.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		st, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		k, ok := singleStore(info, rs, st, u)
+		if ok {
+			tk = k
+			found = true
+		}
+		return !found
+	})
+	return tk, found
+}
+
+func singleStore(info *types.Info, rs *ast.RangeStmt, st *ast.AssignStmt, u *ast.UnaryExpr) (flow.Key, bool) {
+	for i, rhs := range st.Rhs {
+		if ast.Unparen(rhs) != u {
+			continue
+		}
+		if len(st.Lhs) == len(st.Rhs) {
+			if k, ok := singleTarget(info, rs, st.Lhs[i]); ok {
+				return k, true
+			}
+			continue
+		}
+		for _, l := range st.Lhs {
+			if k, ok := singleTarget(info, rs, l); ok {
+				return k, true
+			}
+		}
+	}
+	return flow.Key{}, false
+}
+
+func singleTarget(info *types.Info, rs *ast.RangeStmt, l ast.Expr) (flow.Key, bool) {
+	if _, ok := ast.Unparen(l).(*ast.SelectorExpr); ok {
+		return flow.KeyOf(info, l)
+	}
+	if v, ok := identVar(info, l); ok && outsideRange(v, rs) {
+		return flow.KeyOf(info, l)
+	}
+	return flow.Key{}, false
+}
+
+func writeThrough(info *types.Info, fn ast.Node, tk flow.Key, u *ast.UnaryExpr) bool {
+	body := bodyOf(fn)
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		st, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range st.Lhs {
+			if matchesWrite(info, lhs, tk, u) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func matchesWrite(info *types.Info, lhs ast.Expr, tk flow.Key, u *ast.UnaryExpr) bool {
+	if lhs.Pos() <= u.End() {
+		return false
+	}
+	if _, ok := ast.Unparen(lhs).(*ast.StarExpr); ok {
+		wk, ok := flow.KeyOf(info, lhs)
+		return ok && wk.Root == tk.Root && pathMatches(tk.Path, wk.Path)
+	}
+	wk, ok := flow.KeyOf(info, lhs)
+	if !ok || wk.Root != tk.Root {
+		return false
+	}
+	if wk.Path == tk.Path {
+		return false
+	}
+	return pathMatches(tk.Path, wk.Path)
+}
+
+func pathMatches(store, write string) bool {
+	if store == "" {
+		return true
+	}
+	if write == store {
+		return true
+	}
+	return strings.HasPrefix(write, store+".")
 }
 
 func isMapIndex(info *types.Info, x ast.Expr) bool {
@@ -255,27 +351,4 @@ func isMapIndex(info *types.Info, x ast.Expr) bool {
 
 func outsideRange(v *types.Var, rs *ast.RangeStmt) bool {
 	return v.Pos() < rs.Pos() || v.Pos() >= rs.End()
-}
-
-func returnedAddr(body *ast.BlockStmt, u *ast.UnaryExpr) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		st, ok := n.(*ast.ReturnStmt)
-		if !ok {
-			return true
-		}
-		for _, r := range st.Results {
-			if ast.Unparen(r) == u {
-				found = true
-			}
-		}
-		return !found
-	})
-	return found
 }

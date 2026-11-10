@@ -40,6 +40,7 @@ func RangerefReportedStoreField() {
 	for _, v := range items {
 		hold.p = &v // want `this is the address of the per-iteration copy v, not of the slice element`
 	}
+	hold.p.n = 0
 	_ = hold
 }
 
@@ -58,14 +59,38 @@ func RangerefReportedStoreOutside() *item {
 	for _, v := range items {
 		out = &v // want `this is the address of the per-iteration copy v, not of the slice element`
 	}
+	out.n = 0
 	return out
 }
 
-func RangerefReportedReturn() *item {
+func RangerefSilentReturnAtOnce() *item {
 	items := []item{{n: 1}, {n: 2}}
 	for _, v := range items {
 		if v.n > 0 {
-			return &v // want `this is the address of the per-iteration copy v, not of the slice element`
+			return &v
+		}
+	}
+	return nil
+}
+
+func RangerefSilentStoreBreak() *item {
+	items := []item{{n: 1}, {n: 2}}
+	var out *item
+	for _, v := range items {
+		if v.n > 0 {
+			out = &v
+			break
+		}
+	}
+	return out
+}
+
+func RangerefSilentNestedOuter(items []item, valid func(item) bool) *item {
+	for _, v := range items {
+		for range v.n {
+			if valid(v) {
+				return &v
+			}
 		}
 	}
 	return nil
