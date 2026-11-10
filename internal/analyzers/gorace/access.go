@@ -2,12 +2,13 @@ package gorace
 
 import (
 	"go/ast"
+	"go/token"
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/flow"
-	"github.com/gosuda/gglint/internal/inspection"
 )
 
 type varAccess struct {
@@ -15,20 +16,22 @@ type varAccess struct {
 	stmt  ast.Stmt
 	write bool
 	index bool
+	del   bool
+	rng   bool
+	isMap bool
 }
 
 type mapScope struct {
-	pass   *analysis.Pass
+	*guardScope
 	graph  *flow.Graph
-	fn     *ast.FuncDecl
+	fn     ast.Node
 	parent []varAccess
 	lits   map[*ast.FuncLit][]varAccess
 }
-
 type sharedScope struct {
-	pass   *analysis.Pass
+	*guardScope
 	graph  *flow.Graph
-	fn     *ast.FuncDecl
+	fn     ast.Node
 	parent []varAccess
 }
 
@@ -66,17 +69,17 @@ func appendAssignWrites(info *types.Info, n *ast.AssignStmt, out []varAccess) []
 func appendLHSWrite(info *types.Info, lhs ast.Expr, stmt ast.Stmt, out []varAccess) []varAccess {
 	if idx, ok := ast.Unparen(lhs).(*ast.IndexExpr); ok {
 		if k, ok := flow.KeyOf(info, idx.X); ok {
-			out = append(out, varAccess{key: k, stmt: stmt, write: true, index: true})
+			out = append(out, varAccess{key: k, stmt: stmt, write: true, index: true, isMap: isMapType(info.TypeOf(idx.X))})
 		}
 		return out
 	}
 	if id, ok := ast.Unparen(lhs).(*ast.Ident); ok {
 		if v, ok := info.Defs[id].(*types.Var); ok {
-			return append(out, varAccess{key: flow.Key{Root: v}, stmt: stmt, write: true})
+			return append(out, varAccess{key: flow.Key{Root: v}, stmt: stmt, write: true, isMap: isMapType(v.Type())})
 		}
 	}
 	if k, ok := flow.KeyOf(info, lhs); ok {
-		out = append(out, varAccess{key: k, stmt: stmt, write: true})
+		out = append(out, varAccess{key: k, stmt: stmt, write: true, isMap: isMapType(info.TypeOf(lhs))})
 	}
 	return out
 }
@@ -84,12 +87,12 @@ func appendLHSWrite(info *types.Info, lhs ast.Expr, stmt ast.Stmt, out []varAcce
 func appendIncWrites(info *types.Info, n *ast.IncDecStmt, stmt ast.Stmt, out []varAccess) []varAccess {
 	if idx, ok := ast.Unparen(n.X).(*ast.IndexExpr); ok {
 		if k, ok := flow.KeyOf(info, idx.X); ok {
-			out = append(out, varAccess{key: k, stmt: stmt, write: true, index: true})
+			out = append(out, varAccess{key: k, stmt: stmt, write: true, index: true, isMap: isMapType(info.TypeOf(idx.X))})
 		}
 		return out
 	}
 	if k, ok := flow.KeyOf(info, n.X); ok {
-		out = append(out, varAccess{key: k, stmt: stmt, write: true})
+		out = append(out, varAccess{key: k, stmt: stmt, write: true, isMap: isMapType(info.TypeOf(n.X))})
 	}
 	return out
 }
@@ -100,7 +103,7 @@ func appendDeleteWrite(info *types.Info, n *ast.CallExpr, stmt ast.Stmt, out []v
 		return out
 	}
 	if k, ok := flow.KeyOf(info, n.Args[0]); ok {
-		out = append(out, varAccess{key: k, stmt: stmt, write: true})
+		out = append(out, varAccess{key: k, stmt: stmt, write: true, del: true, isMap: true})
 	}
 	return out
 }
@@ -126,17 +129,18 @@ func readsInStmt(info *types.Info, stmt ast.Stmt, writes []varAccess) []varAcces
 	return out
 }
 
-func appendReadNode(info *types.Info, n ast.Node, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) (bool, bool) {
+func appendReadNode(info *types.Info, n ast.Node, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) (handled, descend bool) {
 	if _, ok := n.(*ast.FuncLit); ok {
 		return true, false
 	}
 	if call, ok := n.(*ast.CallExpr); ok && isLenCall(info, call) {
 		return true, false
 	}
-	if sel, ok := n.(*ast.SelectorExpr); ok && info.Selections[sel] != nil {
-		if k, ok := flow.KeyOf(info, sel); ok && !skip[k] {
-			*out = append(*out, varAccess{key: k, stmt: stmt})
-		}
+	if idx, ok := n.(*ast.IndexExpr); ok {
+		appendIndexRead(info, idx, stmt, skip, out)
+		return true, false
+	}
+	if appendSelectorRead(info, n, stmt, skip, out) {
 		return true, false
 	}
 	if id, ok := n.(*ast.Ident); ok {
@@ -145,12 +149,32 @@ func appendReadNode(info *types.Info, n ast.Node, stmt ast.Stmt, skip map[flow.K
 	return false, true
 }
 
+func appendIndexRead(info *types.Info, idx *ast.IndexExpr, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) {
+	k, ok := flow.KeyOf(info, idx.X)
+	if !ok || skip[k] {
+		return
+	}
+	*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(info.TypeOf(idx.X))})
+}
+
+func appendSelectorRead(info *types.Info, n ast.Node, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) bool {
+	sel, ok := n.(*ast.SelectorExpr)
+	if !ok || info.Selections[sel] == nil {
+		return false
+	}
+	k, ok := flow.KeyOf(info, sel)
+	if ok && !skip[k] {
+		*out = append(*out, varAccess{key: k, stmt: stmt, isMap: isMapType(info.TypeOf(sel))})
+	}
+	return true
+}
+
 func appendIdentRead(info *types.Info, id *ast.Ident, stmt ast.Stmt, skip map[flow.Key]bool, out *[]varAccess) {
 	v, ok := info.Uses[id].(*types.Var)
 	if !ok || id.Name == "_" || skip[flow.Key{Root: v}] {
 		return
 	}
-	*out = append(*out, varAccess{key: flow.Key{Root: v}, stmt: stmt})
+	*out = append(*out, varAccess{key: flow.Key{Root: v}, stmt: stmt, isMap: isMapType(v.Type())})
 }
 
 func isLenCall(info *types.Info, call *ast.CallExpr) bool {
@@ -166,14 +190,26 @@ func stmtAccesses(info *types.Info, stmt ast.Stmt) []varAccess {
 	return append(w, readsInStmt(info, stmt, w)...)
 }
 
-func collectParent(info *types.Info, fn *ast.FuncDecl, sites map[ast.Node]bool) []varAccess {
+func collectParent(info *types.Info, fn ast.Node, sites map[ast.Node]bool) []varAccess {
 	var out []varAccess
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
+	body := bodyOf(fn)
+	if body == nil {
+		return nil
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		if gs, ok := n.(*ast.GoStmt); ok {
-			_ = gs
+			if !sites[gs] {
+				out = append(out, callAccesses(info, gs, gs.Call)...)
+			}
+			return false
+		}
+		if ds, ok := n.(*ast.DeferStmt); ok {
+			if !sites[ds.Call] {
+				out = append(out, callAccesses(info, ds, ds.Call)...)
+			}
 			return false
 		}
 		out = appendParentNode(info, n, sites, out)
@@ -183,19 +219,60 @@ func collectParent(info *types.Info, fn *ast.FuncDecl, sites map[ast.Node]bool) 
 }
 
 func appendParentNode(info *types.Info, n ast.Node, sites map[ast.Node]bool, out []varAccess) []varAccess {
-	switch n := n.(type) {
-	case *ast.AssignStmt, *ast.IncDecStmt, *ast.ReturnStmt:
-		return append(out, stmtAccesses(info, n.(ast.Stmt))...)
-	case *ast.ExprStmt:
-		return appendParentExpr(info, n, sites, out)
-	case *ast.IfStmt:
-		return append(out, condAccesses(info, n, n.Cond)...)
-	case *ast.ForStmt:
-		return append(out, condAccesses(info, n, n.Cond)...)
-	case *ast.RangeStmt:
-		return append(out, condAccesses(info, n, n.X)...)
+	if next, ok := appendParentLeaf(info, n, sites, out); ok {
+		return next
+	}
+	if next, ok := appendHeaderReads(info, n, out); ok {
+		return next
 	}
 	return out
+}
+
+func appendHeaderReads(info *types.Info, n ast.Node, out []varAccess) ([]varAccess, bool) {
+	switch n := n.(type) {
+	case *ast.IfStmt:
+		return append(out, condAccesses(info, n, n.Cond)...), true
+	case *ast.ForStmt:
+		return append(out, condAccesses(info, n, n.Cond)...), true
+	case *ast.RangeStmt:
+		out = appendRangeReads(info, n, out)
+		return append(out, rangeWrites(info, n)...), true
+	case *ast.SwitchStmt:
+		return append(out, exprReads(info, n, n.Tag)...), true
+	case *ast.TypeSwitchStmt:
+		return append(out, exprReads(info, n, n.Assign)...), true
+	case *ast.CaseClause:
+		return appendCaseReads(info, n, out), true
+	}
+	return out, false
+}
+
+func appendRangeReads(info *types.Info, n *ast.RangeStmt, out []varAccess) []varAccess {
+	reads := condAccesses(info, n, n.X)
+	if isMapType(info.TypeOf(n.X)) {
+		for i := range reads {
+			reads[i].rng = true
+		}
+	}
+	return append(out, reads...)
+}
+
+func appendParentLeaf(info *types.Info, n ast.Node, sites map[ast.Node]bool, out []varAccess) ([]varAccess, bool) {
+	switch n := n.(type) {
+	case *ast.AssignStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.IncDecStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.ReturnStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.ExprStmt:
+		return appendParentExpr(info, n, sites, out), true
+	case *ast.DeclStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.SendStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	}
+	return out, false
 }
 
 func appendParentExpr(info *types.Info, n *ast.ExprStmt, sites map[ast.Node]bool, out []varAccess) []varAccess {
@@ -220,25 +297,87 @@ func condAccesses(info *types.Info, stmt ast.Stmt, e ast.Expr) []varAccess {
 	return out
 }
 
-func appendCondNode(info *types.Info, n ast.Node, stmt ast.Stmt, out *[]varAccess) (bool, bool) {
+func appendCondNode(info *types.Info, n ast.Node, stmt ast.Stmt, out *[]varAccess) (handled, descend bool) {
 	if _, ok := n.(*ast.FuncLit); ok {
 		return true, false
 	}
 	if call, ok := n.(*ast.CallExpr); ok && isLenCall(info, call) {
 		return true, false
 	}
-	if sel, ok := n.(*ast.SelectorExpr); ok && info.Selections[sel] != nil {
-		if k, ok := flow.KeyOf(info, sel); ok {
-			*out = append(*out, varAccess{key: k, stmt: stmt})
+	if idx, ok := n.(*ast.IndexExpr); ok {
+		if k, ok := flow.KeyOf(info, idx.X); ok {
+			*out = append(*out, varAccess{key: k, stmt: stmt, index: true, isMap: isMapType(info.TypeOf(idx.X))})
 		}
 		return true, false
 	}
+	if sel, ok := n.(*ast.SelectorExpr); ok && info.Selections[sel] != nil {
+		appendCondSelector(info, sel, stmt, out)
+		return true, false
+	}
 	if id, ok := n.(*ast.Ident); ok {
-		if v, ok := info.Uses[id].(*types.Var); ok && id.Name != "_" {
-			*out = append(*out, varAccess{key: flow.Key{Root: v}, stmt: stmt})
-		}
+		appendCondIdent(info, id, stmt, out)
 	}
 	return false, true
+}
+
+func appendCondSelector(info *types.Info, sel *ast.SelectorExpr, stmt ast.Stmt, out *[]varAccess) {
+	if k, ok := flow.KeyOf(info, sel); ok {
+		*out = append(*out, varAccess{key: k, stmt: stmt})
+	}
+}
+
+func appendCondIdent(info *types.Info, id *ast.Ident, stmt ast.Stmt, out *[]varAccess) {
+	if v, ok := info.Uses[id].(*types.Var); ok && id.Name != "_" {
+		*out = append(*out, varAccess{key: flow.Key{Root: v}, stmt: stmt})
+	}
+}
+
+func appendCaseReads(info *types.Info, c *ast.CaseClause, out []varAccess) []varAccess {
+	for _, e := range c.List {
+		out = append(out, condAccesses(info, c, e)...)
+	}
+	return out
+}
+
+func exprReads(info *types.Info, stmt ast.Stmt, e ast.Node) []varAccess {
+	var out []varAccess
+	if e == nil {
+		return out
+	}
+	ast.Inspect(e, func(n ast.Node) bool {
+		handled, descend := appendCondNode(info, n, stmt, &out)
+		if handled {
+			return descend
+		}
+		return true
+	})
+	return out
+}
+
+func callAccesses(info *types.Info, stmt ast.Stmt, call *ast.CallExpr) []varAccess {
+	out := exprReads(info, stmt, call.Fun)
+	for _, a := range call.Args {
+		out = append(out, exprReads(info, stmt, a)...)
+	}
+	return out
+}
+
+func rangeWrites(info *types.Info, n *ast.RangeStmt) []varAccess {
+	var out []varAccess
+	if n.Tok != token.ASSIGN {
+		return out
+	}
+	if n.Key != nil {
+		if k, ok := flow.KeyOf(info, n.Key); ok {
+			out = append(out, varAccess{key: k, stmt: n, write: true})
+		}
+	}
+	if n.Value != nil {
+		if k, ok := flow.KeyOf(info, n.Value); ok {
+			out = append(out, varAccess{key: k, stmt: n, write: true})
+		}
+	}
+	return out
 }
 
 func collectLit(info *types.Info, lit *ast.FuncLit) []varAccess {
@@ -254,23 +393,49 @@ func collectLit(info *types.Info, lit *ast.FuncLit) []varAccess {
 }
 
 func appendLitNode(info *types.Info, n ast.Node, out []varAccess) []varAccess {
+	if next, ok := appendLitLeaf(info, n, out); ok {
+		return next
+	}
+	if next, ok := appendHeaderReads(info, n, out); ok {
+		return next
+	}
 	switch n := n.(type) {
-	case *ast.AssignStmt, *ast.IncDecStmt, *ast.ExprStmt, *ast.ReturnStmt:
-		return append(out, stmtAccesses(info, n.(ast.Stmt))...)
+	case *ast.GoStmt:
+		return append(out, callAccesses(info, n, n.Call)...)
+	case *ast.DeferStmt:
+		return append(out, callAccesses(info, n, n.Call)...)
 	}
 	return out
 }
 
+func appendLitLeaf(info *types.Info, n ast.Node, out []varAccess) ([]varAccess, bool) {
+	switch n := n.(type) {
+	case *ast.AssignStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.IncDecStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.ExprStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.ReturnStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.DeclStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	case *ast.SendStmt:
+		return append(out, stmtAccesses(info, n)...), true
+	}
+	return out, false
+}
+
 func runMap(pass *analysis.Pass) (any, error) {
-	for _, cur := range funcDecls(pass) {
-		checkMap(pass, inspection.As[*ast.FuncDecl](cur.Node()))
+	for _, fn := range funcBodies(pass) {
+		checkMap(pass, fn)
 	}
 	return nil, nil
 }
 
-func checkMap(pass *analysis.Pass, fn *ast.FuncDecl) {
+func checkMap(pass *analysis.Pass, fn ast.Node) {
 	info := pass.TypesInfo
-	if passesMutex(info, fn) {
+	if passesMutex(info, fn) || bodyOf(fn) == nil {
 		return
 	}
 	g := flow.NewGraph(pass, fn)
@@ -282,7 +447,7 @@ func checkMap(pass *analysis.Pass, fn *ast.FuncDecl) {
 	for _, s := range spawns {
 		sites[s.Site] = true
 	}
-	scope := &mapScope{pass: pass, graph: g, fn: fn, parent: collectParent(info, fn, sites), lits: map[*ast.FuncLit][]varAccess{}}
+	scope := &mapScope{guardScope: newGuardScope(pass, fn), graph: g, fn: fn, parent: collectParent(info, fn, sites), lits: map[*ast.FuncLit][]varAccess{}}
 	for _, s := range spawns {
 		if s.Body != nil {
 			scope.lits[s.Body] = collectLit(info, s.Body)
@@ -297,85 +462,104 @@ func checkMap(pass *analysis.Pass, fn *ast.FuncDecl) {
 }
 
 func (m *mapScope) checkSpawn(s flow.Spawn) {
+	if passesMutex(m.pass.TypesInfo, s.Body) {
+		return
+	}
 	for _, a := range m.lits[s.Body] {
-		if !mapReportable(m.pass, s, a) || mapGuarded(m.pass, s, a) {
-			continue
-		}
-		if s.InLoop || m.hasOther(s, a.key) {
-			m.pass.Reportf(s.Site.Pos(), "%s is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex", keyText(a.key))
+		if m.reportableMapWrite(s, a) {
+			m.pass.Reportf(s.Site.Pos(), "%s is a map written by this goroutine and accessed concurrently, which crashes the process: guard every access with one mutex", keyText(m.pass, a.key))
 			return
 		}
 	}
 }
 
-func mapGuarded(pass *analysis.Pass, s flow.Spawn, a varAccess) bool {
-	return passesMutex(pass.TypesInfo, s.Body) || len(heldOutside(pass, s.Body, a.stmt)) > 0
-}
-
-func mapReportable(pass *analysis.Pass, s flow.Spawn, a varAccess) bool {
-	if !a.write {
+func (m *mapScope) reportableMapWrite(s flow.Spawn, a varAccess) bool {
+	if !mapReportable(s, a) {
 		return false
 	}
-	v, ok := a.key.Root.(*types.Var)
-	if !ok || !outsideLit(v, s.Body) || isSyncType(v.Type()) || !isMapType(v.Type()) {
+	outside := declaredOutsideLoop(m.pass.TypesInfo, m.fn, a.key.Root, s.Site)
+	if !outside && !m.parentMapOp(a) {
 		return false
 	}
-	return true
+	litOpen := len(m.litHeld(s.Body, a.stmt)) == 0
+	return (outside && s.InLoop && litOpen) || m.hasOther(s, a)
 }
 
-func (m *mapScope) hasOther(s flow.Spawn, k flow.Key) bool {
+func (m *mapScope) parentMapOp(a varAccess) bool {
 	for _, p := range m.parent {
-		if m.parentConflicts(s, k, p) {
+		if p.key == a.key && (p.index || p.del || p.rng) {
 			return true
-		}
-	}
-	return m.otherSpawnWrites(s, k)
-}
-
-func (m *mapScope) parentConflicts(s flow.Spawn, k flow.Key, p varAccess) bool {
-	if p.key != k || !m.graph.Reaches(s.Site, p.stmt, nil) || flow.Joined(m.pass, m.graph, s, p.stmt) {
-		return false
-	}
-	return !commonKey(heldOutside(m.pass, s.Body, writeStmtFor(m.lits[s.Body], k)), parentHeld(m.pass, m.graph, p.stmt))
-}
-
-func (m *mapScope) otherSpawnWrites(s flow.Spawn, k flow.Key) bool {
-	for _, o := range flow.Spawns(m.pass, m.fn) {
-		if o.Body == nil || o.Body == s.Body {
-			continue
-		}
-		for _, a := range m.lits[o.Body] {
-			if a.key == k {
-				return true
-			}
 		}
 	}
 	return false
 }
 
-func writeStmtFor(acc []varAccess, k flow.Key) ast.Node {
-	for _, a := range acc {
-		if a.key == k {
-			return a.stmt
+func mapReportable(s flow.Spawn, a varAccess) bool {
+	if !a.write || !a.isMap || (!a.index && !a.del) {
+		return false
+	}
+	v, ok := a.key.Root.(*types.Var)
+	if !ok || !outsideLit(v, s.Body) {
+		return false
+	}
+	return true
+}
+
+func (m *mapScope) hasOther(s flow.Spawn, a varAccess) bool {
+	for _, p := range m.parent {
+		if m.parentConflicts(s, a, p) {
+			return true
 		}
 	}
-	return nil
+	return m.otherSpawnWrites(s, a)
+}
+
+func (m *mapScope) parentConflicts(s flow.Spawn, a, p varAccess) bool {
+	if p.key != a.key || !m.graph.Reaches(s.Site, p.stmt, nil) || flow.Joined(m.pass, m.graph, s, p.stmt) {
+		return false
+	}
+	return !commonKey(m.litHeld(s.Body, a.stmt), m.parentHeld(p.stmt))
+}
+
+func (m *mapScope) otherSpawnWrites(s flow.Spawn, a varAccess) bool {
+	for _, o := range flow.Spawns(m.pass, m.fn) {
+		if o.Body == nil || o.Body == s.Body || passesMutex(m.pass.TypesInfo, o.Body) {
+			continue
+		}
+		if m.otherLitConflicts(s, a, o) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *mapScope) otherLitConflicts(s flow.Spawn, a varAccess, o flow.Spawn) bool {
+	lit, ok := m.lits[o.Body]
+	if !ok {
+		lit = collectLit(m.pass.TypesInfo, o.Body)
+	}
+	for _, b := range lit {
+		if b.key == a.key && !commonKey(m.litHeld(s.Body, a.stmt), m.litHeld(o.Body, b.stmt)) {
+			return true
+		}
+	}
+	return false
 }
 
 func runFanout(pass *analysis.Pass) (any, error) {
-	for _, cur := range funcDecls(pass) {
-		checkFanout(pass, inspection.As[*ast.FuncDecl](cur.Node()))
+	for _, fn := range funcBodies(pass) {
+		checkFanout(pass, fn)
 	}
 	return nil, nil
 }
 
-func checkFanout(pass *analysis.Pass, fn *ast.FuncDecl) {
+func checkFanout(pass *analysis.Pass, fn ast.Node) {
 	info := pass.TypesInfo
-	if passesMutex(info, fn) {
+	if passesMutex(info, fn) || bodyOf(fn) == nil {
 		return
 	}
 	for _, s := range flow.Spawns(pass, fn) {
-		if !s.InLoop || s.Body == nil || passesMutex(info, s.Body) {
+		if !s.InLoop || s.Body == nil || passesMutex(info, s.Body) || exitsListAfter(fn, s.Site) {
 			continue
 		}
 		for _, a := range collectLit(info, s.Body) {
@@ -384,44 +568,41 @@ func checkFanout(pass *analysis.Pass, fn *ast.FuncDecl) {
 	}
 }
 
-func reportFanoutWrite(pass *analysis.Pass, fn *ast.FuncDecl, s flow.Spawn, a varAccess) {
+func reportFanoutWrite(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAccess) {
 	if !fanoutReportable(pass, fn, s, a) {
 		return
 	}
-	pass.Reportf(a.stmt.Pos(), "%s is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex", keyText(a.key))
+	pass.Reportf(a.stmt.Pos(), "%s is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex", keyText(pass, a.key))
 }
 
-func fanoutReportable(pass *analysis.Pass, fn *ast.FuncDecl, s flow.Spawn, a varAccess) bool {
+func fanoutReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAccess) bool {
 	if !a.write || a.index {
 		return false
 	}
 	v, ok := a.key.Root.(*types.Var)
-	if !ok || !outsideLit(v, s.Body) || isSyncType(v.Type()) || isMapType(v.Type()) || !declaredOutsideLoop(fn, v, s.Site) {
+	if !ok {
 		return false
 	}
-	if !flow.IsLocal(pass.TypesInfo, fn, v) && !isPackageVar(pass, v) {
+	return fanoutVarReportable(pass, fn, s, v, a)
+}
+
+func fanoutVarReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, v *types.Var, a varAccess) bool {
+	if !outsideLit(v, s.Body) || isSyncType(v.Type()) || !declaredOutsideLoop(pass.TypesInfo, fn, v, s.Site) {
 		return false
 	}
 	return len(heldOutside(pass, s.Body, a.stmt)) == 0
 }
 
-func isPackageVar(pass *analysis.Pass, v *types.Var) bool {
-	if pass.Pkg == nil || pass.Pkg.Scope() == nil {
-		return false
-	}
-	return pass.Pkg.Scope().Lookup(v.Name()) == v
-}
-
 func runShared(pass *analysis.Pass) (any, error) {
-	for _, cur := range funcDecls(pass) {
-		checkShared(pass, inspection.As[*ast.FuncDecl](cur.Node()))
+	for _, fn := range funcBodies(pass) {
+		checkShared(pass, fn)
 	}
 	return nil, nil
 }
 
-func checkShared(pass *analysis.Pass, fn *ast.FuncDecl) {
+func checkShared(pass *analysis.Pass, fn ast.Node) {
 	info := pass.TypesInfo
-	if passesMutex(info, fn) {
+	if passesMutex(info, fn) || bodyOf(fn) == nil {
 		return
 	}
 	g := flow.NewGraph(pass, fn)
@@ -433,7 +614,7 @@ func checkShared(pass *analysis.Pass, fn *ast.FuncDecl) {
 	for _, s := range spawns {
 		sites[s.Site] = true
 	}
-	scope := &sharedScope{pass: pass, graph: g, fn: fn, parent: collectParent(info, fn, sites)}
+	scope := &sharedScope{guardScope: newGuardScope(pass, fn), graph: g, fn: fn, parent: collectParent(info, fn, sites)}
 	for _, s := range spawns {
 		if s.InLoop || s.Body == nil {
 			continue
@@ -451,12 +632,12 @@ func (m *sharedScope) checkSpawn(s flow.Spawn) {
 	}
 }
 
-func sharedKeys(pass *analysis.Pass, fn *ast.FuncDecl, s flow.Spawn, lit []varAccess) []flow.Key {
+func sharedKeys(pass *analysis.Pass, fn ast.Node, s flow.Spawn, lit []varAccess) []flow.Key {
 	seen := map[flow.Key]bool{}
 	var order []flow.Key
 	for _, a := range lit {
 		v, ok := a.key.Root.(*types.Var)
-		if !ok || !outsideLit(v, s.Body) || isSyncType(v.Type()) || isMapType(v.Type()) || !flow.IsLocal(pass.TypesInfo, fn, v) {
+		if !ok || !outsideLit(v, s.Body) || isSyncType(v.Type()) || a.isMap || !flow.IsLocal(pass.TypesInfo, fn, v) {
 			continue
 		}
 		if !seen[a.key] {
@@ -468,46 +649,72 @@ func sharedKeys(pass *analysis.Pass, fn *ast.FuncDecl, s flow.Spawn, lit []varAc
 }
 
 func (m *sharedScope) conflict(s flow.Spawn, k flow.Key, lit []varAccess) bool {
-	first := earliestParent(m.graph, s, k, litHasWrite(lit, k), m.parent)
-	if first == nil || flow.Joined(m.pass, m.graph, s, first.stmt) || passesMutex(m.pass.TypesInfo, s.Body) {
+	if passesMutex(m.pass.TypesInfo, s.Body) {
 		return false
 	}
-	if stmt := writeStmtFor(lit, k); stmt != nil && commonKey(heldOutside(m.pass, s.Body, stmt), parentHeld(m.pass, m.graph, first.stmt)) {
-		return false
-	}
-	line := m.pass.Fset.Position(first.stmt.Pos()).Line
-	m.pass.Reportf(s.Site.Pos(), "%s is %s by this goroutine and %s at line %d before the goroutine is joined: pass it as an argument, or wait for the goroutine first", keyText(k), litWord(litHasWrite(lit, k)), parentWord(first.write), line)
-	return true
-}
-
-func earliestParent(g *flow.Graph, s flow.Spawn, k flow.Key, litWrite bool, parent []varAccess) *varAccess {
-	var first *varAccess
-	for i := range parent {
-		p := parent[i]
-		if p.key != k {
-			continue
-		}
-		if !litWrite && !p.write {
-			continue
-		}
-		if !g.Reaches(s.Site, p.stmt, nil) {
-			continue
-		}
-		if first == nil || p.stmt.Pos() < first.stmt.Pos() {
-			cp := p
-			first = &cp
-		}
-	}
-	return first
-}
-
-func litHasWrite(lit []varAccess, k flow.Key) bool {
 	for _, a := range lit {
-		if a.key == k && a.write {
+		if a.key != k {
+			continue
+		}
+		for _, p := range m.parent {
+			if m.pairVoid(s, a, p) {
+				continue
+			}
+			line := m.pass.Fset.Position(p.stmt.Pos()).Line
+			m.pass.Reportf(s.Site.Pos(), "%s is %s by this goroutine and %s at line %d before the goroutine is joined: pass it as an argument, or wait for the goroutine first", keyText(m.pass, k), litWord(a.write), parentWord(p.write), line)
 			return true
 		}
 	}
 	return false
+}
+
+func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess) bool {
+	if p.key != a.key {
+		return true
+	}
+	if !a.write && !p.write {
+		return true
+	}
+	if !m.graph.Reaches(s.Site, p.stmt, nil) {
+		return true
+	}
+	if flow.Joined(m.pass, m.graph, s, p.stmt) {
+		return true
+	}
+	if m.bubbleJoined(s, p.stmt) {
+		return true
+	}
+	return commonKey(m.litHeld(s.Body, a.stmt), m.parentHeld(p.stmt))
+}
+
+func (m *sharedScope) bubbleJoined(s flow.Spawn, at ast.Node) bool {
+	if s.Body == nil || bodyParks(s.Body) {
+		return false
+	}
+	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool { return isSynctestWait(m.pass.TypesInfo, n) })
+}
+
+func isSynctestWait(info *types.Info, n ast.Node) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		fn := typeutil.StaticCallee(info, call)
+		if fn != nil && fn.FullName() == "testing/synctest.Wait" {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func litWord(written bool) string {

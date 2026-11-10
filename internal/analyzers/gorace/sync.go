@@ -9,17 +9,20 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/flow"
-	"github.com/gosuda/gglint/internal/inspection"
 )
 
 func runDoublecheck(pass *analysis.Pass) (any, error) {
-	for _, cur := range funcDecls(pass) {
-		checkDoublecheck(pass, inspection.As[*ast.FuncDecl](cur.Node()))
+	for _, fn := range funcBodies(pass) {
+		checkDoublecheck(pass, fn)
 	}
 	return nil, nil
 }
 
-func checkDoublecheck(pass *analysis.Pass, fn *ast.FuncDecl) {
+func checkDoublecheck(pass *analysis.Pass, fn ast.Node) {
+	body := bodyOf(fn)
+	if body == nil {
+		return
+	}
 	if passesMutex(pass.TypesInfo, fn) {
 		return
 	}
@@ -28,8 +31,8 @@ func checkDoublecheck(pass *analysis.Pass, fn *ast.FuncDecl) {
 		return
 	}
 	held := flow.HeldAt(pass, g)
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if lit, ok := n.(*ast.FuncLit); ok && lit.Body != fn.Body {
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		if outer, ok := n.(*ast.IfStmt); ok {
@@ -41,7 +44,7 @@ func checkDoublecheck(pass *analysis.Pass, fn *ast.FuncDecl) {
 
 func reportDoublecheck(pass *analysis.Pass, held func(ast.Node) []flow.Key, outer *ast.IfStmt) {
 	v, ok := nilKey(pass.TypesInfo, outer.Cond)
-	if !ok || !doublecheckVar(pass, v) {
+	if !ok || !doublecheckVar(v, varType(pass.TypesInfo, outer.Cond)) {
 		return
 	}
 	if !innerAssign(pass.TypesInfo, outer.Body, v) {
@@ -51,25 +54,61 @@ func reportDoublecheck(pass *analysis.Pass, held func(ast.Node) []flow.Key, oute
 	if !ok || hasKey(held(outer), k) {
 		return
 	}
-	pass.Reportf(outer.Cond.Pos(), "%s is read outside the lock and assigned inside it, so a reader can see a half-built value: read it under the lock, or use sync.Once", keyText(v))
+	pass.Reportf(outer.Cond.Pos(), "%s is read outside the lock and assigned inside it, so a reader can see a half-built value: read it under the lock, or use sync.Once", keyText(pass, v))
 }
 
-func doublecheckVar(pass *analysis.Pass, v flow.Key) bool {
+func doublecheckVar(v flow.Key, typ types.Type) bool {
 	if v.Root == nil {
 		return false
 	}
-	if root, ok := v.Root.(*types.Var); ok && isSyncType(root.Type()) {
+	if isAtomicType(typ) {
 		return false
 	}
 	if v.Path != "" {
 		return true
 	}
-	return isPackageVar(pass, mustVar(v))
+	if vv, ok := v.Root.(*types.Var); ok && vv.Pkg() != nil && vv.Pkg().Scope() != nil {
+		return vv.Pkg().Scope().Lookup(vv.Name()) == vv
+	}
+	return false
 }
 
-func mustVar(k flow.Key) *types.Var {
-	v, _ := k.Root.(*types.Var)
-	return v
+func varType(info *types.Info, cond ast.Expr) types.Type {
+	bin, ok := ast.Unparen(cond).(*ast.BinaryExpr)
+	if !ok || bin.Op != token.EQL {
+		return nil
+	}
+	if isNilExpr(info, bin.X) {
+		if tv, ok := info.Types[ast.Unparen(bin.Y)]; ok {
+			return tv.Type
+		}
+		return nil
+	}
+	if isNilExpr(info, bin.Y) {
+		if tv, ok := info.Types[ast.Unparen(bin.X)]; ok {
+			return tv.Type
+		}
+		return nil
+	}
+	return nil
+}
+
+func isAtomicType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	for {
+		p, ok := t.(*types.Pointer)
+		if !ok {
+			break
+		}
+		t = p.Elem()
+	}
+	n, ok := t.(*types.Named)
+	if !ok || n.Obj() == nil || n.Obj().Pkg() == nil {
+		return false
+	}
+	return n.Obj().Pkg().Path() == "sync/atomic"
 }
 
 func hasKey(keys []flow.Key, k flow.Key) bool {
@@ -104,6 +143,9 @@ func isNilExpr(info *types.Info, e ast.Expr) bool {
 }
 
 func innerAssign(info *types.Info, body *ast.BlockStmt, v flow.Key) bool {
+	if body == nil {
+		return false
+	}
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
@@ -127,6 +169,9 @@ func innerAssign(info *types.Info, body *ast.BlockStmt, v flow.Key) bool {
 }
 
 func assignsPlain(info *types.Info, body *ast.BlockStmt, v flow.Key) bool {
+	if body == nil {
+		return false
+	}
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
@@ -149,7 +194,11 @@ func assignsPlain(info *types.Info, body *ast.BlockStmt, v flow.Key) bool {
 	})
 	return found
 }
+
 func lockInBody(info *types.Info, body *ast.BlockStmt) (flow.Key, bool) {
+	if body == nil {
+		return flow.Key{}, false
+	}
 	var out flow.Key
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -182,8 +231,8 @@ func lockName(info *types.Info, call *ast.CallExpr) string {
 }
 
 func runSubtest(pass *analysis.Pass) (any, error) {
-	for _, cur := range funcDecls(pass) {
-		checkSubtest(pass, inspection.As[*ast.FuncDecl](cur.Node()))
+	for _, fn := range funcBodies(pass) {
+		checkSubtest(pass, fn)
 	}
 	return nil, nil
 }
@@ -195,20 +244,30 @@ type subtestRun struct {
 	acc      []varAccess
 }
 
-func checkSubtest(pass *analysis.Pass, fn *ast.FuncDecl) {
+func checkSubtest(pass *analysis.Pass, fn ast.Node) {
 	for _, b := range blocksOf(fn) {
 		checkSubtestBlock(pass, b)
 	}
 }
 
-func blocksOf(fn *ast.FuncDecl) []*ast.BlockStmt {
+func blocksOf(fn ast.Node) []*ast.BlockStmt {
+	body := bodyOf(fn)
+	if body == nil {
+		return nil
+	}
 	var out []*ast.BlockStmt
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
+	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		if b, ok := n.(*ast.BlockStmt); ok {
 			out = append(out, b)
+		}
+		if c, ok := n.(*ast.CaseClause); ok {
+			out = append(out, &ast.BlockStmt{List: c.Body})
+		}
+		if c, ok := n.(*ast.CommClause); ok {
+			out = append(out, &ast.BlockStmt{List: c.Body})
 		}
 		return true
 	})
@@ -225,7 +284,7 @@ func checkSubtestBlock(pass *analysis.Pass, b *ast.BlockStmt) {
 	for i := 1; i < len(runs); i++ {
 		for j := range i {
 			if k, ok := sharedSubtestVar(runs[i], runs[j]); ok {
-				pass.Reportf(runs[i].call.Pos(), "parallel subtests write %s without ordering, so the test result depends on scheduling: give each subtest its own variable", keyText(k))
+				pass.Reportf(runs[i].call.Pos(), "parallel subtests write %s without ordering, so the test result depends on scheduling: give each subtest its own variable", keyText(pass, k))
 				break
 			}
 		}
@@ -233,11 +292,7 @@ func checkSubtestBlock(pass *analysis.Pass, b *ast.BlockStmt) {
 }
 
 func subtestStmt(info *types.Info, stmt ast.Stmt) (subtestRun, bool) {
-	expr, ok := stmt.(*ast.ExprStmt)
-	if !ok {
-		return subtestRun{}, false
-	}
-	call, ok := ast.Unparen(expr.X).(*ast.CallExpr)
+	call, ok := findSubtestCall(info, stmt)
 	if !ok || !isTRun(info, call) {
 		return subtestRun{}, false
 	}
@@ -250,6 +305,26 @@ func subtestStmt(info *types.Info, stmt ast.Stmt) (subtestRun, bool) {
 		return subtestRun{}, false
 	}
 	return subtestRun{call: call, lit: lit, parallel: pos, acc: accAfter(info, lit, pos)}, true
+}
+
+func findSubtestCall(info *types.Info, stmt ast.Stmt) (*ast.CallExpr, bool) {
+	switch s := stmt.(type) {
+	case *ast.ExprStmt:
+		c, ok := ast.Unparen(s.X).(*ast.CallExpr)
+		if !ok {
+			return nil, false
+		}
+		return c, true
+	case *ast.AssignStmt:
+		for _, e := range s.Rhs {
+			if c, ok := ast.Unparen(e).(*ast.CallExpr); ok && isTRun(info, c) {
+				return c, true
+			}
+		}
+		return nil, false
+	default:
+		return nil, false
+	}
 }
 
 func isTRun(info *types.Info, call *ast.CallExpr) bool {
@@ -265,6 +340,9 @@ func isTRun(info *types.Info, call *ast.CallExpr) bool {
 }
 
 func parallelPos(info *types.Info, lit *ast.FuncLit) (token.Pos, bool) {
+	if lit == nil || lit.Body == nil {
+		return token.NoPos, false
+	}
 	var pos token.Pos
 	found := false
 	ast.Inspect(lit.Body, func(n ast.Node) bool {
@@ -304,19 +382,43 @@ func accAfter(info *types.Info, lit *ast.FuncLit, pos token.Pos) []varAccess {
 }
 
 func sharedSubtestVar(a, b subtestRun) (flow.Key, bool) {
-	for _, w := range a.acc {
-		if !w.write || w.index {
+	if k, ok := matchSubtestDir(a, b); ok {
+		return k, true
+	}
+	return matchSubtestDir(b, a)
+}
+
+func matchSubtestDir(writes, reads subtestRun) (flow.Key, bool) {
+	for _, w := range writes.acc {
+		if !subtestWriteOutside(w, writes, reads) {
 			continue
 		}
-		v, ok := w.key.Root.(types.Object)
-		if !ok || !outsideLit(v, a.lit) || !outsideLit(v, b.lit) {
-			continue
-		}
-		for _, r := range b.acc {
-			if r.key == w.key {
-				return w.key, true
-			}
+		if k, ok := matchSubtestRead(w, reads.acc); ok {
+			return k, true
 		}
 	}
 	return flow.Key{}, false
+}
+
+func subtestWriteOutside(w varAccess, writes, reads subtestRun) bool {
+	if !w.write || w.index {
+		return false
+	}
+	return outsideLit(w.key.Root, writes.lit) && outsideLit(w.key.Root, reads.lit)
+}
+
+func matchSubtestRead(w varAccess, reads []varAccess) (flow.Key, bool) {
+	for _, r := range reads {
+		if subtestKeysOverlap(w.key, r.key) {
+			return w.key, true
+		}
+	}
+	return flow.Key{}, false
+}
+
+func subtestKeysOverlap(w, r flow.Key) bool {
+	if r.Root != w.Root || r.Root == nil {
+		return false
+	}
+	return r.Path == w.Path || r.Path == "" || w.Path == ""
 }

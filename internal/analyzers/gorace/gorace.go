@@ -8,10 +8,8 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/ctrlflow"
 	"golang.org/x/tools/go/analysis/passes/inspect"
-	"golang.org/x/tools/go/ast/inspector"
 
 	"github.com/gosuda/gglint/internal/flow"
-	"github.com/gosuda/gglint/internal/inspection"
 )
 
 var mapAnalyzer = &analysis.Analyzer{
@@ -54,22 +52,19 @@ func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{mapAnalyzer, fanoutAnalyzer, sharedAnalyzer, doublecheckAnalyzer, subtestAnalyzer}
 }
 
-func funcDecls(pass *analysis.Pass) []inspector.Cursor {
-	var out []inspector.Cursor
-	for cur := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil)) {
-		out = append(out, cur)
-	}
-	return out
-}
-
-func keyText(k flow.Key) string {
+func keyText(pass *analysis.Pass, k flow.Key) string {
 	if k.Root == nil {
 		return ""
 	}
-	if k.Path == "" {
-		return k.Root.Name()
+	base := k.Root.Name()
+	if k.Path != "" {
+		base += k.Path
 	}
-	return k.Root.Name() + k.Path
+	v, ok := k.Root.(*types.Var)
+	if !ok || v.Pkg() == nil || pass.Pkg == nil || v.Pkg() == pass.Pkg {
+		return base
+	}
+	return v.Pkg().Name() + "." + base
 }
 
 func deref(t types.Type) types.Type {
@@ -141,19 +136,26 @@ func passesMutex(info *types.Info, fn ast.Node) bool {
 		if !ok {
 			return true
 		}
-		for _, a := range call.Args {
-			k, ok := flow.KeyOf(info, a)
-			if !ok {
-				continue
-			}
-			if v, ok := k.Root.(*types.Var); ok && isMutexVar(v) {
-				found = true
-				return false
-			}
+		if callPassesMutex(info, call) {
+			found = true
+			return false
 		}
 		return true
 	})
 	return found
+}
+
+func callPassesMutex(info *types.Info, call *ast.CallExpr) bool {
+	for _, a := range call.Args {
+		k, ok := flow.KeyOf(info, a)
+		if !ok {
+			continue
+		}
+		if v, ok := k.Root.(*types.Var); ok && isMutexVar(v) {
+			return true
+		}
+	}
+	return false
 }
 
 func isMutexLock(full string) bool {
@@ -164,12 +166,12 @@ func heldOutside(pass *analysis.Pass, lit *ast.FuncLit, stmt ast.Node) []flow.Ke
 	if lit == nil || stmt == nil {
 		return nil
 	}
-	g := flow.NewGraph(pass, lit)
-	if g == nil {
-		return nil
-	}
+	return rootedKeys(newHolder(pass, lit).at(stmt), lit)
+}
+
+func rootedKeys(keys []flow.Key, lit *ast.FuncLit) []flow.Key {
 	var out []flow.Key
-	for _, k := range flow.HeldAt(pass, g)(stmt) {
+	for _, k := range keys {
 		if v, ok := k.Root.(*types.Var); ok && outsideLit(v, lit) {
 			out = append(out, k)
 		}
@@ -177,11 +179,34 @@ func heldOutside(pass *analysis.Pass, lit *ast.FuncLit, stmt ast.Node) []flow.Ke
 	return out
 }
 
-func parentHeld(pass *analysis.Pass, g *flow.Graph, stmt ast.Node) []flow.Key {
-	if g == nil || stmt == nil {
+type guardScope struct {
+	pass     *analysis.Pass
+	fn       ast.Node
+	parents  *holder
+	litLocks map[*ast.FuncLit]*holder
+}
+
+func newGuardScope(pass *analysis.Pass, fn ast.Node) *guardScope {
+	return &guardScope{pass: pass, fn: fn, parents: newHolder(pass, fn), litLocks: map[*ast.FuncLit]*holder{}}
+}
+
+func (g *guardScope) parentHeld(stmt ast.Node) []flow.Key {
+	if stmt == nil {
 		return nil
 	}
-	return flow.HeldAt(pass, g)(stmt)
+	return g.parents.at(stmt)
+}
+
+func (g *guardScope) litHeld(lit *ast.FuncLit, stmt ast.Node) []flow.Key {
+	if lit == nil || stmt == nil {
+		return nil
+	}
+	h, ok := g.litLocks[lit]
+	if !ok {
+		h = newHolder(g.pass, lit)
+		g.litLocks[lit] = h
+	}
+	return rootedKeys(h.at(stmt), lit)
 }
 
 func commonKey(a, b []flow.Key) bool {
@@ -195,28 +220,189 @@ func commonKey(a, b []flow.Key) bool {
 	return false
 }
 
-func declaredOutsideLoop(fn *ast.FuncDecl, v types.Object, site ast.Node) bool {
-	loops := []*ast.BlockStmt{}
-	ast.Inspect(fn, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.FuncLit:
-			return false
-		case *ast.ForStmt:
-			if n.Body != nil {
-				loops = append(loops, n.Body)
+func funcBodies(pass *analysis.Pass) []ast.Node {
+	var decls []ast.Node
+	var lits []*ast.FuncLit
+	for _, f := range pass.Files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.FuncDecl:
+				decls = append(decls, n)
+			case *ast.FuncLit:
+				lits = append(lits, n)
 			}
-		case *ast.RangeStmt:
-			if n.Body != nil {
-				loops = append(loops, n.Body)
+			return true
+		})
+	}
+	out := make([]ast.Node, 0, len(decls)+len(lits))
+	out = append(out, decls...)
+	for _, lit := range lits {
+		out = append(out, lit)
+	}
+	return out
+}
+
+func bodyOf(fn ast.Node) *ast.BlockStmt {
+	switch n := fn.(type) {
+	case *ast.FuncDecl:
+		return n.Body
+	case *ast.FuncLit:
+		return n.Body
+	}
+	return nil
+}
+
+func declaredOutsideLoop(info *types.Info, fn ast.Node, v types.Object, site ast.Node) bool {
+	loop, body := innermostLoop(fn, site.Pos())
+	if body == nil || loop == nil {
+		return true
+	}
+	if v.Pos() >= body.Pos() && v.Pos() < body.End() {
+		return false
+	}
+	return !headerDefines(info, loop, body, v)
+}
+
+func innermostLoop(fn ast.Node, pos token.Pos) (ast.Node, *ast.BlockStmt) {
+	var bestLoop ast.Node
+	var bestBody *ast.BlockStmt
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok && n != fn {
+			return false
+		}
+		body := loopBodyOf(n)
+		if !bodyContains(body, pos) {
+			return true
+		}
+		if bestBody == nil || body.End()-body.Pos() < bestBody.End()-bestBody.Pos() {
+			bestLoop = n
+			bestBody = body
+		}
+		return true
+	})
+	return bestLoop, bestBody
+}
+
+func loopBodyOf(n ast.Node) *ast.BlockStmt {
+	switch n := n.(type) {
+	case *ast.ForStmt:
+		return n.Body
+	case *ast.RangeStmt:
+		return n.Body
+	}
+	return nil
+}
+
+func bodyContains(body *ast.BlockStmt, pos token.Pos) bool {
+	return body != nil && pos >= body.Pos() && pos < body.End()
+}
+
+func exitsListAfter(fn, site ast.Node) bool {
+	for _, after := range stmtListAfter(fn, site) {
+		if isLoopExit(after) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtListAfter(fn, site ast.Node) []ast.Stmt {
+	var out []ast.Stmt
+	ast.Inspect(bodyOf(fn), func(n ast.Node) bool {
+		if out != nil {
+			return false
+		}
+		list := stmtListOf(n)
+		for i, stmt := range list {
+			if stmt == site {
+				out = list[i+1:]
+				return false
 			}
 		}
 		return true
 	})
-	for _, b := range loops {
-		inBody := func(p token.Pos) bool { return p >= b.Pos() && p < b.End() }
-		if inBody(v.Pos()) && inBody(site.Pos()) {
+	return out
+}
+
+func stmtListOf(n ast.Node) []ast.Stmt {
+	switch b := n.(type) {
+	case *ast.BlockStmt:
+		return b.List
+	case *ast.CaseClause:
+		return b.Body
+	case *ast.CommClause:
+		return b.Body
+	}
+	return nil
+}
+
+func isLoopExit(stmt ast.Stmt) bool {
+	switch s := stmt.(type) {
+	case *ast.BranchStmt:
+		return s.Tok == token.BREAK && s.Label == nil
+	case *ast.ReturnStmt:
+		return true
+	}
+	return false
+}
+
+func bodyParks(fn ast.Node) bool {
+	body := bodyOf(fn)
+	if body == nil {
+		return false
+	}
+	parks := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if parks {
 			return false
 		}
+		switch x := n.(type) {
+		case *ast.SendStmt:
+			parks = true
+			return false
+		case *ast.UnaryExpr:
+			if x.Op == token.ARROW {
+				parks = true
+				return false
+			}
+		case *ast.SelectStmt:
+			parks = true
+			return false
+		case *ast.CallExpr:
+			if parkedCall(x) {
+				parks = true
+				return false
+			}
+		}
+		return true
+	})
+	return parks
+}
+
+func parkedCall(call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+		return ok && id.Name == "Sleep"
 	}
-	return true
+	switch sel.Sel.Name {
+	case lockOpLock, lockOpRLock, "Wait", "Sleep", "Recv", "Accept":
+		return true
+	}
+	return false
+}
+
+func headerDefines(info *types.Info, loop ast.Node, body *ast.BlockStmt, v types.Object) bool {
+	found := false
+	ast.Inspect(loop, func(n ast.Node) bool {
+		if found || n == ast.Node(body) {
+			return false
+		}
+		if id, ok := n.(*ast.Ident); ok && info.Defs[id] == v {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }

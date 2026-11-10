@@ -1,6 +1,9 @@
 package fanout
 
-import "sync"
+import (
+	"flag"
+	"sync"
+)
 
 func fanoutReported() {
 	var out []int
@@ -68,4 +71,100 @@ func fanoutGuardedSilent() {
 		}()
 	}
 	_ = out
+}
+
+func fanoutNestedReported(rows [][]int) {
+	for _, row := range rows {
+		var sum int
+		for _, x := range row {
+			go func() {
+				sum += x // want `sum is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+			}()
+		}
+		_ = sum
+	}
+}
+
+func fanoutParamReported(n int, xs []int) {
+	for _, x := range xs {
+		go func() {
+			n += x // want `n is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+		}()
+	}
+}
+
+func fanoutMapVarReported(xs []int) {
+	var m map[int]int
+	for _, x := range xs {
+		go func() {
+			m = map[int]int{x: x} // want `m is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+		}()
+	}
+	_ = m
+}
+
+func fanoutRangeAssignReported(xs []int) {
+	var i int
+	for range xs {
+		go func() {
+			for i = range xs { // want `i is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+			}
+		}()
+		_ = i
+	}
+}
+
+func fanoutLoopVarSilent(xs []int) {
+	for i := range xs {
+		_ = i
+		go func() {
+			i = 0
+		}()
+	}
+}
+
+func fanoutFlagReported(xs []int) {
+	for range xs {
+		go func() {
+			flag.Usage = nil // want `flag.Usage is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+		}()
+	}
+}
+
+func fanoutNestedSpawnReported(xs []int) {
+	var out int
+	go func() {
+		for _, x := range xs {
+			go func() {
+				out = x // want `out is written by every goroutine this loop starts, so the writes race: collect results through a channel, or guard the write with a mutex`
+			}()
+		}
+	}()
+	_ = out
+}
+
+func fanoutOnceSilent(n *int, xs []int) {
+	for _, x := range xs {
+		go func() {
+			*n = x
+		}()
+		break
+	}
+}
+
+type fanoutLockerGroup struct{ L sync.Locker }
+
+func fanoutLockerSilent() {
+	id := 0
+	c := fanoutLockerGroup{L: &sync.Mutex{}}
+	xs := []int{1, 2, 3}
+	for _, x := range xs {
+		go func() {
+			c.L.Lock()
+			id++
+			c.L.Unlock()
+			_ = x
+		}()
+	}
+	_ = id
 }

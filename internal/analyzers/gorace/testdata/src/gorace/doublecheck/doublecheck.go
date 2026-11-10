@@ -1,6 +1,10 @@
 package doublecheck
 
-import "sync"
+import (
+	"flag"
+	"sync"
+	"sync/atomic"
+)
 
 type chkT struct{}
 
@@ -80,4 +84,30 @@ func doublecheckCallReported() *chkT {
 		chkMu.Unlock()
 	}
 	return chkInst
+}
+
+func doublecheckImportedReported() {
+	if flag.Usage == nil { // want `flag.Usage is read outside the lock and assigned inside it, so a reader can see a half-built value: read it under the lock, or use sync.Once`
+		chkMu.Lock()
+		if flag.Usage == nil {
+			flag.Usage = func() {}
+		}
+		chkMu.Unlock()
+	}
+}
+
+type atomicHolder struct {
+	mu sync.Mutex
+	n  *atomic.Int64
+}
+
+func (s *atomicHolder) doublecheckAtomicSilent() *atomic.Int64 {
+	if s.n == nil {
+		s.mu.Lock()
+		if s.n == nil {
+			s.n = new(atomic.Int64)
+		}
+		s.mu.Unlock()
+	}
+	return s.n
 }

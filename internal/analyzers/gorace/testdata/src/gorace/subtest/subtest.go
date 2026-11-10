@@ -52,3 +52,60 @@ func subtestDiffSilent(t *testing.T) {
 	})
 	_, _ = a, b
 }
+
+func subtestCaseReported(t *testing.T, n int) {
+	var got int
+	switch n {
+	case 1:
+		t.Run("a", func(t *testing.T) {
+			t.Parallel()
+			got = 1
+		})
+		t.Run("b", func(t *testing.T) { // want `parallel subtests write got without ordering, so the test result depends on scheduling: give each subtest its own variable`
+			t.Parallel()
+			got = 2
+		})
+	}
+	_ = got
+}
+
+func subtestFieldReported(t *testing.T) {
+	var st struct{ n int }
+	t.Run("a", func(t *testing.T) {
+		t.Parallel()
+		st.n = 1
+	})
+	t.Run("b", func(t *testing.T) { // want `parallel subtests write st.n without ordering, so the test result depends on scheduling: give each subtest its own variable`
+		t.Parallel()
+		_ = st
+	})
+	_ = st
+}
+
+func subtestAssignedReported(t *testing.T) {
+	var got int
+	ok := t.Run("a", func(t *testing.T) {
+		t.Parallel()
+		got = 1
+	})
+	t.Run("b", func(t *testing.T) { // want `parallel subtests write got without ordering, so the test result depends on scheduling: give each subtest its own variable`
+		t.Parallel()
+		got = 2
+	})
+	_, _ = got, ok
+}
+
+func TestSubtestNested(t *testing.T) {
+	t.Run("outer", func(t *testing.T) {
+		var got int
+		t.Run("a", func(t *testing.T) {
+			t.Parallel()
+			got = 1
+		})
+		t.Run("b", func(t *testing.T) { // want `parallel subtests write got without ordering, so the test result depends on scheduling: give each subtest its own variable`
+			t.Parallel()
+			got = 2
+		})
+		_ = got
+	})
+}

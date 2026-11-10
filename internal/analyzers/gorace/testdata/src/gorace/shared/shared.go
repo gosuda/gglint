@@ -2,6 +2,7 @@ package shared
 
 import (
 	"sync"
+	"testing/synctest"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -68,8 +69,8 @@ func sharedGuardedSilent() {
 	}()
 	mu.Lock()
 	s = 2
+	println(s)
 	mu.Unlock()
-	_ = s
 }
 
 func sharedCondSilent() {
@@ -117,4 +118,100 @@ func sharedWgSilent(wg *sync.WaitGroup) {
 	}(wg, s)
 	wg.Wait()
 	_ = s
+}
+
+func sharedEarliestJoinedReported(c bool) {
+	s := "a"
+	done := make(chan struct{})
+	go func() { // want `s is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		defer close(done)
+		println(s)
+	}()
+	if c {
+		<-done
+		s = "x"
+	}
+	s = "y"
+}
+
+func sharedUnguardedAfterReadReported() {
+	var mu sync.Mutex
+	s := 0
+	go func() { // want `s is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		mu.Lock()
+		_ = s
+		mu.Unlock()
+		s = 1
+	}()
+	mu.Lock()
+	println(s)
+	mu.Unlock()
+}
+
+func sharedReadThenGuardedReported() {
+	var mu sync.Mutex
+	s := 0
+	go func() { // want `s is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		_ = s
+		mu.Lock()
+		s = 1
+		mu.Unlock()
+	}()
+	mu.Lock()
+	s = 2
+	mu.Unlock()
+}
+
+func sharedSecondWriteReported() {
+	var mu sync.Mutex
+	s := 0
+	go func() { // want `s is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		mu.Lock()
+		s = 1
+		mu.Unlock()
+		s = 2
+	}()
+	mu.Lock()
+	println(s)
+	mu.Unlock()
+}
+
+func sharedCondReadReported() {
+	s := "a"
+	go func() { // want `s is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		if s == "a" {
+			println("x")
+		}
+	}()
+	s = "b"
+}
+
+func sharedCaseReadReported() {
+	s := "a"
+	go func() { // want `s is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		switch {
+		case s == "a":
+			println("x")
+		}
+	}()
+	s = "b"
+}
+
+type sharedReg struct{ m map[int]int }
+
+func sharedSynctestSilent() string {
+	s := "a"
+	go func() {
+		s = "b"
+	}()
+	synctest.Wait()
+	return s
+}
+
+func sharedFieldMapSilent() {
+	r := &sharedReg{m: map[int]int{}}
+	go func() {
+		r.m[1] = 1
+	}()
+	_ = r.m[2]
 }
