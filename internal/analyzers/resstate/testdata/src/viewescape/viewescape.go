@@ -499,3 +499,25 @@ func viewescapeReportedRangeDirectViewCall(sc *bufio.Scanner, sep []byte, lines 
 	}
 	return lines
 }
+
+func viewescapeReportedRangeAppendAlias(sc *bufio.Scanner, rows [][]byte, out [][]byte) [][]byte {
+	var b []byte
+	for sc.Scan() {
+		b = sc.Bytes()
+		for _, b = range append(rows, b) { // want "points into the buffer of"
+			out = append(out, b) // want "points into the buffer of"
+		}
+	}
+	return out
+}
+
+func viewescapeReportedRangeSplitSeq(sc *bufio.Scanner, sep []byte, out [][]byte) [][]byte {
+	var b []byte
+	for sc.Scan() {
+		b = sc.Bytes()
+		for b = range bytes.SplitSeq(b, sep) {
+			out = append(out, b) // want "points into the buffer of"
+		}
+	}
+	return out
+}

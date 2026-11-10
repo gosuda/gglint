@@ -503,31 +503,6 @@ type loopCtx struct {
 	cache *viewCache
 }
 
-type invalidKey struct {
-	recv   flow.Key
-	method string
-}
-
-type viewCache struct {
-	graph       *flow.Graph
-	graphDone   bool
-	invalid     map[invalidKey][]*ast.CallExpr
-	rangeSet    map[*ast.Ident]bool
-	rangeDone   bool
-	assignLists map[*types.Var][]*ast.AssignStmt
-	lhsSets     map[*types.Var]map[*ast.Ident]bool
-	discardSets map[*types.Var]map[*ast.Ident]bool
-}
-
-func newViewCache() *viewCache {
-	return &viewCache{
-		invalid:     map[invalidKey][]*ast.CallExpr{},
-		assignLists: map[*types.Var][]*ast.AssignStmt{},
-		lhsSets:     map[*types.Var]map[*ast.Ident]bool{},
-		discardSets: map[*types.Var]map[*ast.Ident]bool{},
-	}
-}
-
 func viewCachedGraph(pass *analysis.Pass, ctx loopCtx) *flow.Graph {
 	if ctx.cache == nil {
 		return flow.NewGraph(pass, ctx.fn)

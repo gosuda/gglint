@@ -11,6 +11,42 @@ import (
 	"github.com/gosuda/gglint/internal/flow"
 )
 
+type invalidKey struct {
+	recv   flow.Key
+	method string
+}
+
+type callInKey struct {
+	k *ast.CallExpr
+	v *types.Var
+}
+
+type viewCache struct {
+	graph       *flow.Graph
+	graphDone   bool
+	invalid     map[invalidKey][]*ast.CallExpr
+	rangeSet    map[*ast.Ident]bool
+	rangeDone   bool
+	assignLists map[*types.Var][]*ast.AssignStmt
+	lhsSets     map[*types.Var]map[*ast.Ident]bool
+	discardSets map[*types.Var]map[*ast.Ident]bool
+	callIn      map[callInKey]bool
+	hasReads    map[*types.Var]bool
+	readsDone   map[*types.Var]bool
+}
+
+func newViewCache() *viewCache {
+	return &viewCache{
+		invalid:     map[invalidKey][]*ast.CallExpr{},
+		assignLists: map[*types.Var][]*ast.AssignStmt{},
+		lhsSets:     map[*types.Var]map[*ast.Ident]bool{},
+		discardSets: map[*types.Var]map[*ast.Ident]bool{},
+		callIn:      map[callInKey]bool{},
+		hasReads:    map[*types.Var]bool{},
+		readsDone:   map[*types.Var]bool{},
+	}
+}
+
 func outerViewVar(pass *analysis.Pass, loop ast.Node, as *ast.AssignStmt, expr ast.Expr) (*types.Var, bool) {
 	if len(as.Rhs) == 1 {
 		if as.Rhs[0] != expr {
@@ -54,11 +90,14 @@ func outerAssignLive(pass *analysis.Pass, ctx loopCtx, sink *ast.AssignStmt, v *
 	if len(calls) == 0 {
 		return false
 	}
+	if !viewHasReads(pass, ctx, v) {
+		return false
+	}
 	avoid := func(n ast.Node) bool {
 		return viewAssignsFast(pass, ctx, n, v)
 	}
-	for _, k := range calls {
-		if viewCallInAssign(pass, ctx, k, v) {
+	for _, k := range nearestCalls(calls, sink.Pos()) {
+		if viewCachedCallInAssign(pass, ctx, k, v) {
 			continue
 		}
 		if !g.Reaches(sink, k, avoid) {
@@ -69,6 +108,123 @@ func outerAssignLive(pass *analysis.Pass, ctx loopCtx, sink *ast.AssignStmt, v *
 		}
 	}
 	return false
+}
+
+func viewCachedCallInAssign(pass *analysis.Pass, ctx loopCtx, k *ast.CallExpr, v *types.Var) bool {
+	if ctx.cache != nil {
+		if out, ok := ctx.cache.callIn[callInKey{k: k, v: v}]; ok {
+			return out
+		}
+	}
+	out := viewCallInAssign(pass, ctx, k, v)
+	if ctx.cache != nil {
+		ctx.cache.callIn[callInKey{k: k, v: v}] = out
+	}
+	return out
+}
+
+func viewHasReads(pass *analysis.Pass, ctx loopCtx, v *types.Var) bool {
+	if ctx.cache != nil && ctx.cache.readsDone[v] {
+		return ctx.cache.hasReads[v]
+	}
+	if hasReturnRead(pass, ctx, v) {
+		storeReads(ctx, v, true)
+		return true
+	}
+	out := hasIdentRead(pass, ctx, v)
+	storeReads(ctx, v, out)
+	return out
+}
+
+func storeReads(ctx loopCtx, v *types.Var, out bool) {
+	if ctx.cache == nil {
+		return
+	}
+	ctx.cache.readsDone[v] = true
+	ctx.cache.hasReads[v] = out
+}
+
+func hasReturnRead(pass *analysis.Pass, ctx loopCtx, v *types.Var) bool {
+	found := false
+	ast.Inspect(ctx.fn, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && lit != ctx.fn {
+			return false
+		}
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		found = returnReads(pass, ret, v, ctx.fn)
+		return !found
+	})
+	return found
+}
+
+func hasIdentRead(pass *analysis.Pass, ctx loopCtx, v *types.Var) bool {
+	skip := viewCachedLHS(pass, ctx, v)
+	discard := viewCachedDiscard(pass, ctx, v)
+	found := false
+	ast.Inspect(ctx.fn, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && lit != ctx.fn {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if isLiveUse(pass, id, v, skip, discard) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func isLiveUse(pass *analysis.Pass, id *ast.Ident, v *types.Var, skip, discard map[*ast.Ident]bool) bool {
+	return pass.TypesInfo.Uses[id] == v && !skip[id] && !discard[id]
+}
+
+func nearestCalls(calls []*ast.CallExpr, pos token.Pos) []*ast.CallExpr {
+	lo := 0
+	hi := len(calls)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if calls[mid].Pos() < pos {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	out := make([]*ast.CallExpr, 0, len(calls))
+	i := lo - 1
+	j := lo
+	for len(out) < len(calls) {
+		if i < 0 {
+			out = append(out, calls[j])
+			j++
+			continue
+		}
+		if j >= len(calls) {
+			out = append(out, calls[i])
+			i--
+			continue
+		}
+		if pos-calls[i].Pos() < calls[j].Pos()-pos {
+			out = append(out, calls[i])
+			i--
+		} else {
+			out = append(out, calls[j])
+			j++
+		}
+	}
+	return out
 }
 
 func invalidCalls(pass *analysis.Pass, fn ast.Node, recvKey flow.Key, viewMethod string) []*ast.CallExpr {
@@ -412,6 +568,12 @@ func aliasCall(pass *analysis.Pass, call *ast.CallExpr, s aliasScope) bool {
 	if aliasViewCall(pass, call, s) {
 		return true
 	}
+	if isAppendCall(pass, call) {
+		if call.Ellipsis.IsValid() {
+			return false
+		}
+		return aliasAnyArg(pass, appendElemArgs(call, nil), s)
+	}
 	if !isBytesAliasingCall(pass, call) {
 		return false
 	}
@@ -449,8 +611,10 @@ func isBytesAliasingCall(pass *analysis.Pass, call *ast.CallExpr) bool {
 
 var bytesAliasingFuncs = map[string]bool{
 	"Split": true, "SplitN": true, "SplitAfter": true, "SplitAfterN": true,
-	"Fields": true, "FieldsFunc": true,
-	"Trim": true, "TrimLeft": true, "TrimRight": true, "TrimSpace": true,
+	"SplitSeq": true, "SplitAfterSeq": true,
+	"Fields": true, "FieldsFunc": true, "FieldsSeq": true, "FieldsFuncSeq": true,
+	"Lines": true,
+	"Trim":  true, "TrimLeft": true, "TrimRight": true, "TrimSpace": true,
 	"TrimFunc": true, "TrimLeftFunc": true, "TrimRightFunc": true,
 	"TrimPrefix": true, "TrimSuffix": true,
 	"Cut": true, "CutPrefix": true, "CutSuffix": true, "CutLast": true,
