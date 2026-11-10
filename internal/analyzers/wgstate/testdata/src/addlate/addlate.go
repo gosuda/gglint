@@ -49,3 +49,54 @@ func addlateReportedDouble() {
 	wg.Add(2) // want "so Wait can return early"
 	wg.Wait()
 }
+func addlateSilentChanGate() {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	go func() {
+		<-start
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	close(start)
+	wg.Wait()
+}
+func addlateSilentMutexGate() {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	mu.Lock()
+	go func() {
+		mu.Lock()
+		defer wg.Done()
+		mu.Unlock()
+		work()
+	}()
+	wg.Add(1)
+	mu.Unlock()
+	wg.Wait()
+}
+func addlateReportedWrongGate() {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	other := make(chan struct{})
+	go func() {
+		<-other
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "so Wait can return early"
+	close(start)
+	wg.Wait()
+}
+func addlateReportedCloseBefore() {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	go func() {
+		<-start
+		defer wg.Done()
+		work()
+	}()
+	close(start)
+	wg.Add(1) // want "so Wait can return early"
+	wg.Wait()
+}
