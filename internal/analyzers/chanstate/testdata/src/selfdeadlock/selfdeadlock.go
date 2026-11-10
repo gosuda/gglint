@@ -84,3 +84,11 @@ func selfdeadlockSilentPtrStore() int {
 	ch <- 1
 	return <-ch
 }
+
+func selfdeadlockSilentDefineReuse(src chan int) int {
+	ch := make(chan int)
+	n, ch := 1, src
+	_ = n
+	ch <- 1
+	return <-ch
+}

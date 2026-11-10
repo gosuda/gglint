@@ -210,20 +210,23 @@ func reassigned(info *types.Info, fn ast.Node, k flow.Key) bool {
 	if body == nil {
 		return false
 	}
-	found := false
+	count := 0
 	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
+		if count > 1 {
 			return false
 		}
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		if a, ok := n.(*ast.AssignStmt); ok && a.Tok == token.ASSIGN && targets(info, a.Lhs, k) {
-			found = true
+		if a, ok := n.(*ast.AssignStmt); ok && targets(info, a.Lhs, k) {
+			count++
 		}
-		return !found
+		if vs, ok := n.(*ast.ValueSpec); ok && len(vs.Values) > 0 && targets(info, identExprs(vs.Names), k) {
+			count++
+		}
+		return count <= 1
 	})
-	return found
+	return count > 1
 }
 
 func madeCap(info *types.Info, fn ast.Node, k flow.Key) (int64, bool) {
