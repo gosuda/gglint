@@ -242,3 +242,18 @@ func donespinSilentNestedBlocking(ctx context.Context, ch chan int) {
 		}
 	}
 }
+
+func donespinSilentNestedCaseBody(ctx context.Context, ch, other chan int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			select {
+			case <-ch:
+				<-other
+			default:
+			}
+		}
+	}
+}

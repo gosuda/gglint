@@ -206,11 +206,13 @@ func cancelreturnedReportedComposite(parent context.Context) *holder {
 	return &holder{c: c}
 }
 
-func cancelreturnedReportedCompositeCall(parent context.Context) *holder {
+func cancelreturnedSilentCompositeCall(parent context.Context) *holder {
 	c, cancel := context.WithTimeout(parent, time.Second)
-	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	defer cancel()
+	_ = c
 	return &holder{c: mustCtx(c)}
 }
+
 type reproKey struct{}
 
 func cancelreturnedReportedDerivedCall(parent context.Context) context.Context {
@@ -232,4 +234,17 @@ func cancelreturnedSilentStructCall(parent context.Context) *holder {
 	defer cancel()
 	_ = c
 	return wrapHolder(&holder{c: c})
+}
+
+func cancelreturnedSilentWithoutCancel(parent context.Context) context.Context {
+	c, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	_ = c
+	return context.WithoutCancel(c)
+}
+
+func cancelreturnedReportedNestedValue(parent context.Context) *holder {
+	c, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	return &holder{c: context.WithValue(c, reproKey{}, 1)}
 }

@@ -169,7 +169,7 @@ func (w *blockWalk) walk(n ast.Node) {
 func (w *blockWalk) walkDefaultBody(sel *ast.SelectStmt) {
 	for _, st := range sel.Body.List {
 		cc, ok := st.(*ast.CommClause)
-		if !ok || cc.Comm != nil {
+		if !ok {
 			continue
 		}
 		for _, b := range cc.Body {
