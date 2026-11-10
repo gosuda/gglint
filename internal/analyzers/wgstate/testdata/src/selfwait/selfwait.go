@@ -23,3 +23,84 @@ func selfwaitSilentBalanced() {
 	wg.Done()
 	wg.Wait()
 }
+func selfwaitSilentGoDone() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go wg.Done()
+	wg.Wait()
+}
+func selfwaitReportedDeferDone() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	defer wg.Done()
+	wg.Wait() // want "no goroutine can call Done"
+}
+
+func selfwaitSilentMethodValue() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	done := wg.Done
+	done()
+	wg.Wait()
+}
+
+func selfwaitSilentMethodValueLiteral() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	h := struct{ done func() }{done: wg.Done}
+	go h.done()
+	wg.Wait()
+}
+type selfwaitJob struct {
+	wg sync.WaitGroup
+}
+
+func (j *selfwaitJob) finish() {
+	j.wg.Done()
+}
+
+func selfwaitSilentStructField() {
+	var j selfwaitJob
+	j.wg.Add(1)
+	j.finish()
+	j.wg.Wait()
+}
+
+func selfwaitSilentBranchDone(bad bool) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	if bad {
+		wg.Done()
+	} else {
+		wg.Done()
+	}
+	wg.Wait()
+}
+
+func selfwaitSilentNestedAdd(n int, c bool) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	if c {
+		wg.Add(n)
+	}
+	wg.Wait()
+}
+func selfwaitSilentHiddenDone(c bool) {
+	var wg sync.WaitGroup
+	if c {
+		wg.Done()
+	}
+	wg.Add(2)
+	wg.Done()
+	wg.Wait()
+}
+
+func selfwaitSilentHiddenAdd(c bool, n int) {
+	var wg sync.WaitGroup
+	if c {
+		wg.Add(n)
+	}
+	wg.Add(2)
+	wg.Done()
+	wg.Wait()
+}

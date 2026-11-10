@@ -30,3 +30,13 @@ func groupwaitSilentNested() error {
 	})
 	return g.Wait()
 }
+func groupwaitSilentGoWait() error {
+	var g errgroup.Group
+	g.Go(func() error {
+		go g.Wait()
+		return nil
+	})
+	return g.Wait()
+}
+
+func groupwaitNoBody() int

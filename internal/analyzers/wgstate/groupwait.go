@@ -26,7 +26,11 @@ func runGroupwait(pass *analysis.Pass) (any, error) {
 }
 
 func checkGroupwait(pass *analysis.Pass, fn ast.Node) {
-	ast.Inspect(funcBody(fn), func(n ast.Node) bool {
+	body := funcBody(fn)
+	if body == nil {
+		return
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -62,7 +66,8 @@ func checkGroupCall(pass *analysis.Pass, call *ast.CallExpr) {
 func findGroupWaits(pass *analysis.Pass, lit *ast.FuncLit, k flow.Key) {
 	info := pass.TypesInfo
 	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
+		switch n.(type) {
+		case *ast.FuncLit, *ast.GoStmt:
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
@@ -73,6 +78,7 @@ func findGroupWaits(pass *analysis.Pass, lit *ast.FuncLit, k flow.Key) {
 		return true
 	})
 }
+
 func isGroupWait(info *types.Info, call *ast.CallExpr, k flow.Key) bool {
 	fn := typeutil.StaticCallee(info, call)
 	if fn == nil || fn.FullName() != "(*golang.org/x/sync/errgroup.Group).Wait" {

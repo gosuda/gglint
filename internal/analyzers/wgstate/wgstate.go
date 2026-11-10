@@ -53,8 +53,18 @@ func eachList(fn ast.Node, visit func([]ast.Stmt)) {
 	})
 }
 
+func unwrap(s ast.Stmt) ast.Stmt {
+	for {
+		l, ok := s.(*ast.LabeledStmt)
+		if !ok {
+			return s
+		}
+		s = l.Stmt
+	}
+}
+
 func directCall(s ast.Stmt) (*ast.CallExpr, bool) {
-	e, ok := s.(*ast.ExprStmt)
+	e, ok := unwrap(s).(*ast.ExprStmt)
 	if !ok {
 		return nil, false
 	}

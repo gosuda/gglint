@@ -23,3 +23,16 @@ func addlateSilent() {
 	}()
 	wg.Wait()
 }
+func addlateReportedLabeled() {
+	var wg sync.WaitGroup
+	if false {
+		goto L
+	}
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+L:
+	wg.Add(1) // want "so Wait can return early"
+	wg.Wait()
+}

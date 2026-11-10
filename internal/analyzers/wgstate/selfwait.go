@@ -3,10 +3,12 @@ package wgstate
 import (
 	"go/ast"
 	"go/constant"
+	"go/token"
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/flow"
 )
@@ -55,19 +57,43 @@ func checkWait(pass *analysis.Pass, w waitSite) {
 	if !ok || !flow.IsLocal(pass.TypesInfo, w.fn, v) {
 		return
 	}
-	if flow.Escapes(pass.TypesInfo, w.fn, v) {
+	if isReachable(pass, w.fn, v) {
 		return
 	}
-	if mentionedInLit(pass, w.fn, v) {
+	if w.key.Path != "" && sharesRoot(pass.TypesInfo, w.fn, v) {
 		return
 	}
-	adds, done, ok := straightCounts(pass, w.fn, w.list, w.at, w.key)
+	adds, done, ok := straightCounts(pass, w.list, w.at, w.key)
 	if !ok {
 		return
 	}
-	if adds > done {
+	if shouldReport(pass.TypesInfo, w.fn, w.key, w.call.Pos(), adds, done) {
 		pass.Reportf(w.call.Pos(), "no goroutine can call Done on %s, so this Wait blocks forever: call Done for every Add, or start the goroutines before Wait", w.text)
 	}
+}
+
+func isReachable(pass *analysis.Pass, fn ast.Node, v *types.Var) bool {
+	info := pass.TypesInfo
+	if flow.Escapes(info, fn, v) {
+		return true
+	}
+	if mentionedInLit(pass, fn, v) {
+		return true
+	}
+	if hasMethodValue(info, fn, v) {
+		return true
+	}
+	return hasGoDeferMention(info, fn, v)
+}
+
+func shouldReport(info *types.Info, fn ast.Node, k flow.Key, waitPos token.Pos, adds, done int64) bool {
+	if adds <= done {
+		return false
+	}
+	if countDonesBefore(info, fn, k, waitPos) > done {
+		return false
+	}
+	return !hasNonConstAddBefore(info, fn, k, waitPos)
 }
 
 func mentionedInLit(pass *analysis.Pass, fn ast.Node, v *types.Var) bool {
@@ -110,14 +136,11 @@ func usesVar(info *types.Info, lit *ast.FuncLit, v *types.Var) bool {
 	return found
 }
 
-func straightCounts(pass *analysis.Pass, fn ast.Node, list []ast.Stmt, at int, k flow.Key) (int64, int64, bool) {
+func straightCounts(pass *analysis.Pass, list []ast.Stmt, at int, k flow.Key) (adds, done int64, ok bool) {
 	info := pass.TypesInfo
-	var adds int64
-	var done int64
-	wait := list[at]
-	for _, s := range list[:at] {
+	for i, s := range list[:at] {
 		call, ok := directCall(s)
-		if !ok || !flow.StraightLine(fn, s, wait) {
+		if !ok || hasControlBetween(list, i, at) {
 			continue
 		}
 		a, d, ok := countDelta(info, call, k)
@@ -130,7 +153,20 @@ func straightCounts(pass *analysis.Pass, fn ast.Node, list []ast.Stmt, at int, k
 	return adds, done, true
 }
 
-func countDelta(info *types.Info, call *ast.CallExpr, k flow.Key) (int64, int64, bool) {
+func hasControlBetween(list []ast.Stmt, from, to int) bool {
+	for _, s := range list[from+1 : to] {
+		if _, ok := s.(*ast.LabeledStmt); ok {
+			return true
+		}
+		switch unwrap(s).(type) {
+		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+			return true
+		}
+	}
+	return false
+}
+
+func countDelta(info *types.Info, call *ast.CallExpr, k flow.Key) (add, done int64, ok bool) {
 	if ak, _, ok := wgKey(info, call, "Add"); ok && ak == k {
 		n, ok := constInt(info, call)
 		if !ok {
@@ -157,4 +193,204 @@ func constInt(info *types.Info, call *ast.CallExpr) (int64, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+func rootIs(info *types.Info, e ast.Expr, v *types.Var) bool {
+	k, ok := flow.KeyOf(info, e)
+	return ok && k.Root == v
+}
+
+func isValueMethod(info *types.Info, e ast.Expr, v *types.Var) bool {
+	sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	s := info.Selections[sel]
+	if s == nil || s.Kind() != types.MethodVal {
+		return false
+	}
+	return rootIs(info, sel.X, v)
+}
+
+func hasMethodValue(info *types.Info, fn ast.Node, v *types.Var) bool {
+	body := funcBody(fn)
+	if body == nil {
+		return false
+	}
+	funs := map[*ast.SelectorExpr]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
+			funs[sel] = true
+		}
+		return true
+	})
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || funs[sel] {
+			return true
+		}
+		if isValueMethod(info, sel, v) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func callMentions(info *types.Info, call *ast.CallExpr, v *types.Var) bool {
+	found := false
+	ast.Inspect(call, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if info.Uses[id] == v || info.Defs[id] == v {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func hasGoDeferMention(info *types.Info, fn ast.Node, v *types.Var) bool {
+	body := funcBody(fn)
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit) != fn {
+			return false
+		}
+		if g, ok := n.(*ast.GoStmt); ok && callMentions(info, g.Call, v) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func sharesViaCall(info *types.Info, call *ast.CallExpr, v *types.Var) bool {
+	for _, a := range call.Args {
+		if rootIs(info, a, v) {
+			return true
+		}
+	}
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || !rootIs(info, sel.X, v) {
+		return false
+	}
+	fn := typeutil.StaticCallee(info, call)
+	if fn == nil {
+		return true
+	}
+	switch fn.FullName() {
+	case "(*sync.WaitGroup).Add", "(*sync.WaitGroup).Done", "(*sync.WaitGroup).Wait", "(*sync.WaitGroup).Go":
+		return false
+	}
+	return true
+}
+
+func notesSharing(info *types.Info, n ast.Node, v *types.Var) bool {
+	switch n := n.(type) {
+	case *ast.UnaryExpr:
+		return n.Op == token.AND && rootIs(info, n.X, v)
+	case *ast.CallExpr:
+		return sharesViaCall(info, n, v)
+	}
+	return false
+}
+
+func sharesRoot(info *types.Info, fn ast.Node, v *types.Var) bool {
+	body := funcBody(fn)
+	if body == nil {
+		return false
+	}
+	shared := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if shared {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit) != fn {
+			return false
+		}
+		if notesSharing(info, n, v) {
+			shared = true
+		}
+		return !shared
+	})
+	return shared
+}
+
+func countDonesBefore(info *types.Info, fn ast.Node, k flow.Key, waitPos token.Pos) int64 {
+	body := funcBody(fn)
+	if body == nil {
+		return 0
+	}
+	var total int64
+	ast.Inspect(body, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit) != fn {
+			return false
+		}
+		if _, ok := n.(*ast.DeferStmt); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || call.Pos() >= waitPos {
+			return true
+		}
+		if dk, _, ok := wgKey(info, call, "Done"); ok && dk == k {
+			total++
+		}
+		return true
+	})
+	return total
+}
+
+func isNonConstAdd(info *types.Info, call *ast.CallExpr, k flow.Key) bool {
+	ak, _, ok := wgKey(info, call, "Add")
+	if !ok || ak != k {
+		return false
+	}
+	_, ok = constInt(info, call)
+	return !ok
+}
+
+func hasNonConstAddBefore(info *types.Info, fn ast.Node, k flow.Key, waitPos token.Pos) bool {
+	body := funcBody(fn)
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit) != fn {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || call.Pos() >= waitPos {
+			return true
+		}
+		if isNonConstAdd(info, call, k) {
+			found = true
+		}
+		return !found
+	})
+	return found
 }

@@ -26,7 +26,7 @@ func runAddlate(pass *analysis.Pass) (any, error) {
 func checkAddlate(pass *analysis.Pass, fn ast.Node) {
 	eachList(fn, func(list []ast.Stmt) {
 		for i, s := range list {
-			g, ok := s.(*ast.GoStmt)
+			g, ok := unwrap(s).(*ast.GoStmt)
 			if !ok {
 				continue
 			}
