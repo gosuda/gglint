@@ -198,7 +198,7 @@ func cancelreturnedSilentWrappedResult(parent context.Context) error {
 	return workOf(c)
 }
 
-func mustCtx(ctx context.Context) context.Context { return ctx }
+func detachCtx(ctx context.Context) context.Context { return context.WithoutCancel(ctx) }
 
 func cancelreturnedReportedComposite(parent context.Context) *holder {
 	c, cancel := context.WithTimeout(parent, time.Second)
@@ -210,7 +210,7 @@ func cancelreturnedSilentCompositeCall(parent context.Context) *holder {
 	c, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel()
 	_ = c
-	return &holder{c: mustCtx(c)}
+	return &holder{c: detachCtx(c)}
 }
 
 type reproKey struct{}
@@ -227,13 +227,13 @@ func cancelreturnedReportedAddr(parent context.Context) *context.Context {
 	return &c
 }
 
-func wrapHolder(h *holder) *holder { return h }
+func wrapDetachedHolder(c context.Context) *holder { return &holder{c: context.WithoutCancel(c)} }
 
 func cancelreturnedSilentStructCall(parent context.Context) *holder {
 	c, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel()
 	_ = c
-	return wrapHolder(&holder{c: c})
+	return wrapDetachedHolder(c)
 }
 
 func cancelreturnedSilentWithoutCancel(parent context.Context) context.Context {

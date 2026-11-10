@@ -19,7 +19,6 @@ type otherDeps struct {
 
 func nocontextReported(ctx context.Context, db *sql.DB, tx *sql.Tx, client *http.Client) {
 	net.Dial("tcp", "x:80")                                  // want "net\\.Dial cannot be cancelled"
-	net.Listen("tcp", ":0")                                  // want "net\\.Listen cannot be cancelled"
 	http.Get("http://example.com")                           // want "http\\.Get cannot be cancelled"
 	http.Head("http://example.com")                          // want "http\\.Head cannot be cancelled"
 	http.Post("http://example.com", "text/plain", nil)       // want "http\\.Post cannot be cancelled"
@@ -77,4 +76,55 @@ func nocontextSilentOther(ctx context.Context, client *http.Client, db *sql.DB, 
 func CommandContext(ctx context.Context, name string) {
 	exec.Command(name)
 	useCtx(ctx)
+}
+
+func nocontextSilentBlankParam(_ context.Context) {
+	net.Dial("tcp", "x:80")
+}
+
+func nocontextSilentUnnamedParam(context.Context) {
+	net.Dial("tcp", "x:80")
+}
+
+func nocontextSilentLocalAfter() {
+	net.Dial("tcp", "x:80")
+	ctx := context.Background()
+	useCtx(ctx)
+}
+
+func nocontextReportedLocalCtx() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	net.Dial("tcp", "x:80") // want "net\\.Dial cannot be cancelled"
+	useCtx(ctx)
+}
+
+func nocontextSilentListen(ctx context.Context) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return
+	}
+	go func() { <-ctx.Done(); ln.Close() }()
+	useCtx(ctx)
+}
+
+func nocontextSilentNewRequestWithContext(ctx context.Context, url string) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return
+	}
+	_, _ = http.DefaultClient.Do(req.WithContext(ctx))
+}
+
+func doWithCtx(ctx context.Context, req *http.Request) error {
+	_, err := http.DefaultClient.Do(req.WithContext(ctx))
+	return err
+}
+
+func nocontextSilentNewRequestPassedWithContext(ctx context.Context, url string) error {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	return doWithCtx(ctx, req)
 }

@@ -18,7 +18,7 @@ const httpDoReplacement = "http.NewRequestWithContext and (*http.Client).Do"
 
 var nocontextAnalyzer = &analysis.Analyzer{
 	Name:     "nocontext",
-	Doc:      "report calls that cannot be cancelled where a context is in scope",
+	Doc:      "report calls that cannot be cancelled where a usable context is in scope",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runNocontext,
 }
@@ -36,10 +36,13 @@ func checkNocontext(pass *analysis.Pass, cur inspector.Cursor) {
 		return
 	}
 	left, right, ok := nocontextTarget(pass.TypesInfo, call)
-	if !ok || !contextInScope(pass, cur) {
+	if !ok || !nocontextInScope(pass, cur, call) {
 		return
 	}
 	if isWrapper(pass, cur, call, right) {
+		return
+	}
+	if left == "http.NewRequest" && newRequestGetsContext(pass, cur, call) {
 		return
 	}
 	pass.Report(analysis.Diagnostic{
@@ -83,11 +86,8 @@ func nocontextFunc(fn *types.Func) (left, right string, found bool) {
 }
 
 func netTarget(name string) (left, right string, found bool) {
-	switch name {
-	case "Dial":
+	if name == "Dial" {
 		return "net.Dial", "(&net.Dialer{}).DialContext", true
-	case "Listen":
-		return "net.Listen", "(&net.ListenConfig{}).Listen", true
 	}
 	return "", "", false
 }
@@ -219,4 +219,149 @@ func usesContextParam(pass *analysis.Pass, fn, cur inspector.Cursor) bool {
 		}
 	}
 	return false
+}
+
+func nocontextInScope(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) bool {
+	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		if hasNamedContextParam(pass.TypesInfo, fn.Node()) {
+			return true
+		}
+		if hasContextLocalBefore(pass, fn, call) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNamedContextParam(info *types.Info, fn ast.Node) bool {
+	ft := funcTypeOf(fn)
+	if ft == nil || ft.Params == nil {
+		return false
+	}
+	for _, field := range ft.Params.List {
+		if !isContextType(info, field.Type) {
+			continue
+		}
+		for _, name := range field.Names {
+			if name.Name != "" && name.Name != "_" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasContextLocalBefore(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) bool {
+	for c := range fn.Preorder((*ast.Ident)(nil)) {
+		id, ok := c.Node().(*ast.Ident)
+		if !ok || id.Name == "" || id.Name == "_" || id.Pos() >= call.Pos() {
+			continue
+		}
+		if ownerOf(c) != fn {
+			continue
+		}
+		if v := varOf(pass.TypesInfo, id); v != nil && isNamedContextType(v.Type()) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNamedContextType(t types.Type) bool {
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj != nil && obj.Name() == contextName && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
+}
+
+func isContextValueType(info *types.Info, e ast.Expr) bool {
+	return isNamedContextType(info.TypeOf(e))
+}
+
+func newRequestGetsContext(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) bool {
+	v := requestResultVar(pass, cur, call)
+	if v == nil {
+		return false
+	}
+	fn := ownerOf(cur)
+	if fn.Node() == nil {
+		return false
+	}
+	return getsContextBeforeSend(pass, fn, call, v)
+}
+
+func requestResultVar(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) *types.Var {
+	for ac := range cur.Enclosing((*ast.AssignStmt)(nil), (*ast.ValueSpec)(nil)) {
+		switch n := ac.Node().(type) {
+		case *ast.AssignStmt:
+			return firstResultVar(pass, n.Lhs, n.Rhs, call)
+		case *ast.ValueSpec:
+			lhs := make([]ast.Expr, 0, len(n.Names))
+			for _, id := range n.Names {
+				lhs = append(lhs, id)
+			}
+			return firstResultVar(pass, lhs, n.Values, call)
+		}
+		return nil
+	}
+	return nil
+}
+
+func firstResultVar(pass *analysis.Pass, lhs, rhs []ast.Expr, call *ast.CallExpr) *types.Var {
+	if len(rhs) != 1 || stripParens(rhs[0]) != call {
+		return nil
+	}
+	if len(lhs) == 0 {
+		return nil
+	}
+	id, ok := stripParens(lhs[0]).(*ast.Ident)
+	if !ok || id.Name == "" || id.Name == "_" {
+		return nil
+	}
+	return varOf(pass.TypesInfo, id)
+}
+
+func getsContextBeforeSend(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, v *types.Var) bool {
+	for cc := range fn.Preorder((*ast.CallExpr)(nil)) {
+		c, ok := cc.Node().(*ast.CallExpr)
+		if !ok || c == call || c.Pos() < call.End() {
+			continue
+		}
+		if withContextOn(pass, c, v) || passedWithContext(pass, c, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func withContextOn(pass *analysis.Pass, c *ast.CallExpr, v *types.Var) bool {
+	sel, ok := stripParens(c.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "WithContext" {
+		return false
+	}
+	if !identResolvesTo(pass.TypesInfo, sel.X, v) {
+		return false
+	}
+	for _, arg := range c.Args {
+		if isContextValueType(pass.TypesInfo, arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func passedWithContext(pass *analysis.Pass, c *ast.CallExpr, v *types.Var) bool {
+	seenVar := false
+	seenCtx := false
+	for _, arg := range c.Args {
+		switch {
+		case identResolvesTo(pass.TypesInfo, arg, v):
+			seenVar = true
+		case isContextValueType(pass.TypesInfo, arg):
+			seenCtx = true
+		}
+	}
+	return seenVar && seenCtx
 }
