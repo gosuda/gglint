@@ -13,7 +13,7 @@ import (
 
 var stalecasAnalyzer = &analysis.Analyzer{
 	Name:     "stalecas",
-	Doc:      "reports a loop for !v.CompareAndSwap(old, new) (and the other shapes it already recognises) when old is a local, nothing in the loop assigns old, no goto or labeled break or continue leaves the loop, no other literal assigns old or a field or element stored in it, and the address of old or of such a field or element never appears; the last two are function-wide, so such loops are not reported; a path through a pointer does not count; spin covers five shapes only",
+	Doc:      "reports a loop for !v.CompareAndSwap(old, new) (and the other shapes it already recognises) when old is a local, nothing in the loop assigns old, no goto or labeled break or continue leaves the loop, no other literal assigns old or a field or element stored in it, and the address of old or of such a field or element never appears; the last two are function-wide, so such loops are not reported; a path through a pointer does not count; a call of a pointer-receiver method on old counts as its address; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runStalecas,
 }
@@ -81,6 +81,34 @@ func collectStaleNode(info *types.Info, fc *staleFn, n ast.Node) {
 		fc.labels = append(fc.labels, t)
 	case *ast.UnaryExpr:
 		noteAddr(info, fc, t)
+	case *ast.CallExpr:
+		noteMethodAddr(info, fc, t)
+	}
+}
+
+func noteMethodAddr(info *types.Info, fc *staleFn, call *ast.CallExpr) {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	chosen := info.Selections[sel]
+	if chosen == nil {
+		return
+	}
+	fn, ok := chosen.Obj().(*types.Func)
+	if !ok {
+		return
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil || !isPointerType(sig.Recv().Type()) {
+		return
+	}
+	recv := ast.Unparen(sel.X)
+	if isPointerType(info.TypeOf(recv)) {
+		return
+	}
+	if root, ok := storageRoot(info, recv); ok {
+		fc.addrs[root] = true
 	}
 }
 
@@ -119,6 +147,9 @@ func identRoot(info *types.Info, id *ast.Ident) (*types.Var, bool) {
 }
 
 func selectorRoot(info *types.Info, t *ast.SelectorExpr) (*types.Var, bool) {
+	if sel := info.Selections[t]; sel != nil && sel.Indirect() {
+		return nil, false
+	}
 	inner := ast.Unparen(t.X)
 	if isPointerType(info.TypeOf(inner)) {
 		return nil, false

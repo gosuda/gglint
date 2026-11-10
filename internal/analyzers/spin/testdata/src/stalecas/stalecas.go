@@ -461,3 +461,31 @@ func stalecasSilentValueAddrField(v *atomic.Value) {
 	}
 	use(old)
 }
+
+type staleInner struct{ f int }
+
+type staleOuter struct{ *staleInner }
+
+func stalecasReportedEmbeddedPointer(v *atomic.Value) {
+	v.Store(staleOuter{staleInner: &staleInner{f: 1}})
+	old := staleOuter{staleInner: &staleInner{}}
+	bump := func() { old.f++ }
+	_ = bump
+	for !v.CompareAndSwap(old, staleOuter{staleInner: &staleInner{}}) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		bump()
+	}
+	use(old)
+}
+
+type staleCell struct{ n int }
+
+func (s *staleCell) reload(v *atomic.Value) { *s = v.Load().(staleCell) }
+
+func stalecasSilentPointerMethod(v *atomic.Value) {
+	v.Store(staleCell{n: 1})
+	old := staleCell{}
+	for !v.CompareAndSwap(old, staleCell{n: 2}) {
+		old.reload(v)
+	}
+	use(old)
+}
