@@ -21,7 +21,7 @@ func Analyzers() []*analysis.Analyzer {
 		mk("selfdeadlock", "reports a send and later receive outside select on an owned unbuffered channel no literal mentions", runSelfdeadlock),
 		mk("rangeunclosed", "reports a range over an owned made channel no code closes with no loop exit", runRangeunclosed),
 		mk("orphansend", "reports a spawned send on an owned unbuffered channel drained only by a select that returns elsewhere", runOrphansend),
-		mk("firstresult", "reports sends exceeding receives plus capacity; counts every receive site, so a one-branch leak is not reported", runFirstresult),
+		mk("firstresult", "reports sends exceeding receives plus capacity; counts every receive site, so a one-branch leak is not reported. A function with a goto that jumps backward is not checked.", runFirstresult),
 	}
 }
 
