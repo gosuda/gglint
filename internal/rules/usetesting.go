@@ -86,7 +86,7 @@ type funcUnit struct {
 
 func nestedInTest(body *ast.BlockStmt, units []funcUnit) bool {
 	for _, u := range units {
-		if u.body != body && testParam(u.typ) != nil && body.Pos() > u.body.Pos() && body.End() <= u.body.End() {
+		if testParam(u.typ) != nil && body.Pos() > u.body.Pos() && body.End() <= u.body.End() {
 			return true
 		}
 	}
