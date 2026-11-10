@@ -202,3 +202,43 @@ func donespinSilentChanSend(ctx context.Context, out chan int, v int) {
 		}
 	}
 }
+func donespinReportedFuncLit(ctx context.Context, ch chan int) {
+	for {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return
+		default:
+			f := func() { <-ch }
+			_ = f
+		}
+	}
+}
+
+func donespinReportedNestedDefault(ctx context.Context, ch chan int) {
+	for {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return
+		default:
+			select {
+			case v := <-ch:
+				_ = v
+			default:
+			}
+		}
+	}
+}
+
+func donespinSilentNestedBlocking(ctx context.Context, ch chan int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			select {
+			case v := <-ch:
+				use(v)
+			}
+		}
+	}
+}

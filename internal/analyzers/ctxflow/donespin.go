@@ -120,22 +120,89 @@ func isDoneCall(info *types.Info, call *ast.CallExpr) bool {
 		return false
 	}
 	obj := named.Obj()
-	return obj.Name() == "Context" && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
+	return obj.Name() == contextName && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
 }
 
 func defaultBlocks(info *types.Info, dflt *ast.CommClause) bool {
-	blocked := false
-	ast.Inspect(dflt, func(n ast.Node) bool {
-		if blocked {
-			return false
+	for _, s := range dflt.Body {
+		if stmtBlocks(info, s) {
+			return true
 		}
-		if isBlockingOp(info, n) {
-			blocked = true
-			return false
+	}
+	return false
+}
+
+type blockWalk struct {
+	info    *types.Info
+	blocked bool
+}
+
+func stmtBlocks(info *types.Info, s ast.Stmt) bool {
+	w := &blockWalk{info: info}
+	w.walk(s)
+	return w.blocked
+}
+
+func (w *blockWalk) walk(n ast.Node) {
+	if w.blocked || n == nil {
+		return
+	}
+	if _, ok := n.(*ast.FuncLit); ok {
+		return
+	}
+	if sel, ok := n.(*ast.SelectStmt); ok && hasDefault(sel) {
+		w.walkDefaultBody(sel)
+		return
+	}
+	if isBlockingOp(w.info, n) {
+		w.blocked = true
+		return
+	}
+	for _, child := range childrenOf(n) {
+		w.walk(child)
+		if w.blocked {
+			return
 		}
-		return true
+	}
+}
+
+func (w *blockWalk) walkDefaultBody(sel *ast.SelectStmt) {
+	for _, st := range sel.Body.List {
+		cc, ok := st.(*ast.CommClause)
+		if !ok || cc.Comm != nil {
+			continue
+		}
+		for _, b := range cc.Body {
+			w.walk(b)
+			if w.blocked {
+				return
+			}
+		}
+	}
+}
+
+func hasDefault(sel *ast.SelectStmt) bool {
+	if sel.Body == nil {
+		return false
+	}
+	for _, st := range sel.Body.List {
+		if cc, ok := st.(*ast.CommClause); ok && cc.Comm == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func childrenOf(n ast.Node) []ast.Node {
+	var out []ast.Node
+	ast.Inspect(n, func(c ast.Node) bool {
+		if c == nil || c == n {
+			return true
+		}
+		out = append(out, c)
+		return false
 	})
-	return blocked
+	return out
 }
 
 func isBlockingOp(info *types.Info, n ast.Node) bool {

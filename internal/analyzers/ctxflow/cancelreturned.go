@@ -201,13 +201,102 @@ func returnsContext(info *types.Info, res ast.Expr, v *types.Var) bool {
 		return true
 	}
 	if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
-		e = stripParens(u.X)
+		return returnsContext(info, u.X, v)
 	}
-	lit, ok := e.(*ast.CompositeLit)
+	if lit, ok := e.(*ast.CompositeLit); ok {
+		return compositeMentions(info, lit, v)
+	}
+	if call, ok := e.(*ast.CallExpr); ok {
+		if !callResultIsContext(info, call) {
+			return false
+		}
+		for _, arg := range call.Args {
+			if returnsContext(info, arg, v) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func callResultIsContext(info *types.Info, call *ast.CallExpr) bool {
+	t := info.TypeOf(call)
+	if t == nil {
+		return false
+	}
+	if tup, ok := t.(*types.Tuple); ok {
+		for v := range tup.Variables() {
+			if implementsContext(v.Type()) {
+				return true
+			}
+		}
+		return false
+	}
+	return implementsContext(t)
+}
+
+func implementsContext(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if isNamedContext(t) {
+		return true
+	}
+	ms := types.NewMethodSet(t)
+	return doneResultOK(ms) && errResultOK(ms) && valueResultOK(ms) && deadlineResultOK(ms)
+}
+
+func isNamedContext(t types.Type) bool {
+	named, ok := types.Unalias(t).(*types.Named)
 	if !ok {
 		return false
 	}
-	return compositeMentions(info, lit, v)
+	obj := named.Obj()
+	return obj.Name() == contextName && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
+}
+
+func doneResultOK(ms *types.MethodSet) bool {
+	sel := ms.Lookup(nil, "Done")
+	if sel == nil {
+		return false
+	}
+	sig, ok := sel.Obj().Type().(*types.Signature)
+	if !ok || sig.Params().Len() != 0 || sig.Results().Len() != 1 {
+		return false
+	}
+	ch, ok := sig.Results().At(0).Type().(*types.Chan)
+	return ok && ch.Dir() == types.RecvOnly
+}
+
+func errResultOK(ms *types.MethodSet) bool {
+	sel := ms.Lookup(nil, "Err")
+	if sel == nil {
+		return false
+	}
+	sig, ok := sel.Obj().Type().(*types.Signature)
+	return ok && sig.Params().Len() == 0 && sig.Results().Len() == 1
+}
+
+func valueResultOK(ms *types.MethodSet) bool {
+	sel := ms.Lookup(nil, "Value")
+	if sel == nil {
+		return false
+	}
+	sig, ok := sel.Obj().Type().(*types.Signature)
+	return ok && sig.Params().Len() == 1 && sig.Results().Len() == 1
+}
+
+func deadlineResultOK(ms *types.MethodSet) bool {
+	sel := ms.Lookup(nil, "Deadline")
+	if sel == nil {
+		return false
+	}
+	sig, ok := sel.Obj().Type().(*types.Signature)
+	if !ok || sig.Params().Len() != 0 || sig.Results().Len() != 2 {
+		return false
+	}
+	basic, ok := sig.Results().At(1).Type().(*types.Basic)
+	return ok && basic.Kind() == types.Bool
 }
 
 func compositeMentions(info *types.Info, lit *ast.CompositeLit, v *types.Var) bool {

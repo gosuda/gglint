@@ -11,6 +11,7 @@ import (
 const (
 	contextPath = "context"
 	netHTTPPath = "net/http"
+	contextName = "Context"
 )
 
 // Analyzers returns the four context checks of this package.
@@ -57,7 +58,7 @@ func isContextType(info *types.Info, e ast.Expr) bool {
 	}
 	if named, ok := types.Unalias(t).(*types.Named); ok {
 		obj := named.Obj()
-		return obj.Name() == "Context" && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
+		return obj.Name() == contextName && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
 	}
 	if ptr, ok := types.Unalias(t).(*types.Pointer); ok {
 		named, ok := types.Unalias(ptr.Elem()).(*types.Named)
