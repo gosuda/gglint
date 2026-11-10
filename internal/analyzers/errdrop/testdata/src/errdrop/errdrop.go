@@ -162,3 +162,47 @@ func factWrite() error {
 	fmt.Fprintf(dep.T{}, "x")
 	return nil
 }
+
+func pickRangeAssign(xs []error) (err error) {
+	for _, err = range xs {
+	}
+	return
+}
+
+func verdictReported3(xs []error) error {
+	pickRangeAssign(xs) // want "the error of pickRangeAssign is dropped and the next statement returns nil"
+	return nil
+}
+
+func neverUnderscore() (_ error) { return }
+
+func verdictSilent5() error {
+	neverUnderscore()
+	return nil
+}
+
+func decodeSecond(a, b any) error { return errors.New("no") }
+
+func outReported3(p int) int {
+	var c int
+	decodeSecond(&p, &c) // want "c is read after the error of decodeSecond is dropped"
+	return c
+}
+
+func outSilent4(b []byte, xs []Config) Config {
+	var c Config
+	json.Unmarshal(b, &c)
+	for _, c = range xs {
+	}
+	return c
+}
+
+func durableSilent4(p string, b []byte) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(b)
+	return f.Close()
+}

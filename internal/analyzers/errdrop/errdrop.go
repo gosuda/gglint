@@ -51,50 +51,69 @@ func originOf(fn *types.Func) *types.Func {
 }
 
 func computeNeverFails(pass *analysis.Pass) map[*types.Func]bool {
+	decls, objs := collectNeverFailsCandidates(pass)
+	return fillNeverFailsSet(pass, decls, objs)
+}
+
+func collectNeverFailsCandidates(pass *analysis.Pass) ([]*ast.FuncDecl, []*types.Func) {
 	decls := []*ast.FuncDecl{}
 	objs := []*types.Func{}
 	for _, f := range pass.Files {
-		for _, d := range f.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			obj, ok := pass.TypesInfo.Defs[fn.Name].(*types.Func)
-			if !ok {
-				continue
-			}
-			sig, ok := obj.Type().(*types.Signature)
-			if !ok || !hasErrorResult(sig) {
-				continue
-			}
-			decls = append(decls, fn)
-			objs = append(objs, obj)
-		}
+		collectFileCandidates(pass, f, &decls, &objs)
 	}
+	return decls, objs
+}
+
+func collectFileCandidates(pass *analysis.Pass, f *ast.File, decls *[]*ast.FuncDecl, objs *[]*types.Func) {
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		obj, ok := pass.TypesInfo.Defs[fn.Name].(*types.Func)
+		if !ok {
+			continue
+		}
+		sig, ok := obj.Type().(*types.Signature)
+		if !ok || !hasErrorResult(sig) {
+			continue
+		}
+		*decls = append(*decls, fn)
+		*objs = append(*objs, obj)
+	}
+}
+
+func fillNeverFailsSet(pass *analysis.Pass, decls []*ast.FuncDecl, objs []*types.Func) map[*types.Func]bool {
 	set := map[*types.Func]bool{}
 	changed := true
 	for changed {
 		changed = false
 		for i, fn := range decls {
-			origin := originOf(objs[i])
-			if set[origin] {
-				continue
+			if tryMarkNeverFails(pass, fn, objs[i], set) {
+				changed = true
 			}
-			sig, _ := objs[i].Type().(*types.Signature)
-			if sig == nil {
-				continue
-			}
-			if !namedResultsOK(pass, fn, sig) {
-				continue
-			}
-			if !returnsOK(pass, fn, sig, set) {
-				continue
-			}
-			set[origin] = true
-			changed = true
 		}
 	}
 	return set
+}
+
+func tryMarkNeverFails(pass *analysis.Pass, fn *ast.FuncDecl, obj *types.Func, set map[*types.Func]bool) bool {
+	origin := originOf(obj)
+	if set[origin] {
+		return false
+	}
+	sig, ok := obj.Type().(*types.Signature)
+	if !ok || sig == nil {
+		return false
+	}
+	if !namedResultsOK(pass, fn, sig) {
+		return false
+	}
+	if !returnsOK(pass, fn, sig, set) {
+		return false
+	}
+	set[origin] = true
+	return true
 }
 
 func hasErrorResult(sig *types.Signature) bool {
@@ -111,9 +130,18 @@ func hasErrorResult(sig *types.Signature) bool {
 }
 
 func namedResultsOK(pass *analysis.Pass, fn *ast.FuncDecl, sig *types.Signature) bool {
+	targets := namedErrorTargets(sig)
+	if len(targets) == 0 {
+		return true
+	}
+	assigned, addressed := scanNamedTargets(pass, fn, targets)
+	return !assigned && !addressed
+}
+
+func namedErrorTargets(sig *types.Signature) []*types.Var {
 	res := sig.Results()
 	if res == nil {
-		return true
+		return nil
 	}
 	targets := []*types.Var{}
 	for i := range res.Len() {
@@ -126,31 +154,52 @@ func namedResultsOK(pass *analysis.Pass, fn *ast.FuncDecl, sig *types.Signature)
 		}
 		targets = append(targets, v)
 	}
-	if len(targets) == 0 {
-		return true
-	}
-	assigned := false
-	addressed := false
+	return targets
+}
+
+func scanNamedTargets(pass *analysis.Pass, fn *ast.FuncDecl, targets []*types.Var) (assigned, addressed bool) {
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		switch t := n.(type) {
-		case *ast.AssignStmt:
-			for _, lhs := range t.Lhs {
-				if resolvesTo(pass.TypesInfo, lhs, targets) {
-					assigned = true
-				}
-			}
-		case *ast.UnaryExpr:
-			if t.Op == token.AND && resolvesTo(pass.TypesInfo, t.X, targets) {
-				addressed = true
-			}
-		case *ast.IncDecStmt:
-			if resolvesTo(pass.TypesInfo, t.X, targets) {
-				assigned = true
-			}
-		}
+		noteNamedUse(pass.TypesInfo, n, targets, &assigned, &addressed)
 		return !assigned || !addressed
 	})
-	return !assigned && !addressed
+	return assigned, addressed
+}
+
+func noteNamedUse(info *types.Info, n ast.Node, targets []*types.Var, assigned, addressed *bool) {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		noteAssignUse(info, t, targets, assigned)
+	case *ast.UnaryExpr:
+		if t.Op == token.AND && resolvesTo(info, t.X, targets) {
+			*addressed = true
+		}
+	case *ast.IncDecStmt:
+		if resolvesTo(info, t.X, targets) {
+			*assigned = true
+		}
+	case *ast.RangeStmt:
+		if rangeAssigns(info, t, targets) {
+			*assigned = true
+		}
+	}
+}
+
+func noteAssignUse(info *types.Info, t *ast.AssignStmt, targets []*types.Var, assigned *bool) {
+	for _, lhs := range t.Lhs {
+		if resolvesTo(info, lhs, targets) {
+			*assigned = true
+		}
+	}
+}
+
+func rangeAssigns(info *types.Info, t *ast.RangeStmt, targets []*types.Var) bool {
+	if t.Tok != token.ASSIGN {
+		return false
+	}
+	if t.Key != nil && resolvesTo(info, t.Key, targets) {
+		return true
+	}
+	return t.Value != nil && resolvesTo(info, t.Value, targets)
 }
 
 func resolvesTo(info *types.Info, e ast.Expr, targets []*types.Var) bool {
@@ -239,7 +288,7 @@ func allErrorsNamed(sig *types.Signature) bool {
 		if !isError(res.At(i).Type()) {
 			continue
 		}
-		if res.At(i).Name() == "" || res.At(i).Name() == "_" {
+		if res.At(i).Name() == "" {
 			return false
 		}
 	}
@@ -247,8 +296,8 @@ func allErrorsNamed(sig *types.Signature) bool {
 }
 
 func calleeOrigin(pass *analysis.Pass, call *ast.CallExpr) *types.Func {
-	obj, _ := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
-	if obj == nil {
+	obj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || obj == nil {
 		return nil
 	}
 	return originOf(obj)
@@ -345,15 +394,22 @@ func findPackage(root *types.Package, path string) *types.Package {
 	return nil
 }
 
-func isHashWrite(info *types.Info, hash *types.Interface, call *ast.CallExpr) bool {
+func isHashWrite(pass *analysis.Pass, hash *types.Interface, call *ast.CallExpr) bool {
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || hash == nil || sel.Sel.Name != "Write" {
+	if !ok || sel.Sel.Name != "Write" {
 		return false
 	}
-	recv := info.TypeOf(sel.X)
+	recv := pass.TypesInfo.TypeOf(sel.X)
 	if recv == nil {
 		return false
 	}
+	if hash != nil && implementsHash(recv, hash) {
+		return true
+	}
+	return hashShape(pass, recv)
+}
+
+func implementsHash(recv types.Type, hash *types.Interface) bool {
 	if types.Implements(recv, hash) {
 		return true
 	}
@@ -361,33 +417,99 @@ func isHashWrite(info *types.Info, hash *types.Interface, call *ast.CallExpr) bo
 	return !isPtr && types.Implements(types.NewPointer(recv), hash)
 }
 
+func hashShape(pass *analysis.Pass, recv types.Type) bool {
+	if !writerSigShape(hashSig(pass, recv, "Write")) {
+		return false
+	}
+	if !isHashSumSig(hashSig(pass, recv, "Sum")) {
+		return false
+	}
+	if !isHashResetSig(hashSig(pass, recv, "Reset")) {
+		return false
+	}
+	return isHashSizeSig(hashSig(pass, recv, "Size")) && isHashSizeSig(hashSig(pass, recv, "BlockSize"))
+}
+
+func hashSig(pass *analysis.Pass, recv types.Type, name string) *types.Signature {
+	obj, _, _ := types.LookupFieldOrMethod(recv, true, pass.Pkg, name)
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return nil
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return nil
+	}
+	return sig
+}
+
+func sigShape(sig *types.Signature, params, results int) bool {
+	if sig == nil {
+		return false
+	}
+	return tupleLen(sig.Params()) == params && tupleLen(sig.Results()) == results
+}
+
+func tupleLen(t *types.Tuple) int {
+	if t == nil {
+		return 0
+	}
+	return t.Len()
+}
+
+func isHashSumSig(sig *types.Signature) bool {
+	if !sigShape(sig, 1, 1) {
+		return false
+	}
+	return writerParamIsBytes(sig.Params().At(0).Type()) && writerParamIsBytes(sig.Results().At(0).Type())
+}
+
+func isHashResetSig(sig *types.Signature) bool {
+	return sigShape(sig, 0, 0)
+}
+
+func isHashSizeSig(sig *types.Signature) bool {
+	if !sigShape(sig, 0, 1) {
+		return false
+	}
+	return types.Identical(sig.Results().At(0).Type(), types.Typ[types.Int])
+}
+
 func isExempt(pass *analysis.Pass, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
 	info := pass.TypesInfo
-	if isHashWrite(info, hash, call) {
+	if isHashWrite(pass, hash, call) {
 		return true
 	}
 	if callee := calleeOrigin(pass, call); callee != nil && hasFact(pass, callee, set) {
 		return true
 	}
-	fn, _ := typeutil.Callee(info, call).(*types.Func)
-	if fn == nil {
+	fn, ok := typeutil.Callee(info, call).(*types.Func)
+	if !ok || fn == nil {
 		return false
 	}
+	return isBenignStdoutWrite(pass, info, fn, call, set)
+}
+
+func isBenignStdoutWrite(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, set map[*types.Func]bool) bool {
 	switch fn.FullName() {
 	case "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "io.WriteString":
-		if len(call.Args) == 0 {
-			return false
-		}
-		t0 := info.TypeOf(call.Args[0])
-		if t0 == nil {
-			return false
-		}
-		if _, ok := types.Unalias(t0).Underlying().(*types.Interface); ok {
-			return false
-		}
-		return writeHasFact(pass, t0, set)
+		return firstArgHasWriteFact(pass, info, call, set)
 	}
 	return false
+}
+
+func firstArgHasWriteFact(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, set map[*types.Func]bool) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	t0 := info.TypeOf(call.Args[0])
+	if t0 == nil {
+		return false
+	}
+	if _, ok := types.Unalias(t0).Underlying().(*types.Interface); ok {
+		return false
+	}
+	return writeHasFact(pass, t0, set)
 }
 
 func writeHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) bool {
@@ -436,17 +558,23 @@ func fnSignature(pass *analysis.Pass, fn inspector.Cursor) *types.Signature {
 	switch n := fn.Node().(type) {
 	case *ast.FuncDecl:
 		if obj, ok := pass.TypesInfo.Defs[n.Name].(*types.Func); ok {
-			sig, _ := obj.Type().(*types.Signature)
+			sig, ok := obj.Type().(*types.Signature)
+			if !ok {
+				return nil
+			}
 			return sig
 		}
 	case *ast.FuncLit:
-		sig, _ := pass.TypesInfo.TypeOf(n).(*types.Signature)
+		sig, ok := pass.TypesInfo.TypeOf(n).(*types.Signature)
+		if !ok {
+			return nil
+		}
 		return sig
 	}
 	return nil
 }
 
-func declaredHere(pass *analysis.Pass, fn inspector.Cursor, v *types.Var) bool {
+func declaredHere(fn inspector.Cursor, v *types.Var) bool {
 	if v.Kind() != types.LocalVar {
 		return false
 	}
@@ -476,7 +604,7 @@ func checkValueSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Fu
 		if isExempt(pass, call, set, hash) {
 			continue
 		}
-		if valueHolds(pass, fn, as, call, vobj) {
+		if valueHolds(pass, fn, as, vobj) {
 			callee := types.ExprString(call.Fun)
 			pass.Reportf(call.Pos(), "%s is used after the error of %s is dropped, and it is nil when the call fails: check the error, or test %s for nil first", vname, callee, vname)
 		}
@@ -505,34 +633,50 @@ func valueSite(pass *analysis.Pass, as *ast.AssignStmt) (*ast.CallExpr, *types.V
 	if len(res) != len(as.Lhs) {
 		return nil, nil, ""
 	}
-	errIdx := -1
-	for i := range res {
-		if isError(res[i]) && isBlank(as.Lhs[i]) {
-			errIdx = i
-			break
-		}
-	}
+	errIdx := blankErrorIndex(res, as.Lhs)
 	if errIdx < 0 {
 		return nil, nil, ""
 	}
+	return qualifyingLHSVar(info, as, errIdx)
+}
+
+func blankErrorIndex(res []types.Type, lhs []ast.Expr) int {
+	for i := range res {
+		if isError(res[i]) && isBlank(lhs[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func qualifyingLHSVar(info *types.Info, as *ast.AssignStmt, errIdx int) (*ast.CallExpr, *types.Var, string) {
+	call := callOf(as.Rhs[0])
 	for j := range as.Lhs {
 		if j == errIdx || isBlank(as.Lhs[j]) {
 			continue
 		}
-		id, ok := ast.Unparen(as.Lhs[j]).(*ast.Ident)
-		if !ok || id.Name == "_" {
-			continue
-		}
-		v, ok := info.ObjectOf(id).(*types.Var)
+		v, name, ok := lhsNamedVar(info, as.Lhs[j])
 		if !ok {
 			continue
 		}
 		if !qualifyingValueType(v.Type()) {
 			continue
 		}
-		return call, v, id.Name
+		return call, v, name
 	}
 	return nil, nil, ""
+}
+
+func lhsNamedVar(info *types.Info, e ast.Expr) (*types.Var, string, bool) {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok || id.Name == "_" {
+		return nil, "", false
+	}
+	v, ok := info.ObjectOf(id).(*types.Var)
+	if !ok {
+		return nil, "", false
+	}
+	return v, id.Name, true
 }
 
 func qualifyingValueType(t types.Type) bool {
@@ -546,12 +690,12 @@ func qualifyingValueType(t types.Type) bool {
 	return false
 }
 
-func valueHolds(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt, call *ast.CallExpr, v *types.Var) bool {
+func valueHolds(pass *analysis.Pass, fn inspector.Cursor, as *ast.AssignStmt, v *types.Var) bool {
 	first, ok := firstUseAfter(pass, fn, v, as.End())
 	if !ok {
 		return false
 	}
-	if !isDeref(pass, first, v) {
+	if !isDeref(first, v) {
 		return false
 	}
 	if interveningNilCheck(pass, fn, v, as.End(), first.Node().Pos()) {
@@ -591,7 +735,7 @@ func skipParens(cur inspector.Cursor) inspector.Cursor {
 	return cur
 }
 
-func isDeref(pass *analysis.Pass, cur inspector.Cursor, v *types.Var) bool {
+func isDeref(cur inspector.Cursor, v *types.Var) bool {
 	id, ok := cur.Node().(*ast.Ident)
 	if !ok {
 		return false
@@ -599,33 +743,46 @@ func isDeref(pass *analysis.Pass, cur inspector.Cursor, v *types.Var) bool {
 	up := skipParens(cur.Parent())
 	switch p := up.Node().(type) {
 	case *ast.SelectorExpr:
-		return ast.Unparen(p.X).(*ast.Ident) == id
+		return unparenIdentEquals(p.X, id)
 	case *ast.StarExpr:
-		return ast.Unparen(p.X).(*ast.Ident) == id
+		return unparenIdentEquals(p.X, id)
 	case *ast.CallExpr:
 		fun, ok := ast.Unparen(p.Fun).(*ast.Ident)
 		return ok && fun == id
 	case *ast.IndexExpr:
-		if ast.Unparen(p.X).(*ast.Ident) != id {
-			return false
-		}
-		if _, ok := types.Unalias(v.Type()).Underlying().(*types.Map); !ok {
-			return false
-		}
-		gp := skipParens(up.Parent())
-		as, ok := gp.Node().(*ast.AssignStmt)
-		if !ok {
-			return false
-		}
-		for _, lhs := range as.Lhs {
-			if ast.Unparen(lhs) == up.Node() {
-				return true
-			}
-			if idx, ok := ast.Unparen(lhs).(*ast.IndexExpr); ok && idx == p {
-				return true
-			}
-		}
+		return isMapStoreAssign(up, p, v, id)
+	}
+	return false
+}
+
+func unparenIdentEquals(e ast.Expr, id *ast.Ident) bool {
+	xid, ok := ast.Unparen(e).(*ast.Ident)
+	return ok && xid == id
+}
+
+func isMapStoreAssign(up inspector.Cursor, p *ast.IndexExpr, v *types.Var, id *ast.Ident) bool {
+	if !unparenIdentEquals(p.X, id) {
 		return false
+	}
+	if _, ok := types.Unalias(v.Type()).Underlying().(*types.Map); !ok {
+		return false
+	}
+	gp := skipParens(up.Parent())
+	as, ok := gp.Node().(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	return lhsStoresIndex(as, up, p)
+}
+
+func lhsStoresIndex(as *ast.AssignStmt, up inspector.Cursor, p *ast.IndexExpr) bool {
+	for _, lhs := range as.Lhs {
+		if ast.Unparen(lhs) == up.Node() {
+			return true
+		}
+		if idx, ok := ast.Unparen(lhs).(*ast.IndexExpr); ok && idx == p {
+			return true
+		}
 	}
 	return false
 }
@@ -670,28 +827,35 @@ func sideIsVarAndOtherNil(info *types.Info, side, other ast.Expr, v *types.Var) 
 }
 
 func interveningAssign(pass *analysis.Pass, fn inspector.Cursor, v *types.Var, from, to token.Pos) bool {
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil), (*ast.IncDecStmt)(nil)) {
+	for cur := range fn.Preorder((*ast.AssignStmt)(nil), (*ast.IncDecStmt)(nil), (*ast.RangeStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		switch n := cur.Node().(type) {
-		case *ast.AssignStmt:
-			if n.Pos() <= from || n.Pos() >= to {
-				continue
-			}
-			for _, lhs := range n.Lhs {
-				if resolvesTo(pass.TypesInfo, lhs, []*types.Var{v}) {
-					return true
-				}
-			}
-		case *ast.IncDecStmt:
-			if n.Pos() <= from || n.Pos() >= to {
-				continue
-			}
-			if resolvesTo(pass.TypesInfo, n.X, []*types.Var{v}) {
+		if nodeInWindow(cur.Node(), from, to) && nodeAssignsVar(pass.TypesInfo, cur.Node(), v) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeInWindow(n ast.Node, from, to token.Pos) bool {
+	return n.Pos() > from && n.Pos() < to
+}
+
+func nodeAssignsVar(info *types.Info, n ast.Node, v *types.Var) bool {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		for _, lhs := range t.Lhs {
+			if resolvesTo(info, lhs, []*types.Var{v}) {
 				return true
 			}
 		}
+	case *ast.IncDecStmt:
+		if resolvesTo(info, t.X, []*types.Var{v}) {
+			return true
+		}
+	case *ast.RangeStmt:
+		return rangeAssigns(info, t, []*types.Var{v})
 	}
 	return false
 }
@@ -712,11 +876,8 @@ func checkOutSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func
 		if isExempt(pass, call, set, hash) {
 			continue
 		}
-		xobj, xname := outCandidate(pass, call)
+		xobj, xname := outCandidate(pass, fn, call)
 		if xobj == nil {
-			continue
-		}
-		if !outHolds(pass, fn, call, xobj) {
 			continue
 		}
 		callee := types.ExprString(call.Fun)
@@ -734,7 +895,7 @@ func dropsError(info *types.Info, call *ast.CallExpr) bool {
 	return false
 }
 
-func outCandidate(pass *analysis.Pass, call *ast.CallExpr) (*types.Var, string) {
+func outCandidate(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) (found *types.Var, name string) {
 	for _, arg := range call.Args {
 		u, ok := ast.Unparen(arg).(*ast.UnaryExpr)
 		if !ok || u.Op != token.AND {
@@ -744,7 +905,11 @@ func outCandidate(pass *analysis.Pass, call *ast.CallExpr) (*types.Var, string) 
 		if !ok || id.Name == "_" {
 			continue
 		}
-		if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
+		v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+		if !ok {
+			continue
+		}
+		if outHolds(pass, fn, call, v) {
 			return v, id.Name
 		}
 	}
@@ -752,7 +917,7 @@ func outCandidate(pass *analysis.Pass, call *ast.CallExpr) (*types.Var, string) 
 }
 
 func outHolds(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, x *types.Var) bool {
-	if !declaredHere(pass, fn, x) {
+	if !declaredHere(fn, x) {
 		return false
 	}
 	if !isBareVarDecl(pass, fn, x) {
@@ -785,21 +950,12 @@ func isBareVarDecl(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool 
 }
 
 func assignsVar(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil), (*ast.IncDecStmt)(nil)) {
+	for cur := range fn.Preorder((*ast.AssignStmt)(nil), (*ast.IncDecStmt)(nil), (*ast.RangeStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		switch n := cur.Node().(type) {
-		case *ast.AssignStmt:
-			for _, lhs := range n.Lhs {
-				if resolvesTo(pass.TypesInfo, lhs, []*types.Var{x}) {
-					return true
-				}
-			}
-		case *ast.IncDecStmt:
-			if resolvesTo(pass.TypesInfo, n.X, []*types.Var{x}) {
-				return true
-			}
+		if nodeAssignsVar(pass.TypesInfo, cur.Node(), x) {
+			return true
 		}
 	}
 	return false
@@ -821,21 +977,14 @@ func mentionedAfter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, afte
 	return false
 }
 
+const closeMethodName = "Close"
+
 func checkDurableSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface) {
 	for cur := range fn.Preorder((*ast.ExprStmt)(nil), (*ast.DeferStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		var call *ast.CallExpr
-		switch n := cur.Node().(type) {
-		case *ast.ExprStmt:
-			call = callOf(n.X)
-		case *ast.DeferStmt:
-			call = callOf(n.Call)
-			if call == nil {
-				call = n.Call
-			}
-		}
+		call := durableCall(cur)
 		if call == nil || !isRealCall(pass.TypesInfo, call) {
 			continue
 		}
@@ -856,9 +1005,22 @@ func checkDurableSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.
 	}
 }
 
-func closeReceiver(pass *analysis.Pass, call *ast.CallExpr) (*types.Var, string) {
+func durableCall(cur inspector.Cursor) *ast.CallExpr {
+	switch n := cur.Node().(type) {
+	case *ast.ExprStmt:
+		return callOf(n.X)
+	case *ast.DeferStmt:
+		if call := callOf(n.Call); call != nil {
+			return call
+		}
+		return n.Call
+	}
+	return nil
+}
+
+func closeReceiver(pass *analysis.Pass, call *ast.CallExpr) (found *types.Var, name string) {
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Close" {
+	if !ok || sel.Sel.Name != closeMethodName {
 		return nil, ""
 	}
 	id, ok := ast.Unparen(sel.X).(*ast.Ident)
@@ -877,7 +1039,7 @@ func isExactlyError(info *types.Info, call *ast.CallExpr) bool {
 }
 
 func durableHolds(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	if !isLocalPtrStruct(pass, fn, x) {
+	if !isLocalPtrStruct(fn, x) {
 		return false
 	}
 	if !writtenInFunc(pass, fn, x) {
@@ -886,8 +1048,8 @@ func durableHolds(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
 	return !hasUsedCloseSync(pass, fn, x)
 }
 
-func isLocalPtrStruct(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	if !declaredHere(pass, fn, x) {
+func isLocalPtrStruct(fn inspector.Cursor, x *types.Var) bool {
+	if !declaredHere(fn, x) {
 		return false
 	}
 	ptr, ok := types.Unalias(x.Type()).(*types.Pointer)
@@ -907,32 +1069,46 @@ func assignedFromCreate(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) 
 		if owner(cur) != fn {
 			continue
 		}
-		as := inspection.As[*ast.AssignStmt](cur.Node())
-		found := false
-		for _, lhs := range as.Lhs {
-			if resolvesTo(pass.TypesInfo, lhs, []*types.Var{x}) {
-				found = true
-			}
-		}
-		if !found || len(as.Rhs) != 1 {
-			continue
-		}
-		call := callOf(as.Rhs[0])
-		if call == nil {
-			continue
-		}
-		fnobj, _ := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
-		if fnobj == nil {
-			continue
-		}
-		switch fnobj.FullName() {
-		case "os.Create", "os.CreateTemp":
+		if createWritesFile(pass, inspection.As[*ast.AssignStmt](cur.Node()), x) {
 			return true
-		case "os.OpenFile":
-			if len(call.Args) >= 2 && flagWritable(pass.TypesInfo, call.Args[1]) {
-				return true
-			}
 		}
+	}
+	return false
+}
+
+func createWritesFile(pass *analysis.Pass, as *ast.AssignStmt, x *types.Var) bool {
+	if !assignTargetsVar(pass.TypesInfo, as, x) {
+		return false
+	}
+	if len(as.Rhs) != 1 {
+		return false
+	}
+	call := callOf(as.Rhs[0])
+	if call == nil {
+		return false
+	}
+	return createCallWritable(pass, call)
+}
+
+func assignTargetsVar(info *types.Info, as *ast.AssignStmt, x *types.Var) bool {
+	for _, lhs := range as.Lhs {
+		if resolvesTo(info, lhs, []*types.Var{x}) {
+			return true
+		}
+	}
+	return false
+}
+
+func createCallWritable(pass *analysis.Pass, call *ast.CallExpr) bool {
+	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fnobj == nil {
+		return false
+	}
+	switch fnobj.FullName() {
+	case "os.Create", "os.CreateTemp":
+		return true
+	case "os.OpenFile":
+		return len(call.Args) >= 2 && flagWritable(pass.TypesInfo, call.Args[1])
 	}
 	return false
 }
@@ -975,27 +1151,30 @@ func writtenByFirstArg(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) b
 		if owner(cur) != fn {
 			continue
 		}
-		call := inspection.As[*ast.CallExpr](cur.Node())
-		if len(call.Args) == 0 {
-			continue
-		}
-		id, ok := ast.Unparen(call.Args[0]).(*ast.Ident)
-		if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-			continue
-		}
-		fnobj, _ := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
-		if fnobj == nil {
-			continue
-		}
-		sig, ok := fnobj.Type().(*types.Signature)
-		if !ok || sig.Params() == nil || sig.Params().Len() == 0 {
-			continue
-		}
-		if isWriterInterface(sig.Params().At(0).Type()) {
+		if firstArgTakesWriter(pass, inspection.As[*ast.CallExpr](cur.Node()), x) {
 			return true
 		}
 	}
 	return false
+}
+
+func firstArgTakesWriter(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+	id, ok := ast.Unparen(call.Args[0]).(*ast.Ident)
+	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
+		return false
+	}
+	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fnobj == nil {
+		return false
+	}
+	sig, ok := fnobj.Type().(*types.Signature)
+	if !ok || sig.Params() == nil || sig.Params().Len() == 0 {
+		return false
+	}
+	return isWriterInterface(sig.Params().At(0).Type())
 }
 
 func isWriterInterface(t types.Type) bool {
@@ -1008,14 +1187,28 @@ func isWriterInterface(t types.Type) bool {
 		return false
 	}
 	sig, ok := fn.Type().(*types.Signature)
-	if !ok || sig.Params() == nil || sig.Params().Len() != 1 || sig.Results() == nil || sig.Results().Len() != 2 {
+	if !ok {
 		return false
 	}
-	p0 := sig.Params().At(0).Type()
+	return writerSigShape(sig)
+}
+
+func writerSigShape(sig *types.Signature) bool {
+	if sig.Params() == nil || sig.Params().Len() != 1 {
+		return false
+	}
+	if sig.Results() == nil || sig.Results().Len() != 2 {
+		return false
+	}
+	return writerParamIsBytes(sig.Params().At(0).Type()) && writerResultsShape(sig)
+}
+
+func writerParamIsBytes(p0 types.Type) bool {
 	slice, ok := types.Unalias(p0).(*types.Slice)
-	if !ok || !types.Identical(slice.Elem(), types.Typ[types.Uint8]) {
-		return false
-	}
+	return ok && types.Identical(slice.Elem(), types.Typ[types.Uint8])
+}
+
+func writerResultsShape(sig *types.Signature) bool {
 	return types.Identical(sig.Results().At(0).Type(), types.Typ[types.Int]) && isError(sig.Results().At(1).Type())
 }
 
@@ -1026,7 +1219,7 @@ func hasUsedCloseSync(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bo
 		}
 		call := inspection.As[*ast.CallExpr](cur.Node())
 		sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-		if !ok || (sel.Sel.Name != "Close" && sel.Sel.Name != "Sync") {
+		if !ok || (sel.Sel.Name != closeMethodName && sel.Sel.Name != "Sync") {
 			continue
 		}
 		id, ok := ast.Unparen(sel.X).(*ast.Ident)
@@ -1063,53 +1256,73 @@ func checkVerdictLists(pass *analysis.Pass, fn inspector.Cursor, set map[*types.
 		if owner(cur) != fn {
 			continue
 		}
-		var list []ast.Stmt
-		switch n := cur.Node().(type) {
-		case *ast.BlockStmt:
-			list = n.List
-		case *ast.CaseClause:
-			list = n.Body
-		case *ast.CommClause:
-			list = n.Body
-		}
+		list := verdictListOf(cur)
 		if len(list) < 2 {
 			continue
 		}
-		for i := range len(list) - 1 {
-			es, ok := list[i].(*ast.ExprStmt)
-			if !ok {
-				continue
-			}
-			call := callOf(es.X)
-			if call == nil || !isRealCall(pass.TypesInfo, call) {
-				continue
-			}
-			if isCloseMethod(call) {
-				continue
-			}
-			if !dropsError(pass.TypesInfo, call) {
-				continue
-			}
-			if reported[call.Pos()] {
-				continue
-			}
-			if isExempt(pass, call, set, hash) {
-				continue
-			}
-			ret, ok := list[i+1].(*ast.ReturnStmt)
-			if !ok || len(ret.Results) == 0 {
-				continue
-			}
-			if !isNilIdent(pass.TypesInfo, ret.Results[len(ret.Results)-1]) {
-				continue
-			}
-			callee := types.ExprString(call.Fun)
-			pass.Reportf(call.Pos(), "the error of %s is dropped and the next statement returns nil, so the caller is told this step succeeded: return the error, or write _ = %s(...) to state that the step is best effort", callee, callee)
-		}
+		checkVerdictPairs(pass, list, set, hash, reported)
 	}
+}
+
+func verdictListOf(cur inspector.Cursor) []ast.Stmt {
+	switch n := cur.Node().(type) {
+	case *ast.BlockStmt:
+		return n.List
+	case *ast.CaseClause:
+		return n.Body
+	case *ast.CommClause:
+		return n.Body
+	}
+	return nil
+}
+
+func checkVerdictPairs(pass *analysis.Pass, list []ast.Stmt, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
+	for i := range len(list) - 1 {
+		call, ok := verdictPairCall(pass, list, i, set, hash, reported)
+		if !ok {
+			continue
+		}
+		callee := types.ExprString(call.Fun)
+		pass.Reportf(call.Pos(), "the error of %s is dropped and the next statement returns nil, so the caller is told this step succeeded: return the error, or write _ = %s(...) to state that the step is best effort", callee, callee)
+	}
+}
+
+func verdictPairCall(pass *analysis.Pass, list []ast.Stmt, i int, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) (*ast.CallExpr, bool) {
+	es, ok := list[i].(*ast.ExprStmt)
+	if !ok {
+		return nil, false
+	}
+	call := callOf(es.X)
+	if call == nil || !isRealCall(pass.TypesInfo, call) {
+		return nil, false
+	}
+	if isCloseMethod(call) {
+		return nil, false
+	}
+	if !dropsError(pass.TypesInfo, call) {
+		return nil, false
+	}
+	if reported[call.Pos()] {
+		return nil, false
+	}
+	if isExempt(pass, call, set, hash) {
+		return nil, false
+	}
+	if !verdictNextReturnsNil(pass, list[i+1]) {
+		return nil, false
+	}
+	return call, true
+}
+
+func verdictNextReturnsNil(pass *analysis.Pass, stmt ast.Stmt) bool {
+	ret, ok := stmt.(*ast.ReturnStmt)
+	if !ok || len(ret.Results) == 0 {
+		return false
+	}
+	return isNilIdent(pass.TypesInfo, ret.Results[len(ret.Results)-1])
 }
 
 func isCloseMethod(call *ast.CallExpr) bool {
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "Close"
+	return ok && sel.Sel.Name == closeMethodName
 }

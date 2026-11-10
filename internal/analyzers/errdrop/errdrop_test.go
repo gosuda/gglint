@@ -11,5 +11,5 @@ import (
 
 func TestAnalyzer(t *testing.T) {
 	t.Parallel()
-	analyzertest.RunIgnoringFacts(t, analysistest.TestData(), errdrop.Analyzer, "errdrop")
+	analyzertest.RunIgnoringFacts(t, analysistest.TestData(), errdrop.Analyzer, "errdrop", "errdrop/dep")
 }
