@@ -396,10 +396,44 @@ func AppendclobberReportedMethodRecv() int {
 	return a.Sum()
 }
 
+func useSlicePtr(p *[]int) {}
+
 func AppendclobberReportedAddrTaken() int {
 	a := []int{1, 2, 3, 4}
 	b := a[:2]
 	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
-	p := &a
-	return (*p)[2]
+	useSlicePtr(&a)
+	return 0
+}
+
+func AppendclobberSilentAddrLocal() ([]int, int) {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for _, x := range xs {
+		if x%2 == 0 {
+			out = append(out, x)
+		}
+	}
+	p := &xs
+	return out, len(*p)
+}
+
+func AppendclobberReportedNamedResult() (r []int) {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	r = a
+	return
+}
+
+func AppendclobberReportedCaptured() {
+	var keep []int
+	f := func() {
+		a := []int{1, 2, 3, 4}
+		b := a[:2]
+		b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+		keep = a
+	}
+	_ = f
+	_ = keep
 }

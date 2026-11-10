@@ -31,13 +31,14 @@ func checkAppendclobber(pass *analysis.Pass, fn ast.Node) {
 	if len(defs) == 0 {
 		return
 	}
+	scope := newAppendScope(pass, fn, defs)
 	silent := map[*types.Var]bool{}
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		if st, ok := n.(*ast.AssignStmt); ok {
-			checkAppendAssign(pass, fn, st, defs, silent)
+			checkAppendAssign(scope, st, defs, silent)
 		}
 		return true
 	})
@@ -62,7 +63,7 @@ func addSliceAssign(info *types.Info, fn ast.Node, st *ast.AssignStmt, defs map[
 		return
 	}
 	b, ok := identVar(info, st.Lhs[0])
-	if !ok || !flow.IsLocal(info, fn, b) {
+	if !ok || !isBodyLocal(fn, b) {
 		return
 	}
 	addSliceExpr(info, fn, st.Rhs[0], b, st.Pos(), defs)
@@ -74,7 +75,7 @@ func addSliceExpr(info *types.Info, fn ast.Node, e ast.Expr, b *types.Var, pos t
 		return
 	}
 	a, ok := identVar(info, s.X)
-	if !ok || !flow.IsLocal(info, fn, a) {
+	if !ok || !isBodyLocal(fn, a) {
 		return
 	}
 	if isLenOf(info, s.High, a) {
@@ -83,6 +84,17 @@ func addSliceExpr(info *types.Info, fn ast.Node, e ast.Expr, b *types.Var, pos t
 	high, highKnown := constInt(info, s.High)
 	zeroLow := sliceLowZero(info, s.Low)
 	defs[b] = sliceDef{a: a, pos: pos, high: high, highKnown: highKnown, zeroLow: zeroLow}
+}
+
+func isBodyLocal(fn ast.Node, v *types.Var) bool {
+	if v == nil || !v.Pos().IsValid() {
+		return false
+	}
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	return body.Pos() <= v.Pos() && v.Pos() < body.End()
 }
 
 func sliceLowZero(info *types.Info, low ast.Expr) bool {
@@ -122,41 +134,50 @@ func isLenOf(info *types.Info, e ast.Expr, target *types.Var) bool {
 	return ok && v == target
 }
 
-func checkAppendAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, defs map[*types.Var]sliceDef, silent map[*types.Var]bool) {
-	b, def, call, ok := appendDef(pass.TypesInfo, st, defs)
+func checkAppendAssign(scope *appendScope, st *ast.AssignStmt, defs map[*types.Var]sliceDef, silent map[*types.Var]bool) {
+	b, def, call, ok := appendDef(scope.info, st, defs)
 	if !ok {
 		return
 	}
 	if !def.highKnown || call.Ellipsis.IsValid() {
 		return
 	}
-	if inPlaceCached(pass, fn, b, def, silent) {
+	if inPlaceCached(scope, b, def, silent) {
 		return
 	}
-	if assignedBetween(pass.TypesInfo, fn, b, def.pos, st.Pos()) {
+	if assignedCached(scope, b, def.pos, st.Pos()) {
 		return
 	}
-	if assignedBetween(pass.TypesInfo, fn, def.a, def.pos, st.Pos()) {
+	if assignedCached(scope, def.a, def.pos, st.Pos()) {
 		return
 	}
-	if tryKnownCap(pass, fn, st, b, def, call) {
+	if tryKnownCap(scope, st, b, def, call) {
 		return
 	}
-	tryUnknownCap(pass, fn, st, b, def, call)
+	tryUnknownCap(scope, st, b, def, call)
 }
 
-func inPlaceCached(pass *analysis.Pass, fn ast.Node, b *types.Var, def sliceDef, silent map[*types.Var]bool) bool {
+func inPlaceCached(scope *appendScope, b *types.Var, def sliceDef, silent map[*types.Var]bool) bool {
 	if v, ok := silent[b]; ok {
 		return v
 	}
-	v := inPlaceSilent(pass, fn, b, def)
+	v := inPlaceSilent(scope, b, def)
 	silent[b] = v
 	return v
 }
 
-func tryKnownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) bool {
+func assignedCached(s *appendScope, v *types.Var, from, to token.Pos) bool {
+	for _, st := range s.assigns[v] {
+		if st.Pos() > from && st.Pos() < to {
+			return true
+		}
+	}
+	return false
+}
+
+func tryKnownCap(scope *appendScope, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) bool {
 	need := def.high + len(call.Args) - 1
-	caps := reachingCaps(pass, fn, def.a, def.pos)
+	caps := reachingCaps(scope, def.a, def.pos)
 	if len(caps) == 0 {
 		return false
 	}
@@ -167,10 +188,10 @@ func tryKnownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.
 		if c.cap < need {
 			continue
 		}
-		if !knownCapProven(pass, fn, def, st, len(call.Args)-1) {
+		if !knownCapProven(scope, def, st, len(call.Args)-1) {
 			return true
 		}
-		reportClobber(pass, call, b, def.a)
+		reportClobber(scope.pass, call, b, def.a)
 		return true
 	}
 	return true
@@ -185,15 +206,8 @@ func allKnown(caps []capResult) bool {
 	return true
 }
 
-func knownCapProven(pass *analysis.Pass, fn ast.Node, def sliceDef, st *ast.AssignStmt, appended int) bool {
-	return overwrittenReadAfter(pass, fn, def.a, readSite{from: st, after: st.End(), bound: def.high, end: clobberEnd(fn, st, def.high, appended)})
-}
-
-func clobberEnd(fn ast.Node, st *ast.AssignStmt, bound, appended int) int {
-	if enclosingLoop(fn, st) != nil {
-		return 1 << 30
-	}
-	return bound + appended
+func knownCapProven(scope *appendScope, def sliceDef, st *ast.AssignStmt, appended int) bool {
+	return overwrittenReadAfter(scope, def.a, readSite{from: st, after: st.End(), bound: def.high, end: clobberEnd(scope, st, def.high, appended)})
 }
 
 type capResult struct {
@@ -201,64 +215,36 @@ type capResult struct {
 	known bool
 }
 
-func reachingCaps(pass *analysis.Pass, fn ast.Node, a *types.Var, slicePos token.Pos) []capResult {
-	g := flow.NewGraph(pass, fn)
-	if g == nil {
+func reachingCaps(scope *appendScope, a *types.Var, slicePos token.Pos) []capResult {
+	if scope.graph == nil {
 		return nil
 	}
-	to := findAssignAt(fn, slicePos)
-	if to == nil {
+	to, ok := scope.atPos[slicePos]
+	if !ok {
 		return nil
 	}
 	var out []capResult
-	for _, from := range collectAssignsTo(pass.TypesInfo, fn, a) {
-		if !reachesForCap(g, pass.TypesInfo, a, from, to) {
+	for _, from := range scope.assigns[a] {
+		if !reachesForCapCached(scope, a, from, to) {
 			continue
 		}
-		c, ok := capOfAssignment(pass.TypesInfo, from, a)
+		c, ok := capOfAssignment(scope.info, from, a)
 		out = append(out, capResult{cap: c, known: ok})
 	}
 	return out
 }
 
-func findAssignAt(fn ast.Node, pos token.Pos) ast.Node {
-	var found ast.Node
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if found != nil {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		if st, ok := n.(*ast.AssignStmt); ok && st.Pos() == pos {
-			found = st
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func collectAssignsTo(info *types.Info, fn ast.Node, a *types.Var) []*ast.AssignStmt {
-	var out []*ast.AssignStmt
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		if st, ok := n.(*ast.AssignStmt); ok && assignsVar(info, st, a) {
-			out = append(out, st)
-		}
-		return true
-	})
-	return out
-}
-
-func reachesForCap(g *flow.Graph, info *types.Info, a *types.Var, from, to ast.Node) bool {
+func reachesForCapCached(scope *appendScope, a *types.Var, from, to ast.Node) bool {
+	kills := scope.assigns[a]
 	avoid := func(n ast.Node) bool {
-		st, ok := n.(*ast.AssignStmt)
-		return ok && assignsVar(info, st, a)
+		for _, k := range kills {
+			if n == k {
+				return true
+			}
+		}
+		return false
 	}
-	return g.Reaches(from, to, avoid)
+	return scope.graph.Reaches(from, to, avoid)
 }
 
 func capOfAssignment(info *types.Info, st *ast.AssignStmt, a *types.Var) (int, bool) {
@@ -278,20 +264,20 @@ func capOfAssignment(info *types.Info, st *ast.AssignStmt, a *types.Var) (int, b
 	return threeIndexCap(info, st, a)
 }
 
-func tryUnknownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) {
+func tryUnknownCap(scope *appendScope, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) {
 	n := len(call.Args) - 1
-	end := clobberEnd(fn, st, def.high, n)
-	if leng, ok := provenLen(pass.TypesInfo, fn, def.a, def.pos); ok && def.high+n <= leng {
-		if overwrittenReadAfter(pass, fn, def.a, readSite{from: st, after: st.End(), bound: def.high, end: end}) {
-			reportClobber(pass, call, b, def.a)
+	end := clobberEnd(scope, st, def.high, n)
+	if leng, ok := provenLen(scope.info, scope.fn, def.a, def.pos); ok && def.high+n <= leng {
+		if overwrittenReadAfter(scope, def.a, readSite{from: st, after: st.End(), bound: def.high, end: end}) {
+			reportClobber(scope.pass, call, b, def.a)
 		}
 		return
 	}
-	if !hasCoveringIndex(pass, fn, def.a, st, def.high+n-1) {
+	if !hasCoveringIndex(scope.pass, scope.fn, def.a, st, def.high+n-1) {
 		return
 	}
-	if overwrittenReadAfter(pass, fn, def.a, readSite{from: st, after: st.End(), bound: def.high, end: end}) {
-		reportClobber(pass, call, b, def.a)
+	if overwrittenReadAfter(scope, def.a, readSite{from: st, after: st.End(), bound: def.high, end: end}) {
+		reportClobber(scope.pass, call, b, def.a)
 	}
 }
 
@@ -549,44 +535,16 @@ func isAppendTo(info *types.Info, st *ast.AssignStmt, b *types.Var) bool {
 	return ok && v == b
 }
 
-func singleInReadingLoop(info *types.Info, fn ast.Node, st *ast.AssignStmt, a *types.Var) bool {
-	call, ok := isAppend(info, st.Rhs[0])
+func singleInReadingLoop(scope *appendScope, st *ast.AssignStmt, a *types.Var) bool {
+	call, ok := isAppend(scope.info, st.Rhs[0])
 	if !ok || call.Ellipsis.IsValid() || len(call.Args) != 2 {
 		return false
 	}
-	loop := enclosingLoop(fn, st)
+	loop := enclosingLoopCached(scope, st)
 	if loop == nil {
 		return false
 	}
-	return readsBefore(info, loop, st, a)
-}
-
-func enclosingLoop(fn ast.Node, target *ast.AssignStmt) ast.Node {
-	var best ast.Node
-	bestSize := token.Pos(1 << 30)
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		var body *ast.BlockStmt
-		switch t := n.(type) {
-		case *ast.ForStmt:
-			body = t.Body
-		case *ast.RangeStmt:
-			body = t.Body
-		default:
-			return true
-		}
-		if body == nil || target.Pos() <= body.Pos() || target.End() > body.End() {
-			return true
-		}
-		if sz := body.End() - body.Pos(); sz < bestSize {
-			bestSize = sz
-			best = n
-		}
-		return true
-	})
-	return best
+	return readsBefore(scope.info, loop, st, a)
 }
 
 func readsBefore(info *types.Info, loop ast.Node, target *ast.AssignStmt, a *types.Var) bool {
@@ -785,35 +743,6 @@ func appendTarget(info *types.Info, st *ast.AssignStmt, call *ast.CallExpr) (*ty
 		return nil, false
 	}
 	return b, true
-}
-
-func assignedBetween(info *types.Info, fn ast.Node, v *types.Var, from, to token.Pos) bool {
-	hit := false
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if hit {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		if st, ok := n.(*ast.AssignStmt); ok {
-			hit = assignHits(info, st, v, from, to)
-		}
-		return !hit
-	})
-	return hit
-}
-
-func assignHits(info *types.Info, st *ast.AssignStmt, v *types.Var, from, to token.Pos) bool {
-	if st.Pos() <= from || st.Pos() >= to {
-		return false
-	}
-	for _, lhs := range st.Lhs {
-		if isVarTarget(info, lhs, v) {
-			return true
-		}
-	}
-	return false
 }
 
 func isVarTarget(info *types.Info, e ast.Expr, v *types.Var) bool {

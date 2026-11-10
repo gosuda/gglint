@@ -1,0 +1,356 @@
+package alias
+
+import (
+	"go/ast"
+	"go/token"
+	"go/types"
+
+	"golang.org/x/tools/go/analysis"
+
+	"github.com/gosuda/gglint/internal/flow"
+)
+
+type appendScope struct {
+	pass        *analysis.Pass
+	fn          ast.Node
+	info        *types.Info
+	graph       *flow.Graph
+	assigns     map[*types.Var][]*ast.AssignStmt
+	atPos       map[token.Pos]ast.Node
+	copyDests   map[ast.Node]bool
+	clearSlices map[ast.Node]bool
+	plainStores map[*types.Var]map[*ast.Ident]bool
+	clearArgs   map[*types.Var]map[*ast.Ident]bool
+	indexReads  map[*types.Var][]*ast.IndexExpr
+	sliceReads  map[*types.Var][]*ast.SliceExpr
+	wholeReads  map[*types.Var][]*ast.Ident
+	loops       []loopSpan
+}
+
+type loopSpan struct {
+	node    ast.Node
+	bodyPos token.Pos
+	bodyEnd token.Pos
+	size    token.Pos
+}
+
+func newAppendScope(pass *analysis.Pass, fn ast.Node, defs map[*types.Var]sliceDef) *appendScope {
+	info := pass.TypesInfo
+	s := &appendScope{
+		pass:        pass,
+		fn:          fn,
+		info:        info,
+		graph:       flow.NewGraph(pass, fn),
+		assigns:     map[*types.Var][]*ast.AssignStmt{},
+		atPos:       map[token.Pos]ast.Node{},
+		plainStores: map[*types.Var]map[*ast.Ident]bool{},
+		clearArgs:   map[*types.Var]map[*ast.Ident]bool{},
+	}
+	collectAssignsAndLoops(s, info, fn)
+	s.copyDests = copyDestNodes(info, fn)
+	s.clearSlices = clearSliceNodes(info, fn)
+	seen := map[*types.Var]bool{}
+	for _, d := range defs {
+		if seen[d.a] {
+			continue
+		}
+		seen[d.a] = true
+		s.plainStores[d.a] = plainStoreBases(info, fn, d.a)
+		s.clearArgs[d.a] = clearArgIdents(info, fn, d.a)
+	}
+	s.indexReads = map[*types.Var][]*ast.IndexExpr{}
+	s.sliceReads = map[*types.Var][]*ast.SliceExpr{}
+	s.wholeReads = map[*types.Var][]*ast.Ident{}
+	collectScopeReads(s, seen)
+	return s
+}
+
+func collectAssignsAndLoops(s *appendScope, info *types.Info, fn ast.Node) {
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		collectLoopSpan(s, n)
+		st, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		s.atPos[st.Pos()] = st
+		for _, lhs := range st.Lhs {
+			id, ok := ast.Unparen(lhs).(*ast.Ident)
+			if !ok {
+				continue
+			}
+			if v, ok := varOf(info, id); ok {
+				s.assigns[v] = append(s.assigns[v], st)
+			}
+		}
+		return true
+	})
+}
+
+func collectLoopSpan(s *appendScope, n ast.Node) {
+	switch t := n.(type) {
+	case *ast.ForStmt:
+		if t.Body != nil {
+			s.loops = append(s.loops, loopSpan{node: n, bodyPos: t.Body.Pos(), bodyEnd: t.Body.End(), size: t.Body.End() - t.Body.Pos()})
+		}
+	case *ast.RangeStmt:
+		if t.Body != nil {
+			s.loops = append(s.loops, loopSpan{node: n, bodyPos: t.Body.Pos(), bodyEnd: t.Body.End(), size: t.Body.End() - t.Body.Pos()})
+		}
+	}
+}
+
+func collectScopeReads(s *appendScope, wanted map[*types.Var]bool) {
+	ast.Inspect(flow.Body(s.fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		switch t := n.(type) {
+		case *ast.IndexExpr:
+			collectScopeIndex(s, wanted, t)
+		case *ast.SliceExpr:
+			collectScopeSlice(s, wanted, t)
+		default:
+			collectScopeWhole(s, wanted, n)
+		}
+		return true
+	})
+}
+
+func collectScopeIndex(s *appendScope, wanted map[*types.Var]bool, t *ast.IndexExpr) {
+	v, ok := identVar(s.info, t.X)
+	if !ok || !wanted[v] {
+		return
+	}
+	id, ok := ast.Unparen(t.X).(*ast.Ident)
+	if !ok || s.plainStores[v][id] {
+		return
+	}
+	s.indexReads[v] = append(s.indexReads[v], t)
+}
+
+func collectScopeSlice(s *appendScope, wanted map[*types.Var]bool, t *ast.SliceExpr) {
+	v, ok := identVar(s.info, t.X)
+	if !ok || !wanted[v] {
+		return
+	}
+	id, ok := ast.Unparen(t.X).(*ast.Ident)
+	if !ok || s.clearArgs[v][id] {
+		return
+	}
+	if s.copyDests[ast.Unparen(t)] || s.clearSlices[ast.Unparen(t)] {
+		return
+	}
+	s.sliceReads[v] = append(s.sliceReads[v], t)
+}
+
+func collectScopeWhole(s *appendScope, wanted map[*types.Var]bool, n ast.Node) {
+	switch t := n.(type) {
+	case *ast.CallExpr:
+		collectScopeCall(s, wanted, t)
+	case *ast.ReturnStmt:
+		collectScopeReturn(s, wanted, t)
+	case *ast.RangeStmt:
+		collectScopeRange(s, wanted, t)
+	case *ast.AssignStmt:
+		collectScopeAssign(s, wanted, t)
+	case *ast.SendStmt:
+		collectScopeSend(s, wanted, t)
+	case *ast.CompositeLit:
+		collectScopeComposite(s, wanted, t)
+	case *ast.ValueSpec:
+		collectScopeValue(s, wanted, t)
+	}
+}
+
+func collectScopeCall(s *appendScope, wanted map[*types.Var]bool, call *ast.CallExpr) {
+	if isLenCapCall(s.info, call) || isClearCall(s.info, call) {
+		return
+	}
+	if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
+		if v, id, ok := scopeWholeIdent(s, wanted, sel.X); ok {
+			s.wholeReads[v] = append(s.wholeReads[v], id)
+		}
+	}
+	skip := isCopyCall(s.info, call)
+	for i, arg := range call.Args {
+		if skip && i == 0 {
+			continue
+		}
+		if v, id, ok := scopeWholeIdent(s, wanted, arg); ok {
+			s.wholeReads[v] = append(s.wholeReads[v], id)
+		}
+	}
+}
+
+func collectScopeAssign(s *appendScope, wanted map[*types.Var]bool, st *ast.AssignStmt) {
+	if !scopeStoredOutside(s, st.Lhs) {
+		return
+	}
+	for _, rhs := range st.Rhs {
+		if v, id, ok := scopeWholeIdent(s, wanted, rhs); ok {
+			s.wholeReads[v] = append(s.wholeReads[v], id)
+		}
+	}
+}
+
+func collectScopeValue(s *appendScope, wanted map[*types.Var]bool, spec *ast.ValueSpec) {
+	if !scopeNamesOutside(s, spec.Names) {
+		return
+	}
+	for _, val := range spec.Values {
+		if v, id, ok := scopeWholeIdent(s, wanted, val); ok {
+			s.wholeReads[v] = append(s.wholeReads[v], id)
+		}
+	}
+}
+
+func collectScopeReturn(s *appendScope, wanted map[*types.Var]bool, t *ast.ReturnStmt) {
+	for _, res := range t.Results {
+		if v, id, ok := scopeWholeIdent(s, wanted, res); ok {
+			s.wholeReads[v] = append(s.wholeReads[v], id)
+		}
+	}
+}
+
+func collectScopeRange(s *appendScope, wanted map[*types.Var]bool, t *ast.RangeStmt) {
+	if t.Value == nil {
+		return
+	}
+	if id, ok := ast.Unparen(t.Value).(*ast.Ident); ok && id.Name == "_" {
+		return
+	}
+	if v, id, ok := scopeWholeIdent(s, wanted, t.X); ok {
+		s.wholeReads[v] = append(s.wholeReads[v], id)
+	}
+}
+
+func collectScopeSend(s *appendScope, wanted map[*types.Var]bool, t *ast.SendStmt) {
+	if v, id, ok := scopeWholeIdent(s, wanted, t.Value); ok {
+		s.wholeReads[v] = append(s.wholeReads[v], id)
+	}
+}
+
+func collectScopeComposite(s *appendScope, wanted map[*types.Var]bool, t *ast.CompositeLit) {
+	for _, elt := range t.Elts {
+		if v, id, ok := scopeWholeIdent(s, wanted, elt); ok {
+			s.wholeReads[v] = append(s.wholeReads[v], id)
+			continue
+		}
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if v, id, ok := scopeWholeIdent(s, wanted, kv.Value); ok {
+				s.wholeReads[v] = append(s.wholeReads[v], id)
+			}
+		}
+	}
+}
+
+func scopeWholeIdent(s *appendScope, wanted map[*types.Var]bool, e ast.Expr) (*types.Var, *ast.Ident, bool) {
+	e = ast.Unparen(e)
+	if u, ok := e.(*ast.UnaryExpr); ok {
+		if u.Op != token.AND {
+			return nil, nil, false
+		}
+		e = ast.Unparen(u.X)
+	}
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return nil, nil, false
+	}
+	v, ok := varOf(s.info, id)
+	if !ok || !wanted[v] {
+		return nil, nil, false
+	}
+	return v, id, true
+}
+
+func scopeStoredOutside(s *appendScope, lhs []ast.Expr) bool {
+	for _, e := range lhs {
+		id, ok := ast.Unparen(e).(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if id.Name == "_" {
+			continue
+		}
+		v, ok := varOf(s.info, id)
+		if !ok || !scopeLocalAlias(s, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func scopeNamesOutside(s *appendScope, names []*ast.Ident) bool {
+	for _, id := range names {
+		if id.Name == "_" {
+			continue
+		}
+		v, ok := varOf(s.info, id)
+		if !ok || !scopeLocalAlias(s, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func scopeLocalAlias(s *appendScope, v *types.Var) bool {
+	if v == nil {
+		return false
+	}
+	if isParam(s.info, s.fn, v) {
+		return true
+	}
+	body := flow.Body(s.fn)
+	if body == nil || !v.Pos().IsValid() {
+		return false
+	}
+	return body.Pos() <= v.Pos() && v.Pos() < body.End()
+}
+
+func isParam(info *types.Info, fn ast.Node, v *types.Var) bool {
+	var ft *ast.FuncType
+	switch fn := fn.(type) {
+	case *ast.FuncDecl:
+		if fn.Type != nil {
+			ft = fn.Type
+		}
+	case *ast.FuncLit:
+		ft = fn.Type
+	}
+	if ft == nil || ft.Params == nil {
+		return false
+	}
+	for _, field := range ft.Params.List {
+		for _, id := range field.Names {
+			if info.Defs[id] == v {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func enclosingLoopCached(s *appendScope, target *ast.AssignStmt) ast.Node {
+	var best ast.Node
+	bestSize := token.Pos(1 << 30)
+	for _, l := range s.loops {
+		if target.Pos() <= l.bodyPos || target.End() > l.bodyEnd {
+			continue
+		}
+		if l.size < bestSize {
+			bestSize = l.size
+			best = l.node
+		}
+	}
+	return best
+}
+
+func clobberEnd(scope *appendScope, st *ast.AssignStmt, bound, appended int) int {
+	if enclosingLoopCached(scope, st) != nil {
+		return 1 << 30
+	}
+	return bound + appended
+}

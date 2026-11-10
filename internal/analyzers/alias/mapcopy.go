@@ -25,8 +25,21 @@ type mapDef struct {
 }
 
 func checkMapcopy(pass *analysis.Pass, fn ast.Node) {
-	for _, d := range collectMapDefs(pass.TypesInfo, fn) {
-		checkMapWrites(pass, fn, d)
+	defs := collectMapDefs(pass.TypesInfo, fn)
+	if len(defs) == 0 {
+		return
+	}
+	used := collectWholeUses(pass.TypesInfo, fn)
+	writes := collectFieldWrites(pass.TypesInfo, fn)
+	for _, d := range defs {
+		if used[d.v] {
+			continue
+		}
+		for _, st := range writes[d.v] {
+			if st.Pos() > d.pos {
+				reportMapCopy(pass, st, d)
+			}
+		}
 	}
 }
 
@@ -89,58 +102,32 @@ func mapIndex(info *types.Info, e ast.Expr) (string, bool) {
 	return types.ExprString(x), true
 }
 
-func checkMapWrites(pass *analysis.Pass, fn ast.Node, d mapDef) {
-	if copiedElsewhere(pass.TypesInfo, fn, d) {
-		return
-	}
+func collectWholeUses(info *types.Info, fn ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		switch n := n.(type) {
+		case *ast.ReturnStmt:
+			for _, r := range n.Results {
+				markWholeUses(info, r, out)
+			}
+		case *ast.CallExpr:
+			for _, a := range n.Args {
+				markWholeUses(info, a, out)
+			}
 		case *ast.AssignStmt:
-			checkMapAssign(pass, n, d)
-		case *ast.IncDecStmt:
-			checkMapIncDec(pass, n, d)
+			for _, rhs := range n.Rhs {
+				markWholeUses(info, rhs, out)
+			}
 		}
 		return true
 	})
+	return out
 }
 
-func copiedElsewhere(info *types.Info, fn ast.Node, d mapDef) bool {
-	body := flow.Body(fn)
-	if body == nil {
-		return false
-	}
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		switch n := n.(type) {
-		case *ast.ReturnStmt:
-			found = resultsUseVar(info, n, d.v)
-		case *ast.CallExpr:
-			found = argsUseVar(info, n, d.v)
-		case *ast.AssignStmt:
-			found = rhsUsesVar(info, n, d)
-		}
-		return !found
-	})
-	return found
-}
-
-func resultsUseVar(info *types.Info, st *ast.ReturnStmt, v *types.Var) bool {
-	for _, r := range st.Results {
-		if exprUsesVar(info, r, v) {
-			return true
-		}
-	}
-	return false
-}
-
-func exprUsesVar(info *types.Info, e ast.Expr, v *types.Var) bool {
-	found := false
+func markWholeUses(info *types.Info, e ast.Expr, out map[*types.Var]bool) {
 	var stack []ast.Node
 	ast.Inspect(e, func(n ast.Node) bool {
 		if n == nil {
@@ -148,15 +135,55 @@ func exprUsesVar(info *types.Info, e ast.Expr, v *types.Var) bool {
 			return true
 		}
 		if id, ok := n.(*ast.Ident); ok {
-			if info.Uses[id] == v && !isFieldBase(stack, id) {
-				found = true
-				return false
+			if v, ok := info.Uses[id].(*types.Var); ok && !isFieldBase(stack, id) {
+				out[v] = true
 			}
 		}
 		stack = append(stack, n)
 		return true
 	})
-	return found
+}
+
+func collectFieldWrites(info *types.Info, fn ast.Node) map[*types.Var][]ast.Stmt {
+	out := map[*types.Var][]ast.Stmt{}
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			if v, ok := assignFieldRoot(info, n); ok {
+				out[v] = append(out[v], n)
+			}
+		case *ast.IncDecStmt:
+			if v, ok := fieldRoot(info, n.X); ok {
+				out[v] = append(out[v], n)
+			}
+		}
+		return true
+	})
+	return out
+}
+
+func assignFieldRoot(info *types.Info, st *ast.AssignStmt) (*types.Var, bool) {
+	for _, lhs := range st.Lhs {
+		if v, ok := fieldRoot(info, lhs); ok {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+func fieldRoot(info *types.Info, e ast.Expr) (*types.Var, bool) {
+	if passesPointer(info, e) {
+		return nil, false
+	}
+	k, ok := flow.KeyOf(info, e)
+	if !ok || k.Path == "" {
+		return nil, false
+	}
+	v, ok := k.Root.(*types.Var)
+	return v, ok
 }
 
 func isFieldBase(stack []ast.Node, id *ast.Ident) bool {
@@ -176,56 +203,6 @@ func isFieldBase(stack []ast.Node, id *ast.Ident) bool {
 	}
 	sel, ok := rest[len(rest)-1].(*ast.SelectorExpr)
 	return ok && sel.X == child
-}
-
-func argsUseVar(info *types.Info, call *ast.CallExpr, v *types.Var) bool {
-	for _, a := range call.Args {
-		if exprUsesVar(info, a, v) {
-			return true
-		}
-	}
-	return false
-}
-
-func rhsUsesVar(info *types.Info, st *ast.AssignStmt, d mapDef) bool {
-	if st == d.stmt {
-		return false
-	}
-	for _, rhs := range st.Rhs {
-		if exprUsesVar(info, rhs, d.v) {
-			return true
-		}
-	}
-	return false
-}
-
-func checkMapAssign(pass *analysis.Pass, st *ast.AssignStmt, d mapDef) {
-	if st.Pos() <= d.pos {
-		return
-	}
-	for _, lhs := range st.Lhs {
-		if fieldOf(pass.TypesInfo, lhs, d.v) {
-			reportMapCopy(pass, st, d)
-			return
-		}
-	}
-}
-
-func checkMapIncDec(pass *analysis.Pass, st *ast.IncDecStmt, d mapDef) {
-	if st.Pos() <= d.pos {
-		return
-	}
-	if fieldOf(pass.TypesInfo, st.X, d.v) {
-		reportMapCopy(pass, st, d)
-	}
-}
-
-func fieldOf(info *types.Info, e ast.Expr, v *types.Var) bool {
-	if passesPointer(info, e) {
-		return false
-	}
-	k, ok := flow.KeyOf(info, e)
-	return ok && k.Root == v && k.Path != ""
 }
 
 func reportMapCopy(pass *analysis.Pass, st ast.Stmt, d mapDef) {
