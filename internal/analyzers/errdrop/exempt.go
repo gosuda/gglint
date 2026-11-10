@@ -162,18 +162,21 @@ func isExempt(pass *analysis.Pass, call *ast.CallExpr, set map[*types.Func]bool,
 	if !ok || fn == nil {
 		return false
 	}
-	return isBenignStdoutWrite(pass, info, fn, call, set)
+	if isBenignStdoutWrite(pass, info, fn, call, set, hash) {
+		return true
+	}
+	return isBenignCopy(pass, info, fn, call, set, hash)
 }
 
-func isBenignStdoutWrite(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, set map[*types.Func]bool) bool {
+func isBenignStdoutWrite(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
 	switch fn.FullName() {
 	case "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "io.WriteString":
-		return firstArgHasWriteFact(pass, info, call, set)
+		return firstArgHasWriteFact(pass, info, call, set, hash)
 	}
 	return false
 }
 
-func firstArgHasWriteFact(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, set map[*types.Func]bool) bool {
+func firstArgHasWriteFact(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
 	if len(call.Args) == 0 {
 		return false
 	}
@@ -182,9 +185,52 @@ func firstArgHasWriteFact(pass *analysis.Pass, info *types.Info, call *ast.CallE
 		return false
 	}
 	if _, ok := types.Unalias(t0).Underlying().(*types.Interface); ok {
-		return false
+		return hash != nil && types.Implements(t0, hash)
 	}
 	return writeHasFact(pass, t0, set)
+}
+
+func isBenignCopy(pass *analysis.Pass, info *types.Info, fn *types.Func, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
+	switch fn.FullName() {
+	case "io.Copy", "io.CopyN":
+		return copyNeverFails(pass, info, call, set, hash)
+	}
+	return false
+}
+
+func copyNeverFails(pass *analysis.Pass, info *types.Info, call *ast.CallExpr, set map[*types.Func]bool, hash *types.Interface) bool {
+	if len(call.Args) < 2 {
+		return false
+	}
+	dst := info.TypeOf(call.Args[0])
+	src := info.TypeOf(call.Args[1])
+	if dst == nil || src == nil || !isInMemoryReader(src) {
+		return false
+	}
+	return writeHasFact(pass, dst, set) || typeIsHash(pass, dst, hash)
+}
+
+func isInMemoryReader(t types.Type) bool {
+	ptr, ok := types.Unalias(t).(*types.Pointer)
+	if !ok {
+		return false
+	}
+	named, ok := types.Unalias(ptr.Elem()).(*types.Named)
+	if !ok || named.Obj().Pkg() == nil {
+		return false
+	}
+	switch named.Obj().Pkg().Path() + "." + named.Obj().Name() {
+	case "bytes.Buffer", "bytes.Reader", "strings.Reader":
+		return true
+	}
+	return false
+}
+
+func typeIsHash(pass *analysis.Pass, t types.Type, hash *types.Interface) bool {
+	if hash != nil && implementsHash(t, hash) {
+		return true
+	}
+	return hashShape(pass, t)
 }
 
 func writeHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) bool {

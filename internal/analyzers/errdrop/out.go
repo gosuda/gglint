@@ -13,7 +13,7 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
-func checkOutSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
+func checkOutSites(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
 	for cur := range fn.Preorder((*ast.ExprStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
@@ -29,7 +29,7 @@ func checkOutSites(pass *analysis.Pass, fn inspector.Cursor, set map[*types.Func
 		if !dropsError(pass.TypesInfo, call) {
 			continue
 		}
-		if isExempt(pass, call, set, hash) {
+		if isExempt(pass, call, f.never, hash) {
 			continue
 		}
 		xobj, xname := outCandidate(pass, fn, call)
@@ -100,12 +100,36 @@ func takenBefore(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, before 
 }
 
 func callTakesPointer(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
+	if methodTakesRecv(pass, call, x) {
+		return true
+	}
 	for i, arg := range call.Args {
 		if takesPointerAt(pass, call, i, arg, x) {
 			return true
 		}
 	}
 	return false
+}
+
+func methodTakesRecv(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
+		return false
+	}
+	fn, ok := directMethod(pass, sel)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	_, isPtr := sig.Recv().Type().(*types.Pointer)
+	return isPtr
 }
 
 func takesPointerAt(pass *analysis.Pass, call *ast.CallExpr, idx int, arg ast.Expr, x *types.Var) bool {
@@ -133,11 +157,12 @@ func paramTakesPointer(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
 	if !ok {
 		return false
 	}
-	if _, isIface := types.Unalias(pt).Underlying().(*types.Interface); isIface {
-		return false
+	if sig.Variadic() && idx >= sig.Params().Len()-1 {
+		if _, isIface := types.Unalias(pt).Underlying().(*types.Interface); isIface {
+			return false
+		}
 	}
-	_, isPtr := types.Unalias(pt).Underlying().(*types.Pointer)
-	return isPtr
+	return true
 }
 
 func paramTypeAt(sig *types.Signature, idx int, call *ast.CallExpr) (types.Type, bool) {

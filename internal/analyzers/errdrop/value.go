@@ -11,12 +11,12 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
-func checkValueSites(pass *analysis.Pass, fn inspector.Cursor, set, safe map[*types.Func]bool, hash *types.Interface, reported map[token.Pos]bool) {
+func checkValueSites(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
 	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
 		if owner(cur) != fn {
 			continue
 		}
-		checkOneValueSite(pass, fn, cur, facts{never: set, safe: safe}, hash, reported)
+		checkOneValueSite(pass, fn, cur, f, hash, reported)
 	}
 }
 
@@ -183,6 +183,9 @@ func isDeref(pass *analysis.Pass, cur inspector.Cursor, v *types.Var, safe map[*
 		if !unparenIdentEquals(p.X, id) {
 			return false
 		}
+		if valueRecvNonderef(pass, p) {
+			return false
+		}
 		return !isNilSafeCall(pass, up, p, safe)
 	case *ast.StarExpr:
 		return unparenIdentEquals(p.X, id)
@@ -230,6 +233,25 @@ func isPointerRecv(fn *types.Func) bool {
 	}
 	_, isPtr := sig.Recv().Type().(*types.Pointer)
 	return isPtr
+}
+
+func valueRecvNonderef(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
+	fn, ok := directMethod(pass, sel)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	if _, isPtr := sig.Recv().Type().(*types.Pointer); isPtr {
+		return false
+	}
+	switch types.Unalias(sig.Recv().Type()).Underlying().(type) {
+	case *types.Map, *types.Chan, *types.Signature:
+		return true
+	}
+	return false
 }
 
 func unparenIdentEquals(e ast.Expr, id *ast.Ident) bool {
@@ -296,7 +318,7 @@ func sideIsVarAndOtherNil(info *types.Info, side, other ast.Expr, v *types.Var) 
 		return false
 	}
 	oid, ok := ast.Unparen(other).(*ast.Ident)
-	if !ok || oid.Name != "nil" {
+	if !ok || oid.Name != nilName {
 		return false
 	}
 	_, ok = info.Uses[oid].(*types.Nil)

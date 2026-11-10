@@ -21,11 +21,14 @@ type nilSafe struct{}
 func (*nilSafe) AFact() {}
 
 type facts struct {
-	never map[*types.Func]bool
-	safe  map[*types.Func]bool
+	never  map[*types.Func]bool
+	safe   map[*types.Func]bool
+	sticky map[*types.Func]bool
 }
 
 const writeMethodName = "Write"
+
+const nilName = "nil"
 
 // Analyzer reports dropped errors that later code depends on.
 var Analyzer = &analysis.Analyzer{
@@ -35,7 +38,7 @@ var Analyzer = &analysis.Analyzer{
 The neverFails fact is derived from the file set of the current build, so a function with build-tagged variants has the fact of the variant that is built.`,
 	Requires:  []*analysis.Analyzer{inspect.Analyzer},
 	Run:       run,
-	FactTypes: []analysis.Fact{(*neverFails)(nil), (*nilSafe)(nil)},
+	FactTypes: []analysis.Fact{(*neverFails)(nil), (*nilSafe)(nil), (*sticky)(nil)},
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -47,9 +50,13 @@ func run(pass *analysis.Pass) (any, error) {
 	for origin := range safe {
 		pass.ExportObjectFact(origin, &nilSafe{})
 	}
+	stickySet := computeSticky(pass)
+	for origin := range stickySet {
+		pass.ExportObjectFact(origin, &sticky{})
+	}
 	hash := hashInterface(pass.Pkg)
 	for fn := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		processFunc(pass, fn, set, safe, hash)
+		processFunc(pass, fn, set, safe, stickySet, hash)
 	}
 	return nil, nil
 }
@@ -64,7 +71,7 @@ func isError(t types.Type) bool {
 
 func isNilIdent(info *types.Info, e ast.Expr) bool {
 	id, ok := ast.Unparen(e).(*ast.Ident)
-	if !ok || id.Name != "nil" {
+	if !ok || id.Name != nilName {
 		return false
 	}
 	_, ok = info.Uses[id].(*types.Nil)
@@ -109,12 +116,13 @@ func owner(cur inspector.Cursor) inspector.Cursor {
 	return inspector.Cursor{}
 }
 
-func processFunc(pass *analysis.Pass, fn inspector.Cursor, set, safe map[*types.Func]bool, hash *types.Interface) {
+func processFunc(pass *analysis.Pass, fn inspector.Cursor, set, safe, stickySet map[*types.Func]bool, hash *types.Interface) {
+	f := facts{never: set, safe: safe, sticky: stickySet}
 	reported := map[token.Pos]bool{}
-	checkValueSites(pass, fn, set, safe, hash, reported)
-	checkOutSites(pass, fn, set, hash, reported)
-	checkDurableSites(pass, fn, set, hash, reported)
-	checkVerdictLists(pass, fn, set, hash, reported)
+	checkValueSites(pass, fn, f, hash, reported)
+	checkOutSites(pass, fn, f, hash, reported)
+	checkDurableSites(pass, fn, f, hash, reported)
+	checkVerdictLists(pass, fn, f, hash, reported)
 }
 
 func fnBody(fn inspector.Cursor) *ast.BlockStmt {

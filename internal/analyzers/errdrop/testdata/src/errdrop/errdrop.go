@@ -496,11 +496,174 @@ func writeAllHelper(f *os.File, b []byte) error {
 	return err
 }
 
-func durableReportedRdwrHelper(p string, b []byte) error {
+func durableSilentRdwrHelper(p string, b []byte) error {
 	f, err := os.OpenFile(p, os.O_RDWR, 0o600)
 	if err != nil {
 		return err
 	}
-	defer f.Close() // want "is written in this function and the error of f.Close is dropped"
+	defer f.Close()
 	return writeAllHelper(f, b)
+}
+
+type errdropValues map[string][]string
+
+func (v errdropValues) Encode() string { return "" }
+
+func parseErrdropValues(s string) (errdropValues, error) {
+	if s == "" {
+		return errdropValues{}, errors.New("empty")
+	}
+	return errdropValues{}, nil
+}
+
+func valueSilentValueRecv(s string) string {
+	v, _ := parseErrdropValues(s)
+	return v.Encode()
+}
+
+func verdictSilentHashIface(h hash.Hash, name string) error {
+	io.WriteString(h, name)
+	return nil
+}
+
+func outSilentCopyBuf(src *bytes.Buffer) []byte {
+	var tmp bytes.Buffer
+	io.Copy(&tmp, src)
+	return tmp.Bytes()
+}
+
+func outSilentCopyBuilder(src *bytes.Buffer) string {
+	var sb strings.Builder
+	io.Copy(&sb, src)
+	return sb.String()
+}
+
+func outSilentCopyN(src *bytes.Reader) string {
+	var sb strings.Builder
+	io.CopyN(&sb, src, 4)
+	return sb.String()
+}
+
+type stickyPrinter struct{ err error }
+
+func storeStickyByte(c byte) error { return nil }
+
+func (w *stickyPrinter) WriteByte(c byte) error {
+	if w.err == nil {
+		w.err = storeStickyByte(c)
+	}
+	return w.err
+}
+
+func (w *stickyPrinter) Flush() error { return w.err }
+
+func verdictSilentSticky(w *stickyPrinter) error {
+	w.WriteByte('<')
+	return nil
+}
+
+func verdictSilentUnreadByte(r io.ByteScanner) (int, error) {
+	ch, err := r.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+	if ch != 'e' {
+		r.UnreadByte()
+		return 0, nil
+	}
+	return 1, nil
+}
+
+func verdictSilentUnreadRune(r io.RuneScanner) (int, error) {
+	ch, _, err := r.ReadRune()
+	if err != nil {
+		return 0, err
+	}
+	if ch != 'e' {
+		r.UnreadRune()
+		return 0, nil
+	}
+	return 1, nil
+}
+
+func durableSilentRdwrDecode(p string, v any) error {
+	f, err := os.OpenFile(p, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return json.NewDecoder(f).Decode(v)
+}
+
+var errdropGlobalOff bool
+
+type lorGuard struct{ n int }
+
+func (t *lorGuard) Len() int {
+	if errdropGlobalOff || t == nil {
+		return 0
+	}
+	return t.n
+}
+
+func parseLorGuard(s string) (*lorGuard, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &lorGuard{}, nil
+}
+
+func valueSilentLorGuard(s string) int {
+	t, _ := parseLorGuard(s)
+	return t.Len()
+}
+
+type passGuard struct{ n int }
+
+func (t *passGuard) Len() int {
+	if t == nil {
+		log.Print(t)
+		return 0
+	}
+	return t.n
+}
+
+func parsePassGuard(s string) (*passGuard, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &passGuard{}, nil
+}
+
+func valueSilentBodyPass(s string) int {
+	t, _ := parsePassGuard(s)
+	return t.Len()
+}
+
+func outSilentUnmarshalBefore(prefix, b []byte) Config {
+	var c Config
+	_ = json.Unmarshal(prefix, &c)
+	json.Unmarshal(b, &c)
+	return c
+}
+
+func (c *Config) resetPort() { c.Port = 8080 }
+
+func outSilentResetBefore(b []byte) Config {
+	var c Config
+	c.resetPort()
+	json.Unmarshal(b, &c)
+	return c
+}
+
+type errdropJournal struct{ err error }
+
+func (j *errdropJournal) Close() error { return j.err }
+
+func (j *errdropJournal) WriteEnabled() bool { return true }
+
+func durableSilentGetter() bool {
+	j := &errdropJournal{}
+	defer j.Close()
+	return j.WriteEnabled()
 }

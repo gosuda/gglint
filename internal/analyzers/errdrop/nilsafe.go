@@ -47,7 +47,7 @@ func isNilSafeMethod(pass *analysis.Pass, fn *ast.FuncDecl, obj *types.Func) boo
 	if !endsInReturn(guard.Body) {
 		return false
 	}
-	if mentionsRecv(pass, guard.Body, recv) {
+	if bodyDerefsRecv(pass, guard.Body, recv) {
 		return false
 	}
 	return guardsNil(pass, guard.Cond, recv)
@@ -81,12 +81,43 @@ func guardsNil(pass *analysis.Pass, cond ast.Expr, recv *types.Var) bool {
 	if !ok || lor.Op != token.LOR {
 		return false
 	}
+	if isNilCompare(pass, ast.Unparen(lor.Y), recv) && !usesRecv(pass, lor.X, recv) {
+		return true
+	}
 	return guardsNil(pass, lor.X, recv)
 }
 
-func mentionsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+func bodyDerefsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch t := n.(type) {
+		case *ast.SelectorExpr:
+			if usesRecv(pass, t.X, recv) {
+				found = true
+				return false
+			}
+		case *ast.StarExpr:
+			if usesRecv(pass, t.X, recv) {
+				found = true
+				return false
+			}
+		case *ast.IndexExpr:
+			if isRecvIdent(pass, t.X, recv) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func usesRecv(pass *analysis.Pass, e ast.Node, recv *types.Var) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
 		id, ok := n.(*ast.Ident)
 		if !ok {
 			return true
@@ -98,6 +129,11 @@ func mentionsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) boo
 		return true
 	})
 	return found
+}
+
+func isRecvIdent(pass *analysis.Pass, e ast.Expr, recv *types.Var) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	return ok && (pass.TypesInfo.Uses[id] == recv || pass.TypesInfo.Defs[id] == recv)
 }
 
 func isNilCompare(pass *analysis.Pass, cond ast.Expr, recv *types.Var) bool {
