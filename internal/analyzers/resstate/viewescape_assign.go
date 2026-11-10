@@ -265,7 +265,7 @@ func resultNamesHold(pass *analysis.Pass, f *ast.Field, v *types.Var) bool {
 	return false
 }
 
-func shadowedByRange(pass *analysis.Pass, fn ast.Node, sink, view ast.Expr) bool {
+func shadowedByRange(pass *analysis.Pass, fn ast.Node, sink, view ast.Expr, views map[*types.Var]viewSrc) bool {
 	id, ok := ast.Unparen(view).(*ast.Ident)
 	if !ok {
 		return false
@@ -274,7 +274,111 @@ func shadowedByRange(pass *analysis.Pass, fn ast.Node, sink, view ast.Expr) bool
 	if !ok {
 		return false
 	}
-	return inAssigningRange(pass, fn, sink.Pos(), v)
+	src, ok := views[v]
+	if !ok {
+		return false
+	}
+	if !inAssigningRange(pass, fn, sink.Pos(), v) {
+		return false
+	}
+	return rangeHidesView(pass, fn, sink, v, src, views)
+}
+
+func rangeHidesView(pass *analysis.Pass, fn ast.Node, sink ast.Expr, v *types.Var, src viewSrc, views map[*types.Var]viewSrc) bool {
+	assign, assignView, assignPos := latestAssignBefore(pass, fn, sink.Pos(), v)
+	rng, rangePos := latestRangeBefore(pass, fn, sink.Pos(), v)
+	if assign != nil && assignPos > rangePos {
+		return !assignView
+	}
+	if rng == nil || rng.X == nil {
+		return true
+	}
+	if exprUsesVar(pass, rng.X, v) {
+		return false
+	}
+	return !rangeUsesSameReceiver(pass, rng.X, views, src, v)
+}
+
+func latestAssignBefore(pass *analysis.Pass, fn ast.Node, pos token.Pos, v *types.Var) (*ast.AssignStmt, bool, token.Pos) {
+	var best *ast.AssignStmt
+	bestView := false
+	bestPos := token.NoPos
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
+		x, ok := n.(*ast.AssignStmt)
+		if !ok || x.Pos() >= pos || !viewAssigns(pass, x.Lhs, v) || x.Pos() <= bestPos {
+			return true
+		}
+		best, bestPos = x, x.Pos()
+		bestView = isViewDefAssign(pass, x, v)
+		return true
+	})
+	return best, bestView, bestPos
+}
+
+func latestRangeBefore(pass *analysis.Pass, fn ast.Node, pos token.Pos, v *types.Var) (*ast.RangeStmt, token.Pos) {
+	var best *ast.RangeStmt
+	bestPos := token.NoPos
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
+		x, ok := n.(*ast.RangeStmt)
+		if !ok || x.Pos() >= pos || !rangeAssigns(pass, x, v) || x.Pos() <= bestPos {
+			return true
+		}
+		best, bestPos = x, x.Pos()
+		return true
+	})
+	return best, bestPos
+}
+
+func isViewDefAssign(pass *analysis.Pass, as *ast.AssignStmt, v *types.Var) bool {
+	if !viewAssigns(pass, as.Lhs, v) || len(as.Rhs) != 1 {
+		return false
+	}
+	_, _, ok := viewCallOf(pass, as.Rhs[0])
+	return ok
+}
+
+func exprUsesVar(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if pass.TypesInfo.Uses[id] == v {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func rangeUsesSameReceiver(pass *analysis.Pass, e ast.Expr, views map[*types.Var]viewSrc, src viewSrc, self *types.Var) bool {
+	key, ok := flow.KeyOf(pass.TypesInfo, src.recv)
+	if !ok {
+		return false
+	}
+	for w, other := range views {
+		if w == self {
+			continue
+		}
+		okey, ok := flow.KeyOf(pass.TypesInfo, other.recv)
+		if !ok || okey != key {
+			continue
+		}
+		if exprUsesVar(pass, e, w) {
+			return true
+		}
+	}
+	return false
 }
 
 func inAssigningRange(pass *analysis.Pass, fn ast.Node, pos token.Pos, v *types.Var) bool {

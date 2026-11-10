@@ -125,7 +125,7 @@ func sinkReady(pass *analysis.Pass, ctx loopCtx, views map[*types.Var]viewSrc, s
 	if !ok {
 		return nil, nil, flow.Key{}, "", false
 	}
-	if shadowedByRange(pass, ctx.fn, s.expr, v) {
+	if shadowedByRange(pass, ctx.fn, s.expr, v, views) {
 		return nil, nil, flow.Key{}, "", false
 	}
 	k, ok := flow.KeyOf(pass.TypesInfo, recv)

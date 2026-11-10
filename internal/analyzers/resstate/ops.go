@@ -242,7 +242,7 @@ func freeConvTarget(pass *analysis.Pass, fn ast.Node, e ast.Expr, call *ast.Call
 	if len(call.Args) != 1 || !pass.TypesInfo.Types[call.Fun].IsType() {
 		return false
 	}
-	if t := pass.TypesInfo.Types[e].Type; t == nil || t.String() != "unsafe.Pointer" {
+	if t := pass.TypesInfo.Types[e].Type; t == nil || t.String() != unsafePointerType {
 		return false
 	}
 	return freeTargets(pass, fn, call.Args[0], v)
@@ -338,7 +338,7 @@ func freeConvOf(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
 	if !ok || len(call.Args) != 1 || !pass.TypesInfo.Types[call.Fun].IsType() {
 		return false
 	}
-	if t := pass.TypesInfo.Types[e].Type; t == nil || t.String() != "unsafe.Pointer" {
+	if t := pass.TypesInfo.Types[e].Type; t == nil || t.String() != unsafePointerType {
 		return false
 	}
 	return exactVar(pass, call.Args[0], v)
@@ -378,6 +378,7 @@ const (
 	capBuiltin             = "cap"
 	putMethod              = "Put"
 	cFreeFunc              = "_Cfunc_free"
+	unsafePointerType      = "unsafe.Pointer"
 )
 
 var closeFailPkgs = map[string]bool{"os": true, "net": true, "net/http": true}

@@ -142,3 +142,28 @@ func useafterfreeReportedSelfSliceAppend() {
 	b = append(b, 0) // want "is used after it was freed"
 	_ = b
 }
+
+func useafterfreeSilentIntBound() {
+	b := make([]byte, 4096)
+	n := 2048
+	syscall.Munmap(b[:n])
+	n++
+	_ = n
+	_ = b
+}
+
+func useafterfreeSilentIntRead() int {
+	b := make([]byte, 4096)
+	n := 2048
+	syscall.Munmap(b[:n])
+	_ = b
+	return n
+}
+
+func useafterfreeReportedAppendFresh() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	b = append(b[:0:0], 1) // want "is used after it was freed"
+	b[0] = 1
+	_ = b
+}

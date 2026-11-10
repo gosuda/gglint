@@ -37,3 +37,10 @@ func useafterfreeSilentCgoFreeLast() byte {
 	return v
 }
 
+func useafterfreeSilentUintptrFree() {
+	var u uintptr = 123
+	C.free(unsafe.Pointer(u))
+	u++
+	_ = u
+}
+

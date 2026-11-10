@@ -251,35 +251,34 @@ func freeCallName(call *ast.CallExpr) bool {
 }
 
 func collectFreeArgVars(pass *analysis.Pass, fn ast.Node, arg ast.Expr, out map[*types.Var]bool) {
-	ast.Inspect(arg, func(n ast.Node) bool {
-		id, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
+	for _, id := range freeBaseIdents(pass, arg) {
 		v, ok := pass.TypesInfo.Uses[id].(*types.Var)
-		if !ok || out[v] {
-			return true
+		if !ok || out[v] || !isFreeableVar(v) {
+			continue
 		}
 		out[v] = true
 		collectTempSources(pass, fn, v, out)
-		return true
-	})
+	}
 }
 
-func collectTempSources(pass *analysis.Pass, fn ast.Node, tv *types.Var, out map[*types.Var]bool) {
-	ast.Inspect(fn, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.AssignStmt:
-			if assignBindsTV(pass, x, tv) {
-				collectIdents(pass, x.Rhs, out)
-			}
-		case *ast.ValueSpec:
-			if valueSpecBindsTV(pass, x, tv) {
-				collectIdents(pass, x.Values, out)
-			}
+func freeBaseIdents(pass *analysis.Pass, e ast.Expr) []*ast.Ident {
+	e = ast.Unparen(e)
+	switch x := e.(type) {
+	case *ast.Ident:
+		return []*ast.Ident{x}
+	case *ast.SliceExpr:
+		if x.X == nil {
+			return nil
 		}
-		return true
-	})
+		return freeBaseIdents(pass, x.X)
+	case *ast.CallExpr:
+		if len(x.Args) != 1 || !pass.TypesInfo.Types[x.Fun].IsType() {
+			return nil
+		}
+		return freeBaseIdents(pass, x.Args[0])
+	default:
+		return nil
+	}
 }
 
 func assignBindsTV(pass *analysis.Pass, x *ast.AssignStmt, tv *types.Var) bool {
@@ -304,18 +303,47 @@ func valueSpecBindsTV(pass *analysis.Pass, x *ast.ValueSpec, tv *types.Var) bool
 	return false
 }
 
-func collectIdents(pass *analysis.Pass, exprs []ast.Expr, out map[*types.Var]bool) {
-	for _, e := range exprs {
-		ast.Inspect(e, func(n ast.Node) bool {
-			id, ok := n.(*ast.Ident)
-			if !ok {
-				return true
+func isFreeableVar(v *types.Var) bool {
+	t := v.Type()
+	if t == nil {
+		return false
+	}
+	if t.String() == unsafePointerType {
+		return true
+	}
+	switch types.Unalias(t).Underlying().(type) {
+	case *types.Slice, *types.Pointer:
+		return true
+	default:
+		return false
+	}
+}
+
+func collectTempSources(pass *analysis.Pass, fn ast.Node, tv *types.Var, out map[*types.Var]bool) {
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if assignBindsTV(pass, x, tv) {
+				collectBaseIdents(pass, x.Rhs, out)
 			}
-			if w, ok := pass.TypesInfo.Uses[id].(*types.Var); ok {
+		case *ast.ValueSpec:
+			if valueSpecBindsTV(pass, x, tv) {
+				collectBaseIdents(pass, x.Values, out)
+			}
+		}
+		return true
+	})
+}
+
+func collectBaseIdents(pass *analysis.Pass, exprs []ast.Expr, out map[*types.Var]bool) {
+	for _, e := range exprs {
+		for _, id := range freeBaseIdents(pass, e) {
+			if w, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && isFreeableVar(w) {
+				out[w] = true
+			} else if w, ok := pass.TypesInfo.Defs[id].(*types.Var); ok && isFreeableVar(w) {
 				out[w] = true
 			}
-			return true
-		})
+		}
 	}
 }
 
@@ -357,7 +385,10 @@ func putTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) os
 	if hasPutRelease(pass, n, v) {
 		return stReleased
 	}
-	if redefinesVar(pass, fn, n, v) {
+	if keepsReleased(pass, n, v) {
+		return s
+	}
+	if assignsVar(pass, fn, n, v) {
 		return stUnknown
 	}
 	if escapesVar(pass, fn, n, v) {
@@ -370,13 +401,43 @@ func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) o
 	if hasFreeRelease(pass, fn, n, v) {
 		return stReleased
 	}
-	if redefinesVar(pass, fn, n, v) {
+	if keepsReleased(pass, n, v) {
+		return s
+	}
+	if assignsVar(pass, fn, n, v) {
 		return stUnknown
 	}
 	if escapesVar(pass, fn, n, v) {
 		return stUnknown
 	}
 	return s
+}
+
+func keepsReleased(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		return false
+	}
+	if !lhsAssigns(pass, as.Lhs, v) {
+		return false
+	}
+	rhs := ast.Unparen(as.Rhs[0])
+	if id, ok := rhs.(*ast.Ident); ok {
+		return pass.TypesInfo.Uses[id] == v
+	}
+	return sliceChainOf(pass, rhs, v)
+}
+
+func sliceChainOf(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
+	e = ast.Unparen(e)
+	if id, ok := e.(*ast.Ident); ok {
+		return pass.TypesInfo.Uses[id] == v || pass.TypesInfo.Defs[id] == v
+	}
+	se, ok := e.(*ast.SliceExpr)
+	if !ok || se.X == nil {
+		return false
+	}
+	return sliceChainOf(pass, se.X, v)
 }
 
 func closeVisit(pass *analysis.Pass, n ast.Node, v *types.Var, s ostate) {
@@ -496,32 +557,102 @@ func isBlankIdent(e ast.Expr) bool {
 }
 
 func localsOf(pass *analysis.Pass, fn ast.Node) []*types.Var {
-	seen := map[*types.Var]bool{}
-	var out []*types.Var
+	seen := newLocalSeen(pass, fn)
 	ast.Inspect(fn, func(n ast.Node) bool {
-		if n != fn {
-			if _, ok := n.(*ast.FuncLit); ok {
-				return false
-			}
+		if skipNestedLit(n, fn) {
+			return false
+		}
+		if cc, ok := n.(*ast.CaseClause); ok {
+			seen.addImplicit(cc)
+			return true
 		}
 		id, ok := n.(*ast.Ident)
 		if !ok {
 			return true
 		}
-		v, ok := pass.TypesInfo.Defs[id].(*types.Var)
-		if !ok || seen[v] {
-			return true
-		}
-		seen[v] = true
-		if v.IsField() {
-			return true
-		}
-		if flow.IsLocal(pass.TypesInfo, fn, v) {
-			out = append(out, v)
-		}
+		seen.addDef(id)
 		return true
 	})
+	return append([]*types.Var(nil), seen.order...)
+}
+
+type localSeen struct {
+	pass   *analysis.Pass
+	params map[*types.Var]bool
+	seen   map[*types.Var]bool
+	order  []*types.Var
+}
+
+func newLocalSeen(pass *analysis.Pass, fn ast.Node) *localSeen {
+	return &localSeen{pass: pass, params: paramVarSet(pass, fn), seen: map[*types.Var]bool{}}
+}
+
+func (s *localSeen) addImplicit(cc *ast.CaseClause) {
+	v, ok := s.pass.TypesInfo.Implicits[cc].(*types.Var)
+	if !ok || s.seen[v] || s.params[v] || v.IsField() {
+		return
+	}
+	s.seen[v] = true
+	s.order = append(s.order, v)
+}
+
+func (s *localSeen) addDef(id *ast.Ident) {
+	v, ok := s.pass.TypesInfo.Defs[id].(*types.Var)
+	if !ok || s.seen[v] || s.params[v] || v.IsField() {
+		return
+	}
+	s.seen[v] = true
+	s.order = append(s.order, v)
+}
+
+func skipNestedLit(n, fn ast.Node) bool {
+	if n == fn {
+		return false
+	}
+	_, ok := n.(*ast.FuncLit)
+	return ok
+}
+
+func paramVarSet(pass *analysis.Pass, fn ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	ft, recv := funcTypeOf(fn)
+	if ft == nil {
+		return out
+	}
+	addFieldVars(pass, ft.Params, out)
+	addFieldVars(pass, ft.Results, out)
+	addFieldVars(pass, recv, out)
 	return out
+}
+
+func funcTypeOf(fn ast.Node) (*ast.FuncType, *ast.FieldList) {
+	switch f := fn.(type) {
+	case *ast.FuncDecl:
+		if f.Type == nil {
+			return nil, nil
+		}
+		return f.Type, f.Recv
+	case *ast.FuncLit:
+		if f.Type == nil {
+			return nil, nil
+		}
+		return f.Type, nil
+	default:
+		return nil, nil
+	}
+}
+
+func addFieldVars(pass *analysis.Pass, fields *ast.FieldList, out map[*types.Var]bool) {
+	if fields == nil {
+		return
+	}
+	for _, field := range fields.List {
+		for _, id := range field.Names {
+			if v, ok := pass.TypesInfo.Defs[id].(*types.Var); ok {
+				out[v] = true
+			}
+		}
+	}
 }
 
 func hasCloseResult(t types.Type) bool {

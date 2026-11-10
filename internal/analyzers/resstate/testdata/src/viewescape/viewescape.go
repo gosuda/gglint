@@ -454,3 +454,25 @@ func viewescapeSilentRangeReassignChannel(sc *bufio.Scanner, ch chan []byte, out
 	}
 	return out
 }
+
+func viewescapeReportedRangeSplitView(sc *bufio.Scanner, sep []byte, lines [][]byte) [][]byte {
+	var b []byte
+	for sc.Scan() {
+		b = sc.Bytes()
+		for _, b = range bytes.Split(b, sep) {
+			lines = append(lines, b) // want "points into the buffer of"
+		}
+	}
+	return lines
+}
+
+func viewescapeReportedOuterRangeInnerView(chunks [][]byte, sc *bufio.Scanner, lines [][]byte) [][]byte {
+	var b []byte
+	for _, b = range chunks {
+		for sc.Scan() {
+			b = sc.Bytes()
+			lines = append(lines, b) // want "points into the buffer of"
+		}
+	}
+	return lines
+}
