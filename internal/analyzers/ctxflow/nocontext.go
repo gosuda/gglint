@@ -186,7 +186,7 @@ func isWrapper(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, ri
 	if samePackage(pass, call) {
 		return true
 	}
-	return usesContextParam(pass, fn, cur)
+	return usesContextParam(pass, fn)
 }
 
 func matchesReplacement(name, right string) bool {
@@ -215,19 +215,58 @@ func samePackage(pass *analysis.Pass, call *ast.CallExpr) bool {
 	return fn.Pkg().Path() == pass.Pkg.Path()
 }
 
-func usesContextParam(pass *analysis.Pass, fn, cur inspector.Cursor) bool {
-	for c := range fn.Preorder((*ast.CallExpr)(nil)) {
-		call, ok := c.Node().(*ast.CallExpr)
-		if !ok {
-			continue
-		}
-		for _, v := range callVars(pass, call) {
-			if isContextParam(pass, cur, v) {
-				return true
-			}
+func usesContextParam(pass *analysis.Pass, fn inspector.Cursor) bool {
+	for c := range fn.Preorder((*ast.Ident)(nil)) {
+		if mentionsContextParam(pass, fn, c) {
+			return true
 		}
 	}
 	return false
+}
+
+func mentionsContextParam(pass *analysis.Pass, fn, c inspector.Cursor) bool {
+	id, ok := c.Node().(*ast.Ident)
+	if !ok {
+		return false
+	}
+	v, ok := pass.TypesInfo.Uses[id].(*types.Var)
+	if !ok || v == nil {
+		return false
+	}
+	if !funcDeclaresVarAsContextParam(pass.TypesInfo, fn.Node(), v) {
+		return false
+	}
+	return !isBlankAssigned(c, id)
+}
+
+func isBlankAssigned(cur inspector.Cursor, id *ast.Ident) bool {
+	for ac := range cur.Enclosing((*ast.AssignStmt)(nil)) {
+		return assignedBlank(ac.Node(), id)
+	}
+	return false
+}
+
+func assignedBlank(n ast.Node, id *ast.Ident) bool {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	for i, rhs := range as.Rhs {
+		rhsID, ok := stripParens(rhs).(*ast.Ident)
+		if !ok || rhsID != id {
+			continue
+		}
+		return blankAt(as, i)
+	}
+	return false
+}
+
+func blankAt(as *ast.AssignStmt, i int) bool {
+	if len(as.Lhs) != len(as.Rhs) {
+		return false
+	}
+	lhsID, ok := stripParens(as.Lhs[i]).(*ast.Ident)
+	return ok && lhsID.Name == "_"
 }
 
 func nocontextInScope(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, cache *nocontextCache) bool {

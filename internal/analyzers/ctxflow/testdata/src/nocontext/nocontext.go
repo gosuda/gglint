@@ -205,3 +205,61 @@ func (nocontextDialerReported) DialContext(ctx context.Context, network, address
 	_ = ctx
 	return net.Dial(network, address) // want "net\\.Dial cannot be cancelled"
 }
+
+type nocontextDialerSilentAlias struct{}
+
+type nocontextDialState struct {
+	ctx context.Context
+}
+
+type nocontextDialerSilentStruct struct{}
+
+func (nocontextDialerSilentAlias) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	type dialResult struct {
+		conn net.Conn
+		err  error
+	}
+	c := ctx
+	ch := make(chan dialResult, 1)
+	go func() {
+		conn, err := net.Dial(network, address)
+		ch <- dialResult{conn, err}
+	}()
+	select {
+	case <-c.Done():
+		go func() {
+			r := <-ch
+			if r.err == nil {
+				r.conn.Close()
+			}
+		}()
+		return nil, c.Err()
+	case r := <-ch:
+		return r.conn, r.err
+	}
+}
+
+func (nocontextDialerSilentStruct) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	type dialResult struct {
+		conn net.Conn
+		err  error
+	}
+	st := nocontextDialState{ctx: ctx}
+	ch := make(chan dialResult, 1)
+	go func() {
+		conn, err := net.Dial(network, address)
+		ch <- dialResult{conn, err}
+	}()
+	select {
+	case <-st.ctx.Done():
+		go func() {
+			r := <-ch
+			if r.err == nil {
+				r.conn.Close()
+			}
+		}()
+		return nil, st.ctx.Err()
+	case r := <-ch:
+		return r.conn, r.err
+	}
+}
