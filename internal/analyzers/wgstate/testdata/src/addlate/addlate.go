@@ -36,3 +36,16 @@ L:
 	wg.Add(1) // want "so Wait can return early"
 	wg.Wait()
 }
+func addlateReportedDouble() {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(2) // want "so Wait can return early"
+	wg.Wait()
+}

@@ -89,13 +89,13 @@ func doneskipSilentDoneEarlier() {
 	}()
 	wg.Wait()
 }
-func doneskipSilentTestErrorf(t *testing.T) {
+func doneskipReportedTestErrorf(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		if bad() {
 			t.Errorf("Query: %v", bad())
-			return
+			return // want "so Wait blocks forever"
 		}
 		work()
 		wg.Done()
@@ -103,12 +103,27 @@ func doneskipSilentTestErrorf(t *testing.T) {
 	wg.Wait()
 }
 
-func doneskipSilentTestError(t *testing.T) {
+func doneskipReportedTestError(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		if bad() {
 			t.Error(bad())
+			return // want "so Wait blocks forever"
+		}
+		work()
+		wg.Done()
+	}()
+	wg.Wait()
+}
+func doneskipSilentBlockedDone() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		if bad() {
+			{
+				wg.Done()
+			}
 			return
 		}
 		work()

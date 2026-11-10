@@ -1,7 +1,11 @@
 package wgstate
 
 import (
+	"cmp"
 	"go/ast"
+	"go/token"
+	"maps"
+	"slices"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -25,30 +29,46 @@ func runAddlate(pass *analysis.Pass) (any, error) {
 
 func checkAddlate(pass *analysis.Pass, fn ast.Node) {
 	eachList(fn, func(list []ast.Stmt) {
+		seen := map[token.Pos]bool{}
 		for i, s := range list {
 			g, ok := unwrap(s).(*ast.GoStmt)
 			if !ok {
 				continue
 			}
-			checkGoAddlate(pass, fn, g, list[i+1:])
+			checkGoAddlate(pass, fn, g, list[i+1:], seen)
 		}
 	})
 }
 
-func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, after []ast.Stmt) {
+func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, after []ast.Stmt, seen map[token.Pos]bool) {
 	lit, ok := ast.Unparen(g.Call.Fun).(*ast.FuncLit)
 	if !ok || lit.Body == nil {
 		return
 	}
-	for k := range doneKeys(pass, lit) {
+	for _, k := range sortedDoneKeys(doneKeys(pass, lit)) {
 		if hasAddBefore(pass, fn, g, k) {
 			continue
 		}
-		reportLateAdds(pass, k, after)
+		reportLateAdds(pass, k, after, seen)
 	}
 }
 
-func reportLateAdds(pass *analysis.Pass, k flow.Key, after []ast.Stmt) {
+func sortedDoneKeys(m map[flow.Key]bool) []flow.Key {
+	keys := slices.Collect(maps.Keys(m))
+	slices.SortFunc(keys, func(a, b flow.Key) int {
+		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(keyName(a), keyName(b)))
+	})
+	return keys
+}
+
+func keyName(k flow.Key) string {
+	if k.Root == nil {
+		return ""
+	}
+	return k.Root.Name()
+}
+
+func reportLateAdds(pass *analysis.Pass, k flow.Key, after []ast.Stmt, seen map[token.Pos]bool) {
 	info := pass.TypesInfo
 	for _, s := range after {
 		call, ok := directCall(s)
@@ -59,6 +79,10 @@ func reportLateAdds(pass *analysis.Pass, k flow.Key, after []ast.Stmt) {
 		if !ok || ak != k {
 			continue
 		}
+		if seen[call.Pos()] {
+			continue
+		}
+		seen[call.Pos()] = true
 		pass.Reportf(call.Pos(), "this Add runs after the goroutine it counts has started, so Wait can return early: call %s.Add before the go statement", text)
 	}
 }

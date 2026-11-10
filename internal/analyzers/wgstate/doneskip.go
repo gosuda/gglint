@@ -152,7 +152,7 @@ func isTestFail(info *types.Info, call *ast.CallExpr) bool {
 		return false
 	}
 	switch fn.Name() {
-	case "Fail", "FailNow", "Fatal", "Fatalf", "Error", "Errorf", "Skip", "SkipNow", "Skipf":
+	case "FailNow", "Fatal", "Fatalf", "Skip", "SkipNow", "Skipf":
 		return true
 	}
 	return false
@@ -167,16 +167,28 @@ func hasDoneBefore(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt, befo
 
 func hasDirectDone(info *types.Info, before []ast.Stmt, k flow.Key) bool {
 	for _, s := range before {
-		call, ok := directCall(s)
-		if !ok {
-			continue
-		}
-		dk, _, ok := wgKey(info, call, "Done")
-		if ok && dk == k {
+		if stmtHasDone(info, s, k) {
 			return true
 		}
 	}
 	return false
+}
+
+func stmtHasDone(info *types.Info, s ast.Stmt, k flow.Key) bool {
+	if b, ok := unwrap(s).(*ast.BlockStmt); ok {
+		for _, inner := range b.List {
+			if stmtHasDone(info, inner, k) {
+				return true
+			}
+		}
+		return false
+	}
+	call, ok := directCall(s)
+	if !ok {
+		return false
+	}
+	dk, _, ok := wgKey(info, call, "Done")
+	return ok && dk == k
 }
 
 func hasEnclosingDone(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt, k flow.Key) bool {
