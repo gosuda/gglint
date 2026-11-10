@@ -35,53 +35,135 @@ type cancelPair struct {
 }
 
 func checkCancel(pass *analysis.Pass, fn inspector.Cursor) {
+	s := summarizeCancel(pass, fn)
 	for _, p := range collectPairs(pass, fn) {
-		checkPair(pass, fn, p)
+		checkPair(pass, p, s)
 	}
 }
 
-func checkPair(pass *analysis.Pass, fn inspector.Cursor, p cancelPair) {
-	site, ok := deferredCancel(pass, fn, p.cancel)
+type cancelSummary struct {
+	defers     map[*types.Var]*ast.DeferStmt
+	returned   map[*types.Var]bool
+	reassigned map[*types.Var]bool
+}
+
+func summarizeCancel(pass *analysis.Pass, fn inspector.Cursor) cancelSummary {
+	s := cancelSummary{
+		defers:     map[*types.Var]*ast.DeferStmt{},
+		returned:   map[*types.Var]bool{},
+		reassigned: map[*types.Var]bool{},
+	}
+	for cur := range fn.Preorder((*ast.DeferStmt)(nil), (*ast.ReturnStmt)(nil), (*ast.AssignStmt)(nil)) {
+		if ownerOf(cur) != fn {
+			continue
+		}
+		switch n := cur.Node().(type) {
+		case *ast.DeferStmt:
+			s.recordDefer(pass, n)
+		case *ast.ReturnStmt:
+			s.recordReturn(pass, n)
+		case *ast.AssignStmt:
+			s.recordAssign(pass, n)
+		}
+	}
+	return s
+}
+
+func (s cancelSummary) recordDefer(pass *analysis.Pass, d *ast.DeferStmt) {
+	v, ok := deferredVar(pass, d)
 	if !ok {
 		return
 	}
-	if mentionsVar(pass, fn, p.cancel) || !mentionsVar(pass, fn, p.ctx) {
+	if _, ok := s.defers[v]; ok {
 		return
 	}
-	if ctxReassigned(pass, fn, p.ctx) {
+	s.defers[v] = d
+}
+
+func (s cancelSummary) recordReturn(pass *analysis.Pass, r *ast.ReturnStmt) {
+	for _, res := range r.Results {
+		collectReturnedVars(pass.TypesInfo, res, s.returned)
+	}
+}
+
+func (s cancelSummary) recordAssign(pass *analysis.Pass, as *ast.AssignStmt) {
+	if as.Tok != token.ASSIGN {
+		return
+	}
+	for _, lhs := range as.Lhs {
+		id, ok := stripParens(lhs).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if v := varOf(pass.TypesInfo, id); v != nil {
+			s.reassigned[v] = true
+		}
+	}
+}
+
+func checkPair(pass *analysis.Pass, p cancelPair, s cancelSummary) {
+	site, ok := s.defers[p.cancel]
+	if !ok {
+		return
+	}
+	if s.returned[p.cancel] || !s.returned[p.ctx] {
+		return
+	}
+	if s.reassigned[p.ctx] {
 		return
 	}
 	pass.Report(analysis.Diagnostic{Pos: site.Pos(), End: site.End(), Message: cancelMessage})
 }
 
-func ctxReassigned(pass *analysis.Pass, fn inspector.Cursor, ctx *types.Var) bool {
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
-		if ownerOf(cur) != fn {
-			continue
-		}
-		as, ok := cur.Node().(*ast.AssignStmt)
-		if !ok || as.Tok != token.ASSIGN {
-			continue
-		}
-		for _, lhs := range as.Lhs {
-			if identResolvesTo(pass.TypesInfo, lhs, ctx) {
-				return true
-			}
-		}
+func deferredVar(pass *analysis.Pass, d *ast.DeferStmt) (*types.Var, bool) {
+	if d.Call == nil || d.Call.Ellipsis.IsValid() {
+		return nil, false
 	}
-	return false
+	id, ok := stripParens(d.Call.Fun).(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	v := varOf(pass.TypesInfo, id)
+	return v, v != nil
 }
 
-func deferredCancel(pass *analysis.Pass, fn inspector.Cursor, cancel *types.Var) (*ast.DeferStmt, bool) {
-	for cur := range fn.Preorder((*ast.DeferStmt)(nil)) {
-		if ownerOf(cur) != fn {
+func collectReturnedVars(info *types.Info, res ast.Expr, into map[*types.Var]bool) {
+	e := stripParens(res)
+	if id, ok := e.(*ast.Ident); ok {
+		if v := varOf(info, id); v != nil {
+			into[v] = true
+		}
+		return
+	}
+	if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		collectReturnedVars(info, u.X, into)
+		return
+	}
+	if lit, ok := e.(*ast.CompositeLit); ok {
+		collectCompositeVars(info, lit, into)
+		return
+	}
+	if call, ok := e.(*ast.CallExpr); ok {
+		collectDerivedVars(info, call, into)
+	}
+}
+
+func collectCompositeVars(info *types.Info, lit *ast.CompositeLit, into map[*types.Var]bool) {
+	for _, elt := range lit.Elts {
+		kv, ok := stripParens(elt).(*ast.KeyValueExpr)
+		if ok {
+			collectReturnedVars(info, kv.Value, into)
 			continue
 		}
-		if d, ok := cur.Node().(*ast.DeferStmt); ok && isCancelCall(pass, d, cancel) {
-			return d, true
-		}
+		collectReturnedVars(info, elt, into)
 	}
-	return nil, false
+}
+
+func collectDerivedVars(info *types.Info, call *ast.CallExpr, into map[*types.Var]bool) {
+	if !isDerivedContextCall(info, call) || len(call.Args) == 0 {
+		return
+	}
+	collectReturnedVars(info, call.Args[0], into)
 }
 
 func collectPairs(pass *analysis.Pass, fn inspector.Cursor) []cancelPair {
@@ -180,65 +262,6 @@ func isWithCall(info *types.Info, call *ast.CallExpr) bool {
 	return false
 }
 
-func isCancelCall(pass *analysis.Pass, d *ast.DeferStmt, cancel *types.Var) bool {
-	if d.Call == nil || d.Call.Ellipsis.IsValid() {
-		return false
-	}
-	id, ok := stripParens(d.Call.Fun).(*ast.Ident)
-	if !ok {
-		return false
-	}
-	return varOf(pass.TypesInfo, id) == cancel
-}
-
-func mentionsVar(pass *analysis.Pass, fn inspector.Cursor, v *types.Var) bool {
-	for cur := range fn.Preorder((*ast.ReturnStmt)(nil)) {
-		if mentionsAt(pass, fn, cur, v) {
-			return true
-		}
-	}
-	return false
-}
-
-func mentionsAt(pass *analysis.Pass, fn, cur inspector.Cursor, v *types.Var) bool {
-	if ownerOf(cur) != fn {
-		return false
-	}
-	ret, ok := cur.Node().(*ast.ReturnStmt)
-	if !ok {
-		return false
-	}
-	for _, res := range ret.Results {
-		if returnsContext(pass.TypesInfo, res, v) {
-			return true
-		}
-	}
-	return false
-}
-
-func returnsContext(info *types.Info, res ast.Expr, v *types.Var) bool {
-	e := stripParens(res)
-	if identResolvesTo(info, e, v) {
-		return true
-	}
-	if u, ok := e.(*ast.UnaryExpr); ok && u.Op == token.AND {
-		return returnsContext(info, u.X, v)
-	}
-	if lit, ok := e.(*ast.CompositeLit); ok {
-		return compositeMentions(info, lit, v)
-	}
-	if call, ok := e.(*ast.CallExpr); ok {
-		if !isDerivedContextCall(info, call) {
-			return false
-		}
-		if len(call.Args) == 0 {
-			return false
-		}
-		return returnsContext(info, call.Args[0], v)
-	}
-	return false
-}
-
 func isDerivedContextCall(info *types.Info, call *ast.CallExpr) bool {
 	fn := typeutil.StaticCallee(info, call)
 	if fn == nil {
@@ -256,20 +279,4 @@ func isDerivedContextCall(info *types.Info, call *ast.CallExpr) bool {
 		return true
 	}
 	return false
-}
-
-func compositeMentions(info *types.Info, lit *ast.CompositeLit, v *types.Var) bool {
-	for _, elt := range lit.Elts {
-		if compositeEltMentions(info, stripParens(elt), v) {
-			return true
-		}
-	}
-	return false
-}
-
-func compositeEltMentions(info *types.Info, elt ast.Expr, v *types.Var) bool {
-	if kv, ok := elt.(*ast.KeyValueExpr); ok {
-		return returnsContext(info, stripParens(kv.Value), v)
-	}
-	return returnsContext(info, elt, v)
 }

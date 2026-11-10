@@ -3,6 +3,7 @@ package nocontext
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"net/http"
 	"os/exec"
@@ -205,6 +206,22 @@ func (nocontextDialerReported) DialContext(ctx context.Context, network, address
 	_ = ctx
 	return net.Dial(network, address) // want "net\\.Dial cannot be cancelled"
 }
+
+func (nocontextDialerNilCompare) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if ctx == nil {
+		return nil, errors.New("nil context")
+	}
+	return net.Dial(network, address) // want "net\\.Dial cannot be cancelled"
+}
+
+func (nocontextDialerReassigned) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	ctx = context.Background()
+	return net.Dial(network, address) // want "net\\.Dial cannot be cancelled"
+}
+
+type nocontextDialerNilCompare struct{}
+
+type nocontextDialerReassigned struct{}
 
 type nocontextDialerSilentAlias struct{}
 

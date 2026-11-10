@@ -19,15 +19,16 @@ const httpDoReplacement = "http.NewRequestWithContext and (*http.Client).Do"
 
 var nocontextAnalyzer = &analysis.Analyzer{
 	Name:     "nocontext",
-	Doc:      "report the table calls that cannot be cancelled where a named context PARAMETER or LOCAL VARIABLE that is visible at the call exists; a request passed with its context to a helper that may apply it is not reported",
+	Doc:      "report the table calls that cannot be cancelled where a named context PARAMETER or LOCAL VARIABLE that is visible at the call exists; a wrapper is exempt only when its context parameter's value flows on: as a call argument, a method receiver, the right side of an assignment to another name, a composite literal element, a sent value, or a return operand; comparing the parameter with nil, overwriting it, or dropping it to blank does not exempt",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runNocontext,
 }
 
 func runNocontext(pass *analysis.Pass) (any, error) {
 	cache := &nocontextCache{
-		locals: map[ast.Node][]*types.Var{},
-		uses:   map[ast.Node]map[*types.Var]token.Pos{},
+		locals:   map[ast.Node][]*types.Var{},
+		uses:     map[ast.Node]map[*types.Var]token.Pos{},
+		wrappers: map[ast.Node]bool{},
 	}
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.CallExpr)(nil)) {
 		checkNocontext(pass, cur, cache)
@@ -36,8 +37,9 @@ func runNocontext(pass *analysis.Pass) (any, error) {
 }
 
 type nocontextCache struct {
-	locals map[ast.Node][]*types.Var
-	uses   map[ast.Node]map[*types.Var]token.Pos
+	locals   map[ast.Node][]*types.Var
+	uses     map[ast.Node]map[*types.Var]token.Pos
+	wrappers map[ast.Node]bool
 }
 
 func checkNocontext(pass *analysis.Pass, cur inspector.Cursor, cache *nocontextCache) {
@@ -49,7 +51,7 @@ func checkNocontext(pass *analysis.Pass, cur inspector.Cursor, cache *nocontextC
 	if !ok || !nocontextInScope(pass, cur, call, cache) {
 		return
 	}
-	if isWrapper(pass, cur, call, right) {
+	if isWrapper(pass, cur, call, right, cache) {
 		return
 	}
 	if left == "http.NewRequest" && newRequestGetsContext(pass, cur, call, cache) {
@@ -170,7 +172,7 @@ func sqlDBTarget(recvName, method string) (left, right string, found bool) {
 	return "", "", false
 }
 
-func isWrapper(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, right string) bool {
+func isWrapper(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, right string, cache *nocontextCache) bool {
 	var name string
 	var fn inspector.Cursor
 	for fcur := range cur.Enclosing((*ast.FuncDecl)(nil)) {
@@ -186,7 +188,12 @@ func isWrapper(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, ri
 	if samePackage(pass, call) {
 		return true
 	}
-	return usesContextParam(pass, fn)
+	if got, ok := cache.wrappers[fn.Node()]; ok {
+		return got
+	}
+	got := usesContextParam(pass, fn)
+	cache.wrappers[fn.Node()] = got
+	return got
 }
 
 func matchesReplacement(name, right string) bool {
@@ -236,29 +243,40 @@ func mentionsContextParam(pass *analysis.Pass, fn, c inspector.Cursor) bool {
 	if !funcDeclaresVarAsContextParam(pass.TypesInfo, fn.Node(), v) {
 		return false
 	}
-	return !isBlankAssigned(c, id)
+	return flowsContextValue(c)
 }
 
-func isBlankAssigned(cur inspector.Cursor, id *ast.Ident) bool {
-	for ac := range cur.Enclosing((*ast.AssignStmt)(nil)) {
-		return assignedBlank(ac.Node(), id)
+func flowsContextValue(c inspector.Cursor) bool {
+	cur := c
+	for p := cur.Parent(); p.Node() != nil; p = p.Parent() {
+		switch n := p.Node().(type) {
+		case *ast.ParenExpr:
+			cur = p
+			continue
+		case *ast.BinaryExpr:
+			return n.Op != token.EQL && n.Op != token.NEQ
+		case *ast.AssignStmt:
+			return assignedInRHS(n, cur.Node())
+		case *ast.ExprStmt:
+			return false
+		}
+		return true
 	}
-	return false
+	return true
 }
 
-func assignedBlank(n ast.Node, id *ast.Ident) bool {
-	as, ok := n.(*ast.AssignStmt)
-	if !ok {
-		return false
+func assignedInRHS(as *ast.AssignStmt, n ast.Node) bool {
+	for _, lhs := range as.Lhs {
+		if lhs == n || stripParens(lhs) == n {
+			return false
+		}
 	}
 	for i, rhs := range as.Rhs {
-		rhsID, ok := stripParens(rhs).(*ast.Ident)
-		if !ok || rhsID != id {
-			continue
+		if rhs == n || stripParens(rhs) == n {
+			return !blankAt(as, i)
 		}
-		return blankAt(as, i)
 	}
-	return false
+	return true
 }
 
 func blankAt(as *ast.AssignStmt, i int) bool {

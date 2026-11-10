@@ -23,13 +23,23 @@ var rootAnalyzer = &analysis.Analyzer{
 }
 
 func runRoot(pass *analysis.Pass) (any, error) {
+	cache := &rootCache{shared: map[compositeKey]bool{}}
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.CallExpr)(nil)) {
-		checkRoot(pass, cur)
+		checkRoot(pass, cur, cache)
 	}
 	return nil, nil
 }
 
-func checkRoot(pass *analysis.Pass, cur inspector.Cursor) {
+type rootCache struct {
+	shared map[compositeKey]bool
+}
+
+type compositeKey struct {
+	lit   *ast.CompositeLit
+	owner ast.Node
+}
+
+func checkRoot(pass *analysis.Pass, cur inspector.Cursor, cache *rootCache) {
 	call, ok := cur.Node().(*ast.CallExpr)
 	if !ok || !isRootCall(pass.TypesInfo, call) {
 		return
@@ -37,7 +47,7 @@ func checkRoot(pass *analysis.Pass, cur inspector.Cursor) {
 	if !resultUsed(cur) || !contextInScope(pass, cur) || inMainOrInit(cur) || nilGuarded(pass, cur, call) {
 		return
 	}
-	if isCompared(cur) || sharesCompositeWithContext(pass, cur) {
+	if isCompared(cur) || sharesCompositeWithContext(pass, cur, cache) {
 		return
 	}
 	pass.Report(analysis.Diagnostic{Pos: call.Pos(), End: call.End(), Message: rootMessage})
@@ -183,20 +193,12 @@ func enclosingAssign(cur inspector.Cursor, call *ast.CallExpr) *ast.AssignStmt {
 }
 
 func inRHS(as *ast.AssignStmt, call *ast.CallExpr) bool {
-	for _, rhs := range as.Rhs {
-		found := false
-		ast.Inspect(stripParens(rhs), func(n ast.Node) bool {
-			if n == call {
-				found = true
-				return false
-			}
-			return true
-		})
-		if found {
-			return true
-		}
+	if len(as.Rhs) == 0 {
+		return false
 	}
-	return false
+	start := as.Rhs[0].Pos()
+	end := as.Rhs[len(as.Rhs)-1].End()
+	return call.Pos() >= start && call.End() <= end
 }
 
 func assignedContextParam(pass *analysis.Pass, cur inspector.Cursor, as *ast.AssignStmt) *types.Var {
@@ -231,7 +233,7 @@ func isCompared(cur inspector.Cursor) bool {
 	return bin.Op == token.EQL || bin.Op == token.NEQ
 }
 
-func sharesCompositeWithContext(pass *analysis.Pass, cur inspector.Cursor) bool {
+func sharesCompositeWithContext(pass *analysis.Pass, cur inspector.Cursor, cache *rootCache) bool {
 	var lit *ast.CompositeLit
 	for c := range cur.Enclosing((*ast.CompositeLit)(nil)) {
 		if l, ok := c.Node().(*ast.CompositeLit); ok {
@@ -241,6 +243,10 @@ func sharesCompositeWithContext(pass *analysis.Pass, cur inspector.Cursor) bool 
 	}
 	if lit == nil {
 		return false
+	}
+	key := compositeKey{lit: lit, owner: ownerOf(cur).Node()}
+	if got, ok := cache.shared[key]; ok {
+		return got
 	}
 	found := false
 	ast.Inspect(lit, func(n ast.Node) bool {
@@ -257,5 +263,6 @@ func sharesCompositeWithContext(pass *analysis.Pass, cur inspector.Cursor) bool 
 		}
 		return true
 	})
+	cache.shared[key] = found
 	return found
 }
