@@ -74,7 +74,8 @@ func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]b
 		return
 	}
 	views := viewDefs(pass, fn)
-	sinks := sinkExprs(pass, loopCtx{fn: fn, loop: loop, body: body})
+	ctx := loopCtx{fn: fn, loop: loop, body: body}
+	sinks := sinkExprs(pass, ctx)
 	for _, s := range sinks {
 		v, recvExpr, viewMethod, ok := sinkView(pass, s.expr, views)
 		if !ok {
@@ -87,7 +88,7 @@ func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]b
 		if recvFreshInBody(recvKey, body) {
 			continue
 		}
-		if viewSilent(pass, fn, loop, body, s, recvKey) {
+		if viewSilent(pass, ctx, s, recvKey, viewMethod) {
 			continue
 		}
 		method, ok := invalidOther(invalid[recvKey], viewMethod)
@@ -102,17 +103,27 @@ func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]b
 	}
 }
 
-func viewSilent(pass *analysis.Pass, fn, loop, body ast.Node, sink viewSink, recvKey flow.Key) bool {
+func viewSilent(pass *analysis.Pass, ctx loopCtx, sink viewSink, recvKey flow.Key, viewMethod string) bool {
 	if sink.ret {
-		return recvLocalKept(pass, fn, recvKey)
+		return returnKept(pass, ctx.fn, sink, recvKey, viewMethod)
 	}
 	if sink.assign == nil {
 		return false
 	}
-	if !recvLocalKept(pass, fn, recvKey) {
+	v, ok := outerViewVar(pass, ctx.loop, sink.assign, sink.expr)
+	if !ok {
+		if !recvLocalKept(pass, ctx.fn, recvKey) {
+			return false
+		}
+		return assignExitsLoop(ctx.body, sink.assign) && noInvalidAfter(pass, ctx.fn, ctx.loop, recvKey)
+	}
+	if outerAssignLive(pass, ctx, sink.assign, v, recvKey, viewMethod) {
 		return false
 	}
-	return assignExitsLoop(body, sink.assign) && noInvalidAfter(pass, fn, loop, recvKey)
+	if bareReturnKeeps(pass, ctx.fn, v, recvKey) {
+		return false
+	}
+	return true
 }
 
 func recvLocalKept(pass *analysis.Pass, fn ast.Node, k flow.Key) bool {
@@ -691,7 +702,7 @@ func outerOrEscaped(pass *analysis.Pass, ctx loopCtx, e ast.Expr) bool {
 	if v == nil {
 		return false
 	}
-	return loopVarEscapes(pass, ctx, v)
+	return loopVarEscapes(pass, ctx, v, e)
 }
 
 func rootVar(pass *analysis.Pass, e ast.Expr) *types.Var {
@@ -702,7 +713,7 @@ func rootVar(pass *analysis.Pass, e ast.Expr) *types.Var {
 	return viewVarOf(pass, id)
 }
 
-func loopVarEscapes(pass *analysis.Pass, ctx loopCtx, v *types.Var) bool {
+func loopVarEscapes(pass *analysis.Pass, ctx loopCtx, v *types.Var, target ast.Expr) bool {
 	if flow.Escapes(pass.TypesInfo, ctx.fn, v) {
 		return true
 	}
@@ -714,53 +725,53 @@ func loopVarEscapes(pass *analysis.Pass, ctx loopCtx, v *types.Var) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		found = escapesAt(pass, ctx, n, v)
+		found = escapesAt(pass, ctx, n, target)
 		return !found
 	})
 	return found
 }
 
-func escapesAt(pass *analysis.Pass, ctx loopCtx, n ast.Node, v *types.Var) bool {
+func escapesAt(pass *analysis.Pass, ctx loopCtx, n ast.Node, target ast.Expr) bool {
 	switch x := n.(type) {
 	case *ast.CallExpr:
-		return appendHolds(pass, x, v)
+		return appendHolds(pass, x, target)
 	case *ast.SendStmt:
-		return rootIsVar(pass, x.Value, v)
+		return carriesView(pass, x.Value, target)
 	case *ast.ReturnStmt:
-		return resultsHold(pass, x.Results, v)
+		return resultsHold(pass, x.Results, target)
 	case *ast.AssignStmt:
-		return assignHolds(pass, ctx.loop, x, v)
+		return assignHolds(pass, ctx.loop, x, target)
 	}
 	return false
 }
 
-func appendHolds(pass *analysis.Pass, call *ast.CallExpr, v *types.Var) bool {
+func appendHolds(pass *analysis.Pass, call *ast.CallExpr, target ast.Expr) bool {
 	if !isAppendCall(pass, call) {
 		return false
 	}
 	for _, e := range appendElemArgs(call, nil) {
-		if rootIsVar(pass, e, v) {
+		if carriesView(pass, e, target) {
 			return true
 		}
 	}
 	return false
 }
 
-func resultsHold(pass *analysis.Pass, results []ast.Expr, v *types.Var) bool {
+func resultsHold(pass *analysis.Pass, results []ast.Expr, target ast.Expr) bool {
 	for _, r := range results {
-		if rootIsVar(pass, r, v) {
+		if carriesView(pass, r, target) {
 			return true
 		}
 	}
 	return false
 }
 
-func assignHolds(pass *analysis.Pass, loop ast.Node, as *ast.AssignStmt, v *types.Var) bool {
+func assignHolds(pass *analysis.Pass, loop ast.Node, as *ast.AssignStmt, target ast.Expr) bool {
 	if !outerAssign(pass, loop, as.Lhs) {
 		return false
 	}
 	for _, r := range as.Rhs {
-		if rootIsVar(pass, r, v) {
+		if carriesView(pass, r, target) {
 			return true
 		}
 	}
@@ -792,12 +803,41 @@ func outerTarget(pass *analysis.Pass, loop ast.Node, lhs ast.Expr) bool {
 	return false
 }
 
-func rootIsVar(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
-	id := rootIdent(e)
-	if id == nil {
+func carriesView(pass *analysis.Pass, escape, target ast.Expr) bool {
+	tk, ok := flow.KeyOf(pass.TypesInfo, target)
+	if ok {
+		ek, ok := flow.KeyOf(pass.TypesInfo, escape)
+		if !ok {
+			return false
+		}
+		if ek.Root != tk.Root {
+			return false
+		}
+		return ek.Path == "" || ek.Path == tk.Path
+	}
+	return carriesMapView(pass, escape, target)
+}
+
+func carriesMapView(pass *analysis.Pass, escape, target ast.Expr) bool {
+	tidx, isIndex := ast.Unparen(target).(*ast.IndexExpr)
+	if !isIndex {
 		return false
 	}
-	return viewVarOf(pass, id) == v
+	vroot := rootVar(pass, target)
+	if vroot == nil {
+		return false
+	}
+	if ek, isKey := flow.KeyOf(pass.TypesInfo, escape); isKey {
+		return ek.Root == vroot && ek.Path == ""
+	}
+	eidx, isEIndex := ast.Unparen(escape).(*ast.IndexExpr)
+	if !isEIndex {
+		return false
+	}
+	if rootVar(pass, escape) != vroot {
+		return false
+	}
+	return types.ExprString(tidx.Index) == types.ExprString(eidx.Index)
 }
 
 func rootInLoop(pass *analysis.Pass, loop ast.Node, e ast.Expr) bool {

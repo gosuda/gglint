@@ -3,6 +3,7 @@ package viewescape
 import (
 	"bufio"
 	"bytes"
+	"sync"
 )
 
 func viewescapeReported(sc *bufio.Scanner, lines [][]byte) [][]byte {
@@ -315,4 +316,117 @@ func viewescapeReportedAssignReturnParam(sc *bufio.Scanner) []byte {
 		return out
 	}
 	return nil
+}
+
+func viewescapeSilentPeekReassigned(r *bufio.Reader) (n int, err error) {
+	var line []byte
+	for {
+		line, err = r.Peek(2)
+		if err != nil || string(line) == "$$" {
+			return
+		}
+		line, err = r.ReadSlice('\n')
+		n += len(line)
+	}
+}
+
+func viewescapeSilentFieldOtherLeaves(sc *bufio.Scanner) []int {
+	type rec struct {
+		b []byte
+		n int
+	}
+	var ns []int
+	for sc.Scan() {
+		var h rec
+		h.b = sc.Bytes()
+		h.n = len(h.b)
+		ns = append(ns, h.n)
+	}
+	return ns
+}
+
+func viewescapeSilentAssignBreakClone(sc *bufio.Scanner) []byte {
+	var line []byte
+	for sc.Scan() {
+		line = sc.Bytes()
+		break
+	}
+	return bytes.Clone(line)
+}
+
+func viewescapeSilentAttrCopy(line []byte) []byte {
+	var buf bytes.Buffer
+	for i := range line {
+		if line[i] == '"' {
+			return buf.Bytes()
+		}
+		buf.Write([]byte{line[i]})
+	}
+	return nil
+}
+
+func viewescapeSilentHeadersCopy(r *bufio.Reader) (out []string) {
+	var line []byte
+	for {
+		line, _ = r.Peek(2)
+		if string(line) == "$$" {
+			return out
+		}
+		line, _ = r.ReadSlice('\n')
+		out = append(out, string(line))
+	}
+}
+
+func viewescapeReportedDeferredReset(sc *bufio.Scanner) []byte {
+	var buf bytes.Buffer
+	for sc.Scan() {
+		defer buf.Reset()
+		return buf.Bytes() // want "points into the buffer of"
+	}
+	return nil
+}
+
+func viewescapeReportedReturnEscape(line []byte) []byte {
+	var buf bytes.Buffer
+	_ = &buf
+	for i := range line {
+		if line[i] == '"' {
+			return buf.Bytes() // want "points into the buffer of"
+		}
+		buf.Write([]byte{line[i]})
+	}
+	return nil
+}
+
+func viewescapeReportedDeferredPut(sc *bufio.Scanner, pool *sync.Pool) []byte {
+	var buf bytes.Buffer
+	for sc.Scan() {
+		buf.Write(sc.Bytes())
+		defer pool.Put(buf)
+		return buf.Bytes() // want "points into the buffer of"
+	}
+	return nil
+}
+
+func viewescapeReportedAssignUse(sc *bufio.Scanner) {
+	var b []byte
+	for sc.Scan() {
+		_ = b
+		b = sc.Bytes() // want "points into the buffer of"
+	}
+}
+
+func viewescapeReportedAssignBareReturn(sc *bufio.Scanner) (out []byte) {
+	for sc.Scan() {
+		out = sc.Bytes() // want "points into the buffer of"
+	}
+	return
+}
+
+func viewescapeSilentFieldAssignBreak(s string, h *viewHolder) {
+	sc := bufio.NewScanner(bytes.NewBufferString(s))
+	for sc.Scan() {
+		h.b = sc.Bytes()
+		break
+	}
 }

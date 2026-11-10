@@ -46,7 +46,7 @@ var useafterfreeAnalyzer = &analysis.Analyzer{
 var viewescapeAnalyzer = &analysis.Analyzer{
 	Name:     "viewescape",
 	Doc:      "reports buffer views kept past the call that overwrites them",
-	Requires: []*analysis.Analyzer{inspect.Analyzer},
+	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runViewescape,
 }
 
