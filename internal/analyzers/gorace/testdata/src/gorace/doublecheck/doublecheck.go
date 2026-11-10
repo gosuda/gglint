@@ -121,14 +121,3 @@ func doublecheckLocalSilent() *chkT {
 	}
 	return s.inst
 }
-
-func doublecheckLateLockSilent() *chkT {
-	if chkInst == nil {
-		if chkInst == nil {
-			chkInst = newChk()
-		}
-		chkMu.Lock()
-		chkMu.Unlock()
-	}
-	return chkInst
-}

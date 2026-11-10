@@ -26,8 +26,9 @@ const (
 )
 
 type holder struct {
-	keys map[flow.Key]map[ast.Node]bool
-	held func(ast.Node) []flow.Key
+	keys     map[flow.Key]map[ast.Node]bool
+	held     func(ast.Node) []flow.Key
+	lazyHeld func() func(ast.Node) []flow.Key
 }
 
 func newHolder(pass *analysis.Pass, fn ast.Node) *holder {
@@ -39,7 +40,7 @@ func newHolder(pass *analysis.Pass, fn ast.Node) *holder {
 	if g == nil {
 		return h
 	}
-	h.held = flow.HeldAt(pass, g)
+	h.lazyHeld = func() func(ast.Node) []flow.Key { return flow.HeldAt(pass, g) }
 	deferOps := deferStmts(fn)
 	for _, k := range lockerKeys(pass.TypesInfo, fn) {
 		seen := map[ast.Node]bool{}
@@ -57,24 +58,40 @@ func newHolder(pass *analysis.Pass, fn ast.Node) *holder {
 }
 
 func (h *holder) at(n ast.Node) []flow.Key {
-	seen := map[flow.Key]bool{}
-	var out []flow.Key
+	if h.held == nil && h.lazyHeld != nil {
+		h.held = h.lazyHeld()
+		h.lazyHeld = nil
+	}
 	resolved := resolveStmt(n)
 	lookup := cmp.Or(resolved, n)
-	for k, nodes := range h.keys {
-		if nodes[n] || nodes[resolved] {
-			if !seen[k] {
-				seen[k] = true
-				out = append(out, k)
-			}
+	seen := map[flow.Key]bool{}
+	var out []flow.Key
+	out = appendStaticKeys(out, seen, h.keys, n, resolved)
+	out = appendFlowKeys(out, seen, h.held, lookup)
+	return out
+}
+
+func appendStaticKeys(out []flow.Key, seen map[flow.Key]bool, keys map[flow.Key]map[ast.Node]bool, n, resolved ast.Node) []flow.Key {
+	for k, nodes := range keys {
+		if !nodes[n] && !nodes[resolved] {
+			continue
+		}
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
 		}
 	}
-	if h.held != nil {
-		for _, k := range h.held(lookup) {
-			if !seen[k] {
-				seen[k] = true
-				out = append(out, k)
-			}
+	return out
+}
+
+func appendFlowKeys(out []flow.Key, seen map[flow.Key]bool, held func(ast.Node) []flow.Key, lookup ast.Node) []flow.Key {
+	if held == nil {
+		return out
+	}
+	for _, k := range held(lookup) {
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
 		}
 	}
 	return out

@@ -205,15 +205,50 @@ func rootedKeys(keys []flow.Key, lit *ast.FuncLit) []flow.Key {
 	return out
 }
 
+type loopNest struct {
+	node ast.Node
+	body *ast.BlockStmt
+}
+
+func collectLoops(fn ast.Node) []loopNest {
+	var out []loopNest
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok && n != fn {
+			return false
+		}
+		if body := loopBodyOf(n); body != nil {
+			out = append(out, loopNest{node: n, body: body})
+		}
+		return true
+	})
+	return out
+}
+
+func innermostNest(loops []loopNest, pos token.Pos) (ast.Node, *ast.BlockStmt) {
+	var bestLoop ast.Node
+	var bestBody *ast.BlockStmt
+	for _, l := range loops {
+		if !bodyContains(l.body, pos) {
+			continue
+		}
+		if bestBody == nil || l.body.End()-l.body.Pos() < bestBody.End()-bestBody.Pos() {
+			bestLoop = l.node
+			bestBody = l.body
+		}
+	}
+	return bestLoop, bestBody
+}
+
 type guardScope struct {
 	pass     *analysis.Pass
 	fn       ast.Node
 	parents  *holder
 	litLocks map[*ast.FuncLit]*holder
+	loops    []loopNest
 }
 
 func newGuardScope(pass *analysis.Pass, fn ast.Node) *guardScope {
-	return &guardScope{pass: pass, fn: fn, parents: newHolder(pass, fn), litLocks: map[*ast.FuncLit]*holder{}}
+	return &guardScope{pass: pass, fn: fn, parents: newHolder(pass, fn), litLocks: map[*ast.FuncLit]*holder{}, loops: collectLoops(fn)}
 }
 
 func (g *guardScope) parentHeld(stmt ast.Node) []flow.Key {
@@ -266,8 +301,8 @@ func funcBodies(pass *analysis.Pass) []ast.Node {
 	return out
 }
 
-func declaredOutsideLoop(info *types.Info, fn ast.Node, v types.Object, site ast.Node) bool {
-	loop, body := innermostLoop(fn, site.Pos())
+func declaredOutsideLoop(info *types.Info, loops []loopNest, v types.Object, site ast.Node) bool {
+	loop, body := innermostNest(loops, site.Pos())
 	if body == nil || loop == nil {
 		return true
 	}
@@ -277,8 +312,8 @@ func declaredOutsideLoop(info *types.Info, fn ast.Node, v types.Object, site ast
 	return !headerDefines(info, loop, body, v)
 }
 
-func declAvoid(info *types.Info, fn ast.Node, v types.Object, site ast.Node) func(ast.Node) bool {
-	_, body := innermostLoop(fn, site.Pos())
+func declAvoid(info *types.Info, loops []loopNest, v types.Object, site ast.Node) func(ast.Node) bool {
+	_, body := innermostNest(loops, site.Pos())
 	if body == nil {
 		return nil
 	}
@@ -303,26 +338,6 @@ func definesVar(info *types.Info, n ast.Node, v types.Object) bool {
 		return true
 	})
 	return found
-}
-
-func innermostLoop(fn ast.Node, pos token.Pos) (ast.Node, *ast.BlockStmt) {
-	var bestLoop ast.Node
-	var bestBody *ast.BlockStmt
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok && n != fn {
-			return false
-		}
-		body := loopBodyOf(n)
-		if !bodyContains(body, pos) {
-			return true
-		}
-		if bestBody == nil || body.End()-body.Pos() < bestBody.End()-bestBody.Pos() {
-			bestLoop = n
-			bestBody = body
-		}
-		return true
-	})
-	return bestLoop, bestBody
 }
 
 func loopBodyOf(n ast.Node) *ast.BlockStmt {

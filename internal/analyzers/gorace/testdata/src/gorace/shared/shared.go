@@ -352,3 +352,72 @@ func sharedBufferedSendReported() int {
 	c <- 2
 	return count
 }
+
+func sharedUnrelatedCallReported() string {
+	s := "a"
+	done := make(chan struct{}, 1)
+	go func() { // want `s is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		println(s)
+		done <- struct{}{}
+	}()
+	_ = workErr()
+	s = "b"
+	return s
+}
+
+func sharedOtherLockReported() string {
+	var mu sync.Mutex
+	var other sync.Mutex
+	s := "a"
+	mu.Lock()
+	go func() { // want `s is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		println(s)
+		mu.Unlock()
+	}()
+	other.Lock()
+	s = "b"
+	other.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
+	return s
+}
+
+func sharedLoopCondReported(xs []int) int {
+	var mu sync.Mutex
+	x := 0
+	mu.Lock()
+	go func() { // want `x is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		mu.Lock()
+		x = 1
+		mu.Unlock()
+	}()
+	for i := 0; x < len(xs) && i < 3; i++ {
+		mu.Unlock()
+	}
+	_ = xs
+	return 0
+}
+
+func sharedNestedRecvBufferedReported() int {
+	ready := make(chan struct{}, 1)
+	gp := 0
+	go func() { // want `gp is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		gp = 1
+		sharedCall(func() { <-ready })
+	}()
+	ready <- struct{}{}
+	return gp
+}
+
+func sharedNestedCloseSilent(wg *sync.WaitGroup, done chan struct{}) int {
+	gp := 0
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		gp = 1
+		sharedCall(func() { close(done) })
+	}()
+	<-done
+	wg.Wait()
+	return gp
+}

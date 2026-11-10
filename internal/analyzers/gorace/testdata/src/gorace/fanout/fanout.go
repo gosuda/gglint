@@ -337,3 +337,66 @@ func fanoutWgGoBreakSilent(xs []int, wg *sync.WaitGroup) int {
 	wg.Wait()
 	return out
 }
+
+func fanoutStartGateReported(xs []int, start chan struct{}) int {
+	total := 0
+	for _, x := range xs {
+		go func() {
+			<-start
+			total += x // want `total is written by every goroutine this loop starts, so the writes race when two of them overlap: collect results through a channel, or guard the write with a mutex`
+		}()
+	}
+	close(start)
+	return total
+}
+
+func fanoutReleasedWriteReported(xs []int) int {
+	var mu sync.Mutex
+	out := 0
+	mu.Lock()
+	for _, x := range xs {
+		go func() {
+			mu.Lock()
+			mu.Unlock()
+			out = x // want `out is written by every goroutine this loop starts, so the writes race when two of them overlap: collect results through a channel, or guard the write with a mutex`
+		}()
+	}
+	mu.Unlock()
+	return out
+}
+
+func fanoutTokenDirectSilent(xs []int) int {
+	in := make(chan int)
+	out := make(chan int)
+	total := 0
+	for _, x := range xs {
+		go func() {
+			v := <-in
+			total += x + v
+			out <- total
+		}()
+	}
+	for _, x := range xs {
+		in <- x
+		<-out
+	}
+	return total
+}
+
+func fanoutSemaphoreSilent(xs []int) int {
+	sem := make(chan struct{}, 1)
+	done := make(chan struct{})
+	out := 0
+	for _, x := range xs {
+		go func() {
+			sem <- struct{}{}
+			out = x
+			<-sem
+			done <- struct{}{}
+		}()
+	}
+	for range xs {
+		<-done
+	}
+	return out
+}

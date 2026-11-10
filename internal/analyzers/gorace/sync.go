@@ -27,20 +27,27 @@ func checkDoublecheck(pass *analysis.Pass, fn ast.Node) {
 	if passesMutex(pass.TypesInfo, fn) {
 		return
 	}
-	g := flow.NewGraph(pass, fn)
-	if g == nil {
-		return
-	}
-	held := flow.HeldAt(pass, g)
+	var outers []*ast.IfStmt
 	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		if outer, ok := n.(*ast.IfStmt); ok {
-			reportDoublecheck(pass, fn, held, outer)
+			outers = append(outers, outer)
 		}
 		return true
 	})
+	if len(outers) == 0 {
+		return
+	}
+	g := flow.NewGraph(pass, fn)
+	if g == nil {
+		return
+	}
+	held := flow.HeldAt(pass, g)
+	for _, outer := range outers {
+		reportDoublecheck(pass, fn, held, outer)
+	}
 }
 
 func reportDoublecheck(pass *analysis.Pass, fn ast.Node, held func(ast.Node) []flow.Key, outer *ast.IfStmt) {

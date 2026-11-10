@@ -12,7 +12,7 @@ import (
 
 type varAccess struct {
 	key      flow.Key
-	stmt     ast.Stmt
+	stmt     ast.Node
 	write    bool
 	index    bool
 	del      bool
@@ -291,7 +291,13 @@ func appendHeaderReads(info *types.Info, n ast.Node, out []varAccess) ([]varAcce
 	case *ast.IfStmt:
 		return append(out, condAccesses(info, n, n.Cond)...), true
 	case *ast.ForStmt:
-		return append(out, condAccesses(info, n, n.Cond)...), true
+		reads := condAccesses(info, n, n.Cond)
+		if n.Cond != nil {
+			for i := range reads {
+				reads[i].stmt = n.Cond
+			}
+		}
+		return append(out, reads...), true
 	case *ast.RangeStmt:
 		out = appendRangeReads(info, n, out)
 		return append(out, rangeWrites(info, n)...), true
@@ -538,7 +544,7 @@ func (m *mapScope) reportableMapWrite(s flow.Spawn, a varAccess, spawns []flow.S
 	if !mapReportable(s, a) {
 		return false
 	}
-	outside := declaredOutsideLoop(m.pass.TypesInfo, m.fn, a.key.Root, s.Site)
+	outside := declaredOutsideLoop(m.pass.TypesInfo, m.loops, a.key.Root, s.Site)
 	if !outside && !m.parentMapOp(a) {
 		return false
 	}
@@ -571,10 +577,12 @@ func mapReportable(s flow.Spawn, a varAccess) bool {
 }
 
 func (m *mapScope) hasOther(s flow.Spawn, a varAccess, spawns []flow.Spawn) bool {
-	avoid := declAvoid(m.pass.TypesInfo, m.fn, a.key.Root, s.Site)
-	for _, p := range m.parent {
-		if m.parentConflicts(s, a, p, avoid) {
-			return true
+	if len(m.parent) > 0 {
+		avoid := declAvoid(m.pass.TypesInfo, m.loops, a.key.Root, s.Site)
+		for _, p := range m.parent {
+			if m.parentConflicts(s, a, p, avoid) {
+				return true
+			}
 		}
 	}
 	return m.otherSpawnWrites(s, a, spawns)
@@ -622,29 +630,35 @@ func runFanout(pass *analysis.Pass) (any, error) {
 	return nil, nil
 }
 
+type fanoutCtx struct {
+	loops    []loopNest
+	buffered map[flow.Key]bool
+}
+
 func checkFanout(pass *analysis.Pass, fn ast.Node) {
 	info := pass.TypesInfo
 	if passesMutex(info, fn) || flow.Body(fn) == nil {
 		return
 	}
+	ctx := fanoutCtx{loops: collectLoops(fn), buffered: bufferedChanKeys(pass, fn)}
 	for _, s := range flow.Spawns(pass, fn) {
 		if !s.InLoop || s.Body == nil || passesMutex(info, s.Body) || exitsListAfter(fn, s.Site) {
 			continue
 		}
 		for _, a := range collectLit(info, s.Body) {
-			reportFanoutWrite(pass, fn, s, a)
+			reportFanoutWrite(pass, fn, ctx, s, a)
 		}
 	}
 }
 
-func reportFanoutWrite(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAccess) {
-	if !fanoutReportable(pass, fn, s, a) {
+func reportFanoutWrite(pass *analysis.Pass, fn ast.Node, ctx fanoutCtx, s flow.Spawn, a varAccess) {
+	if !fanoutReportable(pass, fn, ctx, s, a) {
 		return
 	}
 	pass.Reportf(a.stmt.Pos(), "%s is written by every goroutine this loop starts, so the writes race when two of them overlap: collect results through a channel, or guard the write with a mutex", keyText(pass, a.key))
 }
 
-func fanoutReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAccess) bool {
+func fanoutReportable(pass *analysis.Pass, fn ast.Node, ctx fanoutCtx, s flow.Spawn, a varAccess) bool {
 	if !a.write || a.index || a.del || a.clr {
 		return false
 	}
@@ -652,17 +666,17 @@ func fanoutReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, a varAcces
 	if !ok {
 		return false
 	}
-	return fanoutVarReportable(pass, fn, s, v, a)
+	return fanoutVarReportable(pass, fn, ctx, s, v, a)
 }
 
-func fanoutVarReportable(pass *analysis.Pass, fn ast.Node, s flow.Spawn, v *types.Var, a varAccess) bool {
-	if !outsideLit(v, s.Body) || isSyncType(v.Type()) || !declaredOutsideLoop(pass.TypesInfo, fn, v, s.Site) {
+func fanoutVarReportable(pass *analysis.Pass, fn ast.Node, ctx fanoutCtx, s flow.Spawn, v *types.Var, a varAccess) bool {
+	if !outsideLit(v, s.Body) || isSyncType(v.Type()) || !declaredOutsideLoop(pass.TypesInfo, ctx.loops, v, s.Site) {
 		return false
 	}
 	if len(heldOutside(pass, s.Body, lockNodeFor(a))) != 0 {
 		return false
 	}
-	return !fanoutOrdered(pass, fn, s, a.stmt.Pos())
+	return !fanoutOrdered(pass, fn, s, a.stmt.Pos(), ctx.buffered)
 }
 
 func runShared(pass *analysis.Pass) (any, error) {
@@ -687,17 +701,17 @@ func checkShared(pass *analysis.Pass, fn ast.Node) {
 		sites[s.Site] = true
 	}
 	scope := &sharedScope{guardScope: newGuardScope(pass, fn), graph: g, fn: fn, parent: collectParent(info, fn, sites), hasWaitCall: isSynctestWait(pass, flow.Body(fn))}
+	buffered := bufferedChanKeys(pass, fn)
 	for _, s := range spawns {
 		if s.InLoop || s.Body == nil {
 			continue
 		}
-		scope.checkSpawn(s)
+		scope.checkSpawn(s, buffered)
 	}
 }
 
-func (m *sharedScope) checkSpawn(s flow.Spawn) {
+func (m *sharedScope) checkSpawn(s flow.Spawn, buffered map[flow.Key]bool) {
 	lit := collectLit(m.pass.TypesInfo, s.Body)
-	buffered := bufferedChanKeys(m.pass, m.fn)
 	for _, k := range sharedKeys(m.pass, m.fn, s, lit) {
 		if m.conflict(s, k, lit, buffered) {
 			return
@@ -725,7 +739,7 @@ func (m *sharedScope) conflict(s flow.Spawn, k flow.Key, lit []varAccess, buffer
 	if passesMutex(m.pass.TypesInfo, s.Body) {
 		return false
 	}
-	avoid := declAvoid(m.pass.TypesInfo, m.fn, k.Root, s.Site)
+	avoid := declAvoid(m.pass.TypesInfo, m.loops, k.Root, s.Site)
 	for _, a := range lit {
 		if a.key != k {
 			continue

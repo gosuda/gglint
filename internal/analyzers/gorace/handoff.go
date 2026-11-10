@@ -67,24 +67,30 @@ func isCloseCall(info *types.Info, call *ast.CallExpr) bool {
 }
 
 type litOrder struct {
-	recvBefore      bool
-	loadBefore      bool
-	lockBefore      bool
-	lockBeforeKeys  []flow.Key
-	recvAfter       bool
-	sendAfter       bool
-	closeAfter      bool
-	unlockAfter     bool
-	storeAfter      bool
-	unlockAfterKeys []flow.Key
+	recvBefore        bool
+	loadBefore        bool
+	recvAfter         bool
+	sendAfter         bool
+	closeAfter        bool
+	unlockAfter       bool
+	storeAfter        bool
+	unlockAfterKeys   []flow.Key
+	recvBeforeKeys    []flow.Key
+	recvBeforeUnknown bool
+	sendAfterKeys     []flow.Key
+	sendAfterUnknown  bool
+	recvAfterKeys     []flow.Key
+	recvAfterUnknown  bool
+	sendBeforeKeys    []flow.Key
+	closeAfterKeys    []flow.Key
+	helperSendKeys    []flow.Key
 }
 
 func scanLitOrder(pass *analysis.Pass, lit *ast.FuncLit, accessPos token.Pos) litOrder {
 	var o litOrder
-	info := pass.TypesInfo
 	ast.Inspect(lit.Body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok && n != ast.Node(lit.Body) {
-			return scanCallArgLit(info, n, accessPos, &o)
+			return scanCallArgLit(pass, n, accessPos, &o)
 		}
 		visitLitNode(pass, n, accessPos, &o)
 		return true
@@ -93,7 +99,7 @@ func scanLitOrder(pass *analysis.Pass, lit *ast.FuncLit, accessPos token.Pos) li
 	return o
 }
 
-func scanCallArgLit(info *types.Info, n ast.Node, accessPos token.Pos, o *litOrder) bool {
+func scanCallArgLit(pass *analysis.Pass, n ast.Node, accessPos token.Pos, o *litOrder) bool {
 	lit, ok := n.(*ast.FuncLit)
 	if !ok {
 		return true
@@ -102,7 +108,7 @@ func scanCallArgLit(info *types.Info, n ast.Node, accessPos token.Pos, o *litOrd
 		if _, ok := x.(*ast.FuncLit); ok {
 			return false
 		}
-		visitLitNodeForArg(info, x, accessPos, o)
+		visitLitNodeForArg(pass, x, accessPos, o)
 		return true
 	})
 	return false
@@ -114,33 +120,95 @@ func visitLitNode(pass *analysis.Pass, n ast.Node, accessPos token.Pos, o *litOr
 		if x.Op != token.ARROW {
 			break
 		}
-		if x.Pos() < accessPos {
-			o.recvBefore = true
-		} else if x.Pos() > accessPos {
-			o.recvAfter = true
-		}
+		recordRecv(pass.TypesInfo, x.X, x.Pos(), accessPos, o)
 	case *ast.SendStmt:
-		if x.Pos() > accessPos {
-			o.sendAfter = true
-		}
+		recordSend(pass, x.Chan, x.Pos(), accessPos, o)
 	case *ast.CallExpr:
 		visitLitCall(pass, x, accessPos, o)
 	}
 }
 
-func visitLitNodeForArg(info *types.Info, x ast.Node, accessPos token.Pos, o *litOrder) {
+func recordRecv(info *types.Info, e ast.Expr, pos, accessPos token.Pos, o *litOrder) {
+	if pos < accessPos {
+		o.recvBefore = true
+		if k, ok := flow.KeyOf(info, e); ok {
+			o.recvBeforeKeys = append(o.recvBeforeKeys, k)
+		} else {
+			o.recvBeforeUnknown = true
+		}
+		return
+	}
+	if pos > accessPos {
+		o.recvAfter = true
+		if k, ok := flow.KeyOf(info, e); ok {
+			o.recvAfterKeys = append(o.recvAfterKeys, k)
+		} else {
+			o.recvAfterUnknown = true
+		}
+	}
+}
+
+func visitLitNodeForArg(pass *analysis.Pass, x ast.Node, accessPos token.Pos, o *litOrder) {
 	switch n := x.(type) {
 	case *ast.UnaryExpr:
-		if n.Op == token.ARROW && n.Pos() > accessPos {
-			o.recvAfter = true
-		}
+		argRecvAfter(pass, n, accessPos, o)
 	case *ast.SendStmt:
-		if n.Pos() > accessPos {
-			o.sendAfter = true
-		}
+		argSendAfter(pass, n, accessPos, o)
 	case *ast.CallExpr:
-		if isCloseCall(info, n) && n.Pos() > accessPos {
-			o.closeAfter = true
+		argCloseAfter(pass, n, accessPos, o)
+	}
+}
+
+func argRecvAfter(pass *analysis.Pass, n *ast.UnaryExpr, accessPos token.Pos, o *litOrder) {
+	if n.Op != token.ARROW || n.Pos() <= accessPos {
+		return
+	}
+	o.recvAfter = true
+	if k, ok := flow.KeyOf(pass.TypesInfo, n.X); ok {
+		o.recvAfterKeys = append(o.recvAfterKeys, k)
+	} else {
+		o.recvAfterUnknown = true
+	}
+}
+
+func argSendAfter(pass *analysis.Pass, n *ast.SendStmt, accessPos token.Pos, o *litOrder) {
+	if n.Pos() <= accessPos {
+		return
+	}
+	o.sendAfter = true
+	if k, ok := flow.KeyOf(pass.TypesInfo, n.Chan); ok {
+		o.sendAfterKeys = append(o.sendAfterKeys, k)
+	} else {
+		o.sendAfterUnknown = true
+	}
+}
+
+func argCloseAfter(pass *analysis.Pass, n *ast.CallExpr, accessPos token.Pos, o *litOrder) {
+	if !isCloseCall(pass.TypesInfo, n) || n.Pos() <= accessPos {
+		return
+	}
+	o.closeAfter = true
+	if len(n.Args) != 1 {
+		return
+	}
+	if k, ok := flow.KeyOf(pass.TypesInfo, n.Args[0]); ok {
+		o.closeAfterKeys = append(o.closeAfterKeys, k)
+	}
+}
+
+func recordSend(pass *analysis.Pass, e ast.Expr, pos, accessPos token.Pos, o *litOrder) {
+	if pos < accessPos {
+		if k, ok := flow.KeyOf(pass.TypesInfo, e); ok {
+			o.sendBeforeKeys = append(o.sendBeforeKeys, k)
+		}
+		return
+	}
+	if pos > accessPos {
+		o.sendAfter = true
+		if k, ok := flow.KeyOf(pass.TypesInfo, e); ok {
+			o.sendAfterKeys = append(o.sendAfterKeys, k)
+		} else {
+			o.sendAfterUnknown = true
 		}
 	}
 }
@@ -151,9 +219,6 @@ func visitLitCall(pass *analysis.Pass, call *ast.CallExpr, accessPos token.Pos, 
 		return
 	}
 	name := selName(call.Fun)
-	if markLockBefore(info, name, call, accessPos, o) {
-		return
-	}
 	if markUnlockAfter(info, name, call, accessPos, o) {
 		return
 	}
@@ -169,18 +234,10 @@ func markCloseAfter(info *types.Info, call *ast.CallExpr, accessPos token.Pos, o
 	}
 	if call.Pos() > accessPos {
 		o.closeAfter = true
-	}
-	return true
-}
-
-func markLockBefore(info *types.Info, name string, call *ast.CallExpr, accessPos token.Pos, o *litOrder) bool {
-	if !isLockCallName(name) {
-		return false
-	}
-	if call.Pos() < accessPos {
-		o.lockBefore = true
-		if k, ok := flow.MethodKey(info, call); ok {
-			o.lockBeforeKeys = append(o.lockBeforeKeys, k)
+		if len(call.Args) == 1 {
+			if k, ok := flow.KeyOf(info, call.Args[0]); ok {
+				o.closeAfterKeys = append(o.closeAfterKeys, k)
+			}
 		}
 	}
 	return true
@@ -225,10 +282,47 @@ func scanChanneledDecl(pass *analysis.Pass, lit *ast.FuncLit, accessPos token.Po
 			return true
 		}
 		if declSignalsChannel(pass, call) {
-			o.sendAfter = true
+			if k, ok := flow.MethodKey(pass.TypesInfo, call); ok {
+				o.helperSendKeys = append(o.helperSendKeys, k)
+			} else {
+				o.sendAfterUnknown = true
+			}
 		}
 		return true
 	})
+}
+
+func declReceives(pass *analysis.Pass, call *ast.CallExpr) bool {
+	fn := typeutil.StaticCallee(pass.TypesInfo, call)
+	if fn == nil || fn.Pkg() == nil || pass.Pkg == nil {
+		return false
+	}
+	if fn.Pkg() != pass.Pkg {
+		return false
+	}
+	decl := funcDeclFor(pass, fn)
+	if decl == nil || decl.Body == nil {
+		return false
+	}
+	return bodyReceives(decl.Body)
+}
+
+func bodyReceives(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if u, ok := n.(*ast.UnaryExpr); ok && u.Op == token.ARROW {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func declSignalsChannel(pass *analysis.Pass, call *ast.CallExpr) bool {
@@ -289,50 +383,66 @@ func funcDeclFor(pass *analysis.Pass, fn *types.Func) *ast.FuncDecl {
 	return nil
 }
 
-func fanoutOrdered(pass *analysis.Pass, fn ast.Node, s flow.Spawn, accessPos token.Pos) bool {
+func fanoutOrdered(pass *analysis.Pass, fn ast.Node, s flow.Spawn, accessPos token.Pos, buffered map[flow.Key]bool) bool {
 	if s.Body == nil {
 		return false
 	}
 	o := scanLitOrder(pass, s.Body, accessPos)
-	if o.recvBefore || o.loadBefore {
+	if o.loadBefore && o.storeAfter {
 		return true
 	}
-	if o.lockBefore && parentHoldsAtSpawn(pass, fn, s, o.lockBeforeKeys) {
+	if recvBeforeUnbuffered(o, buffered) && sendAfterUnbuffered(o, buffered) {
 		return true
 	}
-	return false
-}
-
-func parentHoldsAtSpawn(pass *analysis.Pass, fn ast.Node, s flow.Spawn, keys []flow.Key) bool {
-	if len(keys) == 0 {
-		return false
-	}
-	h := newHolder(pass, fn)
-	held := h.at(s.Site)
-	for _, k := range keys {
-		if slices.Contains(held, k) {
+	for _, k := range o.sendBeforeKeys {
+		if slices.Contains(o.recvAfterKeys, k) && chanCapIsOne(pass, fn, k) {
 			return true
 		}
 	}
 	return false
 }
 
-func (m *sharedScope) waitsBetween(buffered map[flow.Key]bool, s flow.Spawn, at ast.Node) bool {
-	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
-		return parentWaitNode(m.pass, buffered, n)
-	})
+func recvBeforeUnbuffered(o litOrder, buffered map[flow.Key]bool) bool {
+	if o.recvBeforeUnknown {
+		return true
+	}
+	for _, k := range o.recvBeforeKeys {
+		if !buffered[k] {
+			return true
+		}
+	}
+	return false
 }
 
-func parentWaitNode(pass *analysis.Pass, buffered map[flow.Key]bool, n ast.Node) bool {
+func sendAfterUnbuffered(o litOrder, buffered map[flow.Key]bool) bool {
+	if o.sendAfterUnknown {
+		return true
+	}
+	for _, k := range o.sendAfterKeys {
+		if !buffered[k] {
+			return true
+		}
+	}
+	return false
+}
+
+func chanCapIsOne(pass *analysis.Pass, fn ast.Node, k flow.Key) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
 	found := false
-	ast.Inspect(n, func(x ast.Node) bool {
+	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		if _, ok := x.(*ast.FuncLit); ok {
-			return false
+		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit.Body) != ast.Node(body) {
+			if fnLit, ok := fn.(*ast.FuncLit); !ok || lit != fnLit {
+				return false
+			}
 		}
-		if nodeWaits(pass, buffered, x) {
+		v, ok := capOfMake(pass.TypesInfo, n, k)
+		if ok && v == 1 {
 			found = true
 			return false
 		}
@@ -341,27 +451,64 @@ func parentWaitNode(pass *analysis.Pass, buffered map[flow.Key]bool, n ast.Node)
 	return found
 }
 
-func nodeWaits(pass *analysis.Pass, buffered map[flow.Key]bool, x ast.Node) bool {
-	switch t := x.(type) {
-	case *ast.UnaryExpr:
-		return t.Op == token.ARROW
-	case *ast.SendStmt:
-		return sendWaits(pass.TypesInfo, buffered, t)
-	case *ast.CallExpr:
-		return isOpaqueWait(pass.TypesInfo, t) || isLockCallName(selName(t.Fun))
+func capOfMake(info *types.Info, n ast.Node, k flow.Key) (int64, bool) {
+	lhs, rhs, ok := capOperands(n)
+	if !ok {
+		return 0, false
 	}
-	return false
+	call, ok := ast.Unparen(rhs).(*ast.CallExpr)
+	if !ok {
+		return 0, false
+	}
+	v, ok := chanCapConst(info, call)
+	if !ok {
+		return 0, false
+	}
+	id, ok := identVar(info, lhs)
+	if !ok {
+		return 0, false
+	}
+	if got := (flow.Key{Root: id}); got != k {
+		return 0, false
+	}
+	return v, true
 }
 
-func sendWaits(info *types.Info, buffered map[flow.Key]bool, send *ast.SendStmt) bool {
-	if len(buffered) == 0 {
-		return true
+func capOperands(n ast.Node) (lhs, rhs ast.Expr, ok bool) {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		if len(t.Lhs) != 1 || len(t.Rhs) != 1 {
+			return nil, nil, false
+		}
+		return t.Lhs[0], t.Rhs[0], true
+	case *ast.ValueSpec:
+		if len(t.Names) != 1 || len(t.Values) != 1 {
+			return nil, nil, false
+		}
+		return t.Names[0], t.Values[0], true
 	}
-	k, ok := flow.KeyOf(info, send.Chan)
-	if !ok {
-		return true
+	return nil, nil, false
+}
+
+func chanCapConst(info *types.Info, call *ast.CallExpr) (int64, bool) {
+	if !isMakeBuiltin(info, call) {
+		return 0, false
 	}
-	return !buffered[k]
+	if len(call.Args) != 2 {
+		return 0, false
+	}
+	if _, isChan := ast.Unparen(call.Args[0]).(*ast.ChanType); !isChan {
+		return 0, false
+	}
+	tv, present := info.Types[call.Args[1]]
+	if !present || tv.Value == nil {
+		return 0, false
+	}
+	v, isInt := constant.Int64Val(tv.Value)
+	if !isInt {
+		return 0, false
+	}
+	return v, true
 }
 
 func bufferedChanKeys(pass *analysis.Pass, fn ast.Node) map[flow.Key]bool {
@@ -456,46 +603,196 @@ func chanCapPositive(info *types.Info, e ast.Expr) bool {
 	return isInt && v > 0
 }
 
-func isOpaqueWait(info *types.Info, call *ast.CallExpr) bool {
-	if isCloseCall(info, call) {
+func parentHoldsAtSpawn(pass *analysis.Pass, fn ast.Node, s flow.Spawn, keys []flow.Key) bool {
+	if len(keys) == 0 {
 		return false
 	}
-	name := selName(call.Fun)
-	if isLockCallName(name) || isUnlockCallName(name) {
-		return false
-	}
-	if _, ok := atomicCallee(info, call); ok {
-		return false
-	}
-	fn := typeutil.StaticCallee(info, call)
-	if fn == nil {
-		if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok {
-			_, ok := info.Uses[id].(*types.Builtin)
-			return !ok
+	h := newHolder(pass, fn)
+	held := h.at(s.Site)
+	for _, k := range keys {
+		if slices.Contains(held, k) {
+			return true
 		}
-		return true
 	}
-	return true
-}
-
-func litSignalsAfter(o litOrder) bool {
-	return o.recvAfter || o.sendAfter || o.closeAfter || o.unlockAfter || o.storeAfter
+	return false
 }
 
 func (m *sharedScope) handoff(s flow.Spawn, p varAccess, po pairOrder) bool {
 	if s.Body == nil {
 		return false
 	}
-	if !litSignalsAfter(po.order) {
+	o := po.order
+	return m.mutexHandoff(s, p.stmt, o) || m.chanHandoff(s, p.stmt, po.buffered, o) ||
+		m.helperHandoff(s, p.stmt, o) || m.closeHandoff(s, p.stmt, o)
+}
+
+func (m *sharedScope) mutexHandoff(s flow.Spawn, at ast.Node, o litOrder) bool {
+	if !o.unlockAfter {
 		return false
 	}
-	if !m.waitsBetween(po.buffered, s, p.stmt) {
-		return false
+	for _, k := range o.unlockAfterKeys {
+		if parentHoldsAtSpawn(m.pass, m.fn, s, []flow.Key{k}) && m.locksBetween(s, at, k) {
+			return true
+		}
 	}
-	if po.order.unlockAfter && !parentHoldsAtSpawn(m.pass, m.fn, s, po.order.unlockAfterKeys) {
-		return false
+	return false
+}
+
+func (m *sharedScope) chanHandoff(s flow.Spawn, at ast.Node, buffered map[flow.Key]bool, o litOrder) bool {
+	for _, k := range o.recvAfterKeys {
+		if m.sendsBetween(buffered, s, at, k) {
+			return true
+		}
 	}
-	return true
+	for _, k := range o.sendAfterKeys {
+		if m.recvsBetween(s, at, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *sharedScope) helperHandoff(s flow.Spawn, at ast.Node, o litOrder) bool {
+	for _, k := range o.helperSendKeys {
+		if m.helperRecvsBetween(s, at, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *sharedScope) closeHandoff(s flow.Spawn, at ast.Node, o litOrder) bool {
+	for _, k := range o.closeAfterKeys {
+		if m.recvsBetween(s, at, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *sharedScope) sendsBetween(buffered map[flow.Key]bool, s flow.Spawn, at ast.Node, k flow.Key) bool {
+	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
+		return nodeSendsOn(m.pass, buffered, n, k)
+	})
+}
+
+func nodeSendsOn(pass *analysis.Pass, buffered map[flow.Key]bool, n ast.Node, k flow.Key) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		send, ok := x.(*ast.SendStmt)
+		if !ok {
+			return true
+		}
+		ck, ok := flow.KeyOf(pass.TypesInfo, send.Chan)
+		if !ok || ck != k {
+			return true
+		}
+		if buffered[k] {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
+func (m *sharedScope) recvsBetween(s flow.Spawn, at ast.Node, k flow.Key) bool {
+	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
+		return nodeRecvsOn(m.pass, n, k)
+	})
+}
+
+func nodeRecvsOn(pass *analysis.Pass, n ast.Node, k flow.Key) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		u, ok := x.(*ast.UnaryExpr)
+		if !ok || u.Op != token.ARROW {
+			return true
+		}
+		ck, ok := flow.KeyOf(pass.TypesInfo, u.X)
+		if !ok || ck != k {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
+func (m *sharedScope) helperRecvsBetween(s flow.Spawn, at ast.Node, k flow.Key) bool {
+	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
+		return nodeHelperRecvsOn(m.pass, n, k)
+	})
+}
+
+func nodeHelperRecvsOn(pass *analysis.Pass, n ast.Node, k flow.Key) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		rk, ok := flow.MethodKey(pass.TypesInfo, call)
+		if !ok || rk != k {
+			return true
+		}
+		if declReceives(pass, call) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func (m *sharedScope) locksBetween(s flow.Spawn, at ast.Node, k flow.Key) bool {
+	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
+		return nodeLocksOn(m.pass, n, k)
+	})
+}
+
+func nodeLocksOn(pass *analysis.Pass, n ast.Node, k flow.Key) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := x.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if !isLockCallName(selName(call.Fun)) {
+			return true
+		}
+		rk, ok := flow.MethodKey(pass.TypesInfo, call)
+		if !ok || rk != k {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
 }
 
 func isWaitCall(info *types.Info, call *ast.CallExpr) bool {
