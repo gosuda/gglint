@@ -143,3 +143,25 @@ func pairDoubleRUnlockReported() {
 	mu.RUnlock()
 	mu.RUnlock() // want "is not read-locked here, so this RUnlock panics"
 }
+
+func pairDeepReadSilent() {
+	var mu sync.RWMutex
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RUnlock()
+	mu.RUnlock()
+	mu.RUnlock()
+	mu.RUnlock()
+	mu.RUnlock()
+	mu.RUnlock()
+	mu.RUnlock()
+	mu.RUnlock()
+	mu.RUnlock()
+}

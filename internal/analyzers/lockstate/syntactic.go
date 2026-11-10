@@ -87,6 +87,9 @@ func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt) {
 	if rootInLoop(pass.TypesInfo, dk, sc) {
 		return
 	}
+	if rootReassigned(pass.TypesInfo, dk, sc) {
+		return
+	}
 	if !loopHasLock(pass, sc.list, i, dk, want) {
 		return
 	}
@@ -104,6 +107,68 @@ func rootInLoop(info *types.Info, key flow.Key, sc loopScope) bool {
 		}
 	}
 	return headerDeclares(info, sc.loop, key)
+}
+
+func rootReassigned(info *types.Info, key flow.Key, sc loopScope) bool {
+	for _, st := range sc.list {
+		if stmtAssignsRoot(info, st, key) {
+			return true
+		}
+	}
+	if fs, ok := sc.loop.(*ast.ForStmt); ok && fs.Post != nil {
+		if stmtAssignsRoot(info, fs.Post, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtAssignsRoot(info *types.Info, st ast.Node, key flow.Key) bool {
+	assigned := false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if assigned {
+			return false
+		}
+		if assignStmtAssignsRoot(info, n, key) {
+			assigned = true
+			return false
+		}
+		if incDecAssignsRoot(info, n, key) {
+			assigned = true
+			return false
+		}
+		return true
+	})
+	return assigned
+}
+
+func assignStmtAssignsRoot(info *types.Info, n ast.Node, key flow.Key) bool {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	for _, lhs := range as.Lhs {
+		if identIsRoot(info, lhs, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func incDecAssignsRoot(info *types.Info, n ast.Node, key flow.Key) bool {
+	inc, ok := n.(*ast.IncDecStmt)
+	if !ok {
+		return false
+	}
+	return identIsRoot(info, inc.X, key)
+}
+
+func identIsRoot(info *types.Info, e ast.Expr, key flow.Key) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok || id.Name == "_" {
+		return false
+	}
+	return info.Defs[id] == key.Root || info.Uses[id] == key.Root
 }
 
 func headerDeclares(info *types.Info, loop ast.Node, key flow.Key) bool {

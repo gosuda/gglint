@@ -342,7 +342,10 @@ func stepRLock(cur state) state {
 		return unknownState
 	}
 	if cur.kind == readKind {
-		return readState(min(cur.depth+1, maxReadDepth))
+		if cur.depth >= maxReadDepth {
+			return unknownState
+		}
+		return readState(cur.depth + 1)
 	}
 	return readState(1)
 }
@@ -460,11 +463,11 @@ func deferArgs(info *types.Info, key flow.Key, ds *ast.DeferStmt, cur state) sta
 }
 
 func visitNode(info *types.Info, key flow.Key, x ast.Node, next state, skips map[ast.Expr]bool) (state, bool) {
+	if gs, ok := x.(*ast.GoStmt); ok {
+		return visitGoStmt(info, gs, key, next)
+	}
 	if lit, ok := x.(*ast.FuncLit); ok {
-		if mentionsKey(info, lit, key) {
-			return unknownState, false
-		}
-		return next, false
+		return visitLit(info, lit, key, next)
 	}
 	if sel, ok := x.(*ast.SelectorExpr); ok {
 		if exposesMethodValue(info, sel, key, skips) {
@@ -472,6 +475,24 @@ func visitNode(info *types.Info, key flow.Key, x ast.Node, next state, skips map
 		}
 		return next, true
 	}
+	return visitCall(info, key, x, next)
+}
+
+func visitGoStmt(info *types.Info, gs *ast.GoStmt, key flow.Key, next state) (state, bool) {
+	if goSharesKey(info, gs, key) {
+		return unknownState, false
+	}
+	return next, false
+}
+
+func visitLit(info *types.Info, lit *ast.FuncLit, key flow.Key, next state) (state, bool) {
+	if mentionsKey(info, lit, key) {
+		return unknownState, false
+	}
+	return next, false
+}
+
+func visitCall(info *types.Info, key flow.Key, x ast.Node, next state) (state, bool) {
 	call, ok := x.(*ast.CallExpr)
 	if !ok {
 		return next, true
@@ -483,6 +504,37 @@ func visitNode(info *types.Info, key flow.Key, x ast.Node, next state, skips map
 		return unknownState, true
 	}
 	return next, true
+}
+
+func goSharesKey(info *types.Info, gs *ast.GoStmt, key flow.Key) bool {
+	shared := false
+	ast.Inspect(gs.Call, func(n ast.Node) bool {
+		if shared {
+			return false
+		}
+		if goNodeSharesKey(info, n, key) {
+			shared = true
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		return true
+	})
+	return shared
+}
+
+func goNodeSharesKey(info *types.Info, n ast.Node, key flow.Key) bool {
+	if lit, ok := n.(*ast.FuncLit); ok {
+		return mentionsKey(info, lit, key)
+	}
+	if call, ok := n.(*ast.CallExpr); ok {
+		return takesKey(info, call, key)
+	}
+	if u, ok := n.(*ast.UnaryExpr); ok {
+		return encloses(info, u.X, key)
+	}
+	return false
 }
 
 func collectPre(g *flow.Graph, entry state, tr func(ast.Node, state) state) map[ast.Node]state {
@@ -502,6 +554,9 @@ type opCall struct {
 func opsInNode(info *types.Info, n ast.Node, key flow.Key) []opCall {
 	var out []opCall
 	ast.Inspect(n, func(x ast.Node) bool {
+		if _, ok := x.(*ast.GoStmt); ok {
+			return false
+		}
 		if _, ok := x.(*ast.FuncLit); ok {
 			return false
 		}

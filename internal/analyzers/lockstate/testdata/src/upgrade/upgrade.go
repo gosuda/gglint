@@ -45,3 +45,10 @@ func upgradeMethodValueSilent() {
 	runlock()
 	mu.Lock()
 }
+
+func upgradeGoCallSilent() {
+	var mu sync.RWMutex
+	mu.RLock()
+	go mu.Lock()
+	mu.RUnlock()
+}

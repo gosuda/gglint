@@ -118,3 +118,17 @@ func leakMismatchSilent(r *leakR, bad bool) {
 	}
 	r.mu.Unlock()
 }
+
+func leakHelperReleaseSilent(s *S, ok bool) error {
+	s.mu.Lock()
+	if !ok {
+		return s.unlockWith(errBad)
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *S) unlockWith(err error) error {
+	s.mu.Unlock()
+	return err
+}

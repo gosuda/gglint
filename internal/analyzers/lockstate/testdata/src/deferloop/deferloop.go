@@ -59,3 +59,18 @@ func deferloopRangeVarSilent(shards []*deferShard) {
 		s.n++
 	}
 }
+
+type deferNode struct {
+	mu   sync.Mutex
+	next *deferNode
+}
+
+func deferloopReassignSilent(head *deferNode) {
+	var cur *deferNode
+	cur = head
+	for cur != nil {
+		cur.mu.Lock()
+		defer cur.mu.Unlock()
+		cur = cur.next
+	}
+}

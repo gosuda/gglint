@@ -18,6 +18,8 @@ type leakCtx struct {
 	holders []ast.Node
 	endFree bool
 	recv    string
+	info    *types.Info
+	key     flow.Key
 }
 
 func runLeak(pass *analysis.Pass) (any, error) {
@@ -66,6 +68,8 @@ func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key)
 		holders: holders,
 		endFree: leakEndFree(info, fn, key, pre),
 		recv:    lockRecv(info, fn, key),
+		info:    info,
+		key:     key,
 	}
 	c.report()
 }
@@ -90,6 +94,9 @@ func (c *leakCtx) reportOne(r *ast.ReturnStmt) {
 		return
 	}
 	if s.kind != writeKind && s.kind != readKind {
+		return
+	}
+	if applyNode(c.info, c.key, r, s).kind == unknownKind {
 		return
 	}
 	if !c.good(r) && !c.endFree {
