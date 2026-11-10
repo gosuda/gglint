@@ -4,6 +4,9 @@ import (
 	"go/ast"
 	"go/types"
 	"testing"
+
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/packages"
 )
 
 func escapeOf(t *testing.T, src, name, param string) bool {
@@ -393,6 +396,129 @@ func TestOpaqueJoinNegatives(t *testing.T) {
 			g := NewGraph(pass, fd)
 			if Joined(pass, g, sp, target) {
 				t.Fatalf("%s: opaque call joins", tc.name)
+			}
+		})
+	}
+}
+
+func joinedTarget(t *testing.T, pkg *packages.Package, name string) (*analysis.Pass, *ast.FuncDecl, ast.Node) {
+	t.Helper()
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == name {
+			fd = f
+		}
+	}
+	if fd == nil {
+		t.Fatalf("%s missing", name)
+	}
+	var target ast.Node
+	for _, s := range fd.Body.List {
+		if a, ok := s.(*ast.AssignStmt); ok && len(a.Lhs) == 1 {
+			if id, ok := a.Lhs[0].(*ast.Ident); ok && id.Name == "s" {
+				target = s
+			}
+		}
+	}
+	if target == nil {
+		t.Fatalf("target missing")
+	}
+	return pass, fd, target
+}
+
+func TestOpaqueJoinPathRule(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"straight", "package p\nimport \"sync\"\nfunc waitFor(wg *sync.WaitGroup) { wg.Wait() }\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nwaitFor(&wg)\ns = \"b\"\nreturn s\n}\n", true},
+		{"conditional", "package p\nimport \"sync\"\nfunc waitFor(wg *sync.WaitGroup) { wg.Wait() }\nfunc f(c bool) string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nif c { waitFor(&wg) }\ns = \"b\"\nreturn s\n}\n", false},
+		{"goroutine", "package p\nimport \"sync\"\nfunc waitFor(wg *sync.WaitGroup) { wg.Wait() }\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\ngo waitFor(&wg)\ns = \"b\"\nreturn s\n}\n", false},
+		{"deferred", "package p\nimport \"sync\"\nfunc waitFor(wg *sync.WaitGroup) { wg.Wait() }\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\ndefer waitFor(&wg)\ns = \"b\"\nreturn s\n}\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			fname := "f"
+			pass, fd, target := joinedTarget(t, pkg, fname)
+			sp := Spawns(pass, fd)[0]
+			g := NewGraph(pass, fd)
+			if got := Joined(pass, g, sp, target); got != tc.want {
+				t.Fatalf("%s: Joined = %v want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClosureRangeSelectRecv(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"rangeClosure", "package p\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\nwait := func() { for range done {} }\nwait()\ns = \"b\"\nreturn s\n}\n"},
+		{"selectClosure", "package p\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\nwait := func() { select { case <-done: println(\"got\") } }\nwait()\ns = \"b\"\nreturn s\n}\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			pass, fd, target := joinedTarget(t, pkg, "f")
+			sp := Spawns(pass, fd)[0]
+			g := NewGraph(pass, fd)
+			if !Joined(pass, g, sp, target) {
+				t.Fatalf("%s: closure receive does not join", tc.name)
+			}
+		})
+	}
+}
+
+func TestCalleeRangeRecv(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"rangeCallee", "package p\nfunc drain(done chan struct{}) { for range done {} }\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\ndrain(done)\ns = \"b\"\nreturn s\n}\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			pass, fd, target := joinedTarget(t, pkg, "f")
+			sp := Spawns(pass, fd)[0]
+			g := NewGraph(pass, fd)
+			if !Joined(pass, g, sp, target) {
+				t.Fatalf("%s: callee range does not join", tc.name)
+			}
+		})
+	}
+}
+
+func TestEscapesStructConversion(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		src   string
+		fn    string
+		param string
+		want  bool
+	}{
+		{"structToIface", "package p\ntype Store struct { n int }\ntype holder struct { st *Store }\nvar keep any\nfunc structToIface(st *Store) { h := holder{st: st}; u := any(h); keep = u }\n", "structToIface", "st", true},
+		{"structToStruct", "package p\ntype Store struct { n int }\ntype holder struct { st *Store }\ntype holderT holder\nvar keepH holderT\nfunc structToStruct(st *Store) { h := holder{st: st}; v := holderT(h); keepH = v }\n", "structToStruct", "st", true},
+		{"selfRef", "package p\ntype S struct { next *S; v int }\ntype H struct { s *S }\nvar keep any\nfunc selfRef(s *S) { h := H{s: s}; u := any(h); keep = u }\n", "selfRef", "s", true},
+		{"plainNoEscape", "package p\ntype Plain struct { n int }\nvar keep any\nfunc plainNoEscape(n int) { h := Plain{n: n}; keep = any(h) }\n", "plainNoEscape", "n", false},
+		{"sliceToString", "package p\nvar keep any\nfunc sliceToString(buf []byte) { s := string(buf); keep = s }\n", "sliceToString", "buf", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := escapeOf(t, tc.src, tc.fn, tc.param); got != tc.want {
+				t.Fatalf("%s: Escapes = %v want %v", tc.name, got, tc.want)
 			}
 		})
 	}

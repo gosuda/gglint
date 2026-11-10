@@ -493,10 +493,10 @@ func resolvesCall(info *types.Info, c *ast.CallExpr, out map[*types.Var]bool) bo
 	if !info.Types[c.Fun].IsType() || len(c.Args) != 1 {
 		return false
 	}
-	if !isArrayType(info.TypeOf(c)) && !isRef(info.TypeOf(c)) {
+	if !canCarry(info.TypeOf(c)) {
 		return false
 	}
-	if !isArrayType(info.TypeOf(c.Args[0])) && !isRef(info.TypeOf(c.Args[0])) {
+	if !canCarry(info.TypeOf(c.Args[0])) {
 		return false
 	}
 	return resolvesTo(info, c.Args[0], out)
@@ -516,6 +516,43 @@ func resolvesElt(info *types.Info, elt ast.Expr, out map[*types.Var]bool) bool {
 		return resolvesTo(info, kv.Value, out)
 	}
 	return resolvesTo(info, elt, out)
+}
+
+func canCarry(t types.Type) bool {
+	return carryRef(t, map[types.Type]bool{})
+}
+
+func carryRef(t types.Type, seen map[types.Type]bool) bool {
+	if t == nil {
+		return false
+	}
+	if named, ok := t.(*types.Named); ok {
+		if seen[named] {
+			return false
+		}
+		seen[named] = true
+	}
+	switch u := t.Underlying().(type) {
+	case *types.Pointer, *types.Map, *types.Slice, *types.Signature, *types.Chan, *types.Interface:
+		return true
+	case *types.Basic:
+		return u.Kind() == types.UnsafePointer
+	case *types.Array:
+		return carryRef(u.Elem(), seen)
+	case *types.Struct:
+		return structCarry(u, seen)
+	default:
+		return false
+	}
+}
+
+func structCarry(u *types.Struct, seen map[types.Type]bool) bool {
+	for i := range u.NumFields() {
+		if carryRef(u.Field(i).Type(), seen) {
+			return true
+		}
+	}
+	return false
 }
 
 func isRef(t types.Type) bool {
@@ -891,10 +928,10 @@ func (e *escaper) conversionArgs(c *ast.CallExpr, esc bool) bool {
 	if !esc || len(c.Args) != 1 {
 		return false
 	}
-	if !isArrayType(e.info.TypeOf(c)) && !isRef(e.info.TypeOf(c)) {
+	if !canCarry(e.info.TypeOf(c)) {
 		return false
 	}
-	if !isArrayType(e.info.TypeOf(c.Args[0])) && !isRef(e.info.TypeOf(c.Args[0])) {
+	if !canCarry(e.info.TypeOf(c.Args[0])) {
 		return false
 	}
 	return e.exprs(c.Args, esc)

@@ -339,8 +339,8 @@ func Joined(pass *analysis.Pass, g *Graph, s Spawn, at ast.Node) bool {
 	if joins[t] {
 		return true
 	}
-	if g.opaqueJoin(pass, s, at) {
-		return true
+	for _, n := range g.opaqueJoinNodes(pass, s) {
+		joins[n] = true
 	}
 	return !g.reach(f, t, func(n ast.Node) bool { return joins[n] })
 }
@@ -462,6 +462,21 @@ func stmtHasWait(info *types.Info, s ast.Node, group Key) bool {
 }
 
 func stmtHasRecv(info *types.Info, s ast.Node, sigs []Key) bool {
+	if rs, ok := s.(*ast.RangeStmt); ok {
+		return rangeRecv(info, rs, sigs)
+	}
+	if sel, ok := s.(*ast.SelectStmt); ok {
+		return singleSelectRecv(info, sel, sigs)
+	}
+	return directRecv(info, s, sigs)
+}
+
+func rangeRecv(info *types.Info, rs *ast.RangeStmt, sigs []Key) bool {
+	k, ok := KeyOf(info, rs.X)
+	return ok && hasKey(sigs, k)
+}
+
+func directRecv(info *types.Info, s ast.Node, sigs []Key) bool {
 	found := false
 	ast.Inspect(s, func(n ast.Node) bool {
 		if found {
@@ -471,15 +486,38 @@ func stmtHasRecv(info *types.Info, s ast.Node, sigs []Key) bool {
 		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt, *ast.CaseClause, *ast.CommClause, *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
 			return false
 		}
-		if u, ok := n.(*ast.UnaryExpr); ok && u.Op == token.ARROW {
-			if k, ok := KeyOf(info, u.X); ok && hasKey(sigs, k) {
-				found = true
-				return false
-			}
+		if isSignalRecv(info, n, sigs) {
+			found = true
+			return false
 		}
 		return true
 	})
 	return found
+}
+
+func isSignalRecv(info *types.Info, n ast.Node, sigs []Key) bool {
+	u, ok := n.(*ast.UnaryExpr)
+	if !ok || u.Op != token.ARROW {
+		return false
+	}
+	k, ok := KeyOf(info, u.X)
+	return ok && hasKey(sigs, k)
+}
+
+func singleSelectRecv(info *types.Info, sel *ast.SelectStmt, sigs []Key) bool {
+	if sel.Body == nil || len(sel.Body.List) != 1 {
+		return false
+	}
+	cc, ok := sel.Body.List[0].(*ast.CommClause)
+	if !ok || cc.Comm == nil {
+		return false
+	}
+	for _, k := range sigs {
+		if recvOf(info, cc.Comm, k) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func hasKey(keys []Key, k Key) bool {

@@ -9,10 +9,10 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
-func (g *Graph) opaqueJoin(pass *analysis.Pass, s Spawn, at ast.Node) bool {
+func (g *Graph) opaqueJoinNodes(pass *analysis.Pass, s Spawn) []ast.Node {
 	info := pass.TypesInfo
 	if s.Group.zero() && s.Body == nil {
-		return false
+		return nil
 	}
 	sigs := g.signaledKeys(pass, s)
 	waits := map[*types.Var]bool{}
@@ -20,37 +20,59 @@ func (g *Graph) opaqueJoin(pass *analysis.Pass, s Spawn, at ast.Node) bool {
 	if !s.Group.zero() || len(sigs) != 0 {
 		g.collectClosures(info, waits, recvs, s.Group, sigs)
 	}
-	join := opaqueScan{graph: g, pass: pass, spawn: s, at: at, sigs: sigs, waits: waits, recvs: recvs}
-	return join.scan(info)
+	join := opaqueScan{graph: g, pass: pass, spawn: s, sigs: sigs, waits: waits, recvs: recvs}
+	return join.collect(info)
 }
 
 type opaqueScan struct {
 	graph *Graph
 	pass  *analysis.Pass
 	spawn Spawn
-	at    ast.Node
 	sigs  []Key
 	waits map[*types.Var]bool
 	recvs map[*types.Var]bool
 }
 
-func (o opaqueScan) scan(info *types.Info) bool {
-	found := false
+func (o opaqueScan) collect(info *types.Info) []ast.Node {
+	var out []ast.Node
+	skip := goDeferCalls(o.graph.fn)
 	ast.Inspect(o.graph.fn, func(n ast.Node) bool {
-		if found {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != o.graph.fn {
 			return false
 		}
 		c, ok := n.(*ast.CallExpr)
-		if !ok || !betweenSites(o.spawn.Site, o.at, c) {
+		if !ok {
 			return true
 		}
-		if o.reports(info, c) {
-			found = true
-			return false
+		if skip[c] || o.graph.nested(c) {
+			return true
+		}
+		if !o.reports(info, c) {
+			return true
+		}
+		if rn := o.graph.at(c); rn != nil {
+			out = append(out, rn)
 		}
 		return true
 	})
-	return found
+	return out
+}
+
+func goDeferCalls(fn ast.Node) map[*ast.CallExpr]bool {
+	out := map[*ast.CallExpr]bool{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
+		switch s := n.(type) {
+		case *ast.GoStmt:
+			out[s.Call] = true
+		case *ast.DeferStmt:
+			out[s.Call] = true
+		}
+		return true
+	})
+	return out
 }
 
 func (o opaqueScan) reports(info *types.Info, c *ast.CallExpr) bool {
@@ -68,10 +90,6 @@ func (o opaqueScan) reports(info *types.Info, c *ast.CallExpr) bool {
 		}
 	}
 	return false
-}
-
-func betweenSites(site, at ast.Node, c *ast.CallExpr) bool {
-	return c.Pos() > site.End() && c.Pos() <= at.End()
 }
 
 func isJoinExempt(info *types.Info, c *ast.CallExpr) bool {
@@ -98,7 +116,7 @@ func (g *Graph) trivialCallee(pass *analysis.Pass, info *types.Info, c *ast.Call
 	if bodyHasWait(decl.Body) {
 		return false
 	}
-	if bodyHasRecv(decl.Body) {
+	if bodyHasRecv(info, decl.Body) {
 		return false
 	}
 	return !bodyForwardsParam(info, decl)
@@ -139,20 +157,31 @@ func bodyHasWait(body *ast.BlockStmt) bool {
 	return found
 }
 
-func bodyHasRecv(body *ast.BlockStmt) bool {
+func bodyHasRecv(info *types.Info, body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		u, ok := n.(*ast.UnaryExpr)
-		if ok && u.Op == token.ARROW {
+		if u, ok := n.(*ast.UnaryExpr); ok && u.Op == token.ARROW {
+			found = true
+			return false
+		}
+		if rs, ok := n.(*ast.RangeStmt); ok && isChanType(info.TypeOf(rs.X)) {
 			found = true
 			return false
 		}
 		return true
 	})
 	return found
+}
+
+func isChanType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Chan)
+	return ok
 }
 
 func bodyForwardsParam(info *types.Info, decl *ast.FuncDecl) bool {
