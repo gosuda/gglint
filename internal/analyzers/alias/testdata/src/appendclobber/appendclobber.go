@@ -250,3 +250,67 @@ func AppendclobberSilentInPlaceTailLoop() []int {
 	}
 	return out
 }
+
+func AppendclobberReportedWholeSlice() []int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a
+}
+
+func AppendclobberReportedRangeAfter() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	s := 0
+	for _, x := range a {
+		s += x
+	}
+	return s
+}
+
+func AppendclobberSilentLowIndex() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	return a[0]
+}
+
+func AppendclobberSilentLen() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	return len(a)
+}
+
+func AppendclobberReportedReassignedAfterRead() int {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	x := a[2]
+	a = nil
+	return x
+}
+
+func AppendclobberReportedInPlaceOpAssign() ([]int, int) {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for _, x := range xs {
+		if x%2 == 0 {
+			out = append(out, x) // want `out shares its backing array with xs, so this append overwrites elements of xs that are read later`
+		}
+	}
+	xs[0] += 1
+	return out, xs[0]
+}
+
+func AppendclobberReportedInPlaceTailSlice() ([]int, []int) {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for _, x := range xs {
+		if x%2 == 0 {
+			out = append(out, x) // want `out shares its backing array with xs, so this append overwrites elements of xs that are read later`
+		}
+	}
+	return out, xs[len(out):]
+}

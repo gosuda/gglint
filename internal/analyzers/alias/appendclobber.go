@@ -167,7 +167,7 @@ func tryKnownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.
 		if c.cap < need {
 			continue
 		}
-		if !knownCapProven(pass, fn, def, st) {
+		if !knownCapProven(pass, fn, def, st, len(call.Args)-1) {
 			return true
 		}
 		reportClobber(pass, call, b, def.a)
@@ -185,31 +185,15 @@ func allKnown(caps []capResult) bool {
 	return true
 }
 
-func knownCapProven(pass *analysis.Pass, fn ast.Node, def sliceDef, st *ast.AssignStmt) bool {
-	if assignedAfter(pass.TypesInfo, fn, def.a, st.End()) {
-		return false
-	}
-	if !mentionedAfter(pass, fn, def.a, st, st.End()) {
-		return false
-	}
-	return hasIndexProof(pass, fn, def.a, st, def.high)
+func knownCapProven(pass *analysis.Pass, fn ast.Node, def sliceDef, st *ast.AssignStmt, appended int) bool {
+	return overwrittenReadAfter(pass, fn, def.a, readSite{from: st, after: st.End(), bound: def.high, end: clobberEnd(fn, st, def.high, appended)})
 }
 
-func assignedAfter(info *types.Info, fn ast.Node, v *types.Var, after token.Pos) bool {
-	hit := false
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if hit {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		if st, ok := n.(*ast.AssignStmt); ok && st.Pos() > after {
-			hit = assignHits(info, st, v, after, token.Pos(1<<30))
-		}
-		return !hit
-	})
-	return hit
+func clobberEnd(fn ast.Node, st *ast.AssignStmt, bound, appended int) int {
+	if enclosingLoop(fn, st) != nil {
+		return 1 << 30
+	}
+	return bound + appended
 }
 
 type capResult struct {
@@ -295,18 +279,18 @@ func capOfAssignment(info *types.Info, st *ast.AssignStmt, a *types.Var) (int, b
 }
 
 func tryUnknownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) {
-	if assignedAfter(pass.TypesInfo, fn, def.a, st.End()) {
-		return
-	}
-	if !mentionedAfter(pass, fn, def.a, st, st.End()) {
-		return
-	}
 	n := len(call.Args) - 1
+	end := clobberEnd(fn, st, def.high, n)
 	if leng, ok := provenLen(pass.TypesInfo, fn, def.a, def.pos); ok && def.high+n <= leng {
-		reportClobber(pass, call, b, def.a)
+		if overwrittenReadAfter(pass, fn, def.a, readSite{from: st, after: st.End(), bound: def.high, end: end}) {
+			reportClobber(pass, call, b, def.a)
+		}
 		return
 	}
-	if hasIndexProof(pass, fn, def.a, st, def.high+n-1) {
+	if !hasCoveringIndex(pass, fn, def.a, st, def.high+n-1) {
+		return
+	}
+	if overwrittenReadAfter(pass, fn, def.a, readSite{from: st, after: st.End(), bound: def.high, end: end}) {
 		reportClobber(pass, call, b, def.a)
 	}
 }
@@ -492,34 +476,6 @@ func compositeLen(info *types.Info, comp *ast.CompositeLit) (int, bool) {
 		return 0, false
 	}
 	return len(comp.Elts), true
-}
-
-func hasIndexProof(pass *analysis.Pass, fn ast.Node, a *types.Var, from ast.Node, threshold int) bool {
-	g := flow.NewGraph(pass, fn)
-	if g == nil {
-		return false
-	}
-	found := false
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		idx, ok := n.(*ast.IndexExpr)
-		if !ok || !indexOf(pass.TypesInfo, idx, a, threshold) {
-			return true
-		}
-		if idx.Pos() <= from.End() {
-			return true
-		}
-		if g.Reaches(from, idx, nil) {
-			found = true
-		}
-		return !found
-	})
-	return found
 }
 
 func indexOf(info *types.Info, idx *ast.IndexExpr, a *types.Var, threshold int) bool {
@@ -890,57 +846,4 @@ func isVarTarget(info *types.Info, e ast.Expr, v *types.Var) bool {
 	}
 	got, ok := varOf(info, id)
 	return ok && got == v
-}
-
-func mentionedAfter(pass *analysis.Pass, fn ast.Node, v *types.Var, from ast.Node, after token.Pos) bool {
-	g := flow.NewGraph(pass, fn)
-	if g == nil {
-		return false
-	}
-	writes := lhsIdents(fn)
-	found := false
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		id, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if isReadMention(pass.TypesInfo, writes, id, v, after) && g.Reaches(from, id, nil) {
-			found = true
-		}
-		return !found
-	})
-	return found
-}
-
-func isReadMention(info *types.Info, writes map[*ast.Ident]bool, id *ast.Ident, v *types.Var, after token.Pos) bool {
-	return id.Pos() > after && info.Uses[id] == v && !writes[id]
-}
-
-func lhsIdents(fn ast.Node) map[*ast.Ident]bool {
-	out := map[*ast.Ident]bool{}
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		st, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		if st.Tok != token.ASSIGN && st.Tok != token.DEFINE {
-			return true
-		}
-		for _, lhs := range st.Lhs {
-			if id, ok := ast.Unparen(lhs).(*ast.Ident); ok {
-				out[id] = true
-			}
-		}
-		return true
-	})
-	return out
 }
