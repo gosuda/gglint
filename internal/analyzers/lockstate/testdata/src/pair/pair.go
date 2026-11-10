@@ -181,3 +181,25 @@ func pairReassignBeforeReported(p *pairS) int {
 	s = *p
 	return 0
 }
+
+func pairVarEmptyLiteralReported() int {
+	var s literalS = literalS{}
+	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+	return s.n
+}
+
+func pairVarEmptyMutexReported() {
+	var mu sync.RWMutex = sync.RWMutex{}
+	mu.RUnlock() // want "is not read-locked here, so this RUnlock panics"
+}
+
+func pairVarLockedValueSilent() {
+	var s pairS = newLockedPairS()
+	s.mu.Unlock()
+}
+
+func pairVarEmptyThenReassignedReported() {
+	var s pairS = pairS{}
+	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+	s = newLockedPairS()
+}

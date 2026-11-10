@@ -127,13 +127,107 @@ func entryState(info *types.Info, fn ast.Node, key flow.Key) state {
 	if pathHasPointer(v.Type(), key.Path) {
 		return unknownState
 	}
-	if def, ok := flow.DefinedBy(info, fn, v); ok && !emptyLiteral(def) {
+	if def, ok := definingRHS(info, fn, v); ok && !emptyLiteral(def) {
 		return unknownState
 	}
 	if lockExposed(info, fn, key) {
 		return unknownState
 	}
 	return freeState
+}
+
+func definingRHS(info *types.Info, fn ast.Node, v *types.Var) (ast.Expr, bool) {
+	if def, ok := flow.DefinedBy(info, fn, v); ok {
+		return def, true
+	}
+	return varDefValue(info, fn, v)
+}
+
+func varDefValue(info *types.Info, fn ast.Node, v *types.Var) (ast.Expr, bool) {
+	body := flow.Body(fn)
+	if info == nil || body == nil || v == nil {
+		return nil, false
+	}
+	found, rhs := findVarSpec(info, fn, body, v)
+	if found == nil || rhs == nil {
+		return nil, false
+	}
+	if laterAssign(info, fn, v, found.Pos()) {
+		return nil, false
+	}
+	return rhs, true
+}
+
+func laterAssign(info *types.Info, fn ast.Node, v *types.Var, after token.Pos) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	hit := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if hit {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Pos() <= after {
+			return true
+		}
+		if assignTargetsVar(info, as, v) {
+			hit = true
+		}
+		return !hit
+	})
+	return hit
+}
+
+func findVarSpec(info *types.Info, fn ast.Node, body *ast.BlockStmt, v *types.Var) (*ast.ValueSpec, ast.Expr) {
+	var found *ast.ValueSpec
+	var rhs ast.Expr
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		e, ok := varValueFor(vs, info, v)
+		if !ok {
+			return true
+		}
+		found = vs
+		rhs = e
+		return false
+	})
+	return found, rhs
+}
+
+func varValueFor(vs *ast.ValueSpec, info *types.Info, v *types.Var) (ast.Expr, bool) {
+	if len(vs.Values) == 0 {
+		return nil, false
+	}
+	for i, name := range vs.Names {
+		if name.Name == "_" {
+			continue
+		}
+		if info.Defs[name] != v {
+			continue
+		}
+		if len(vs.Values) == 1 {
+			return vs.Values[0], true
+		}
+		if i < len(vs.Values) {
+			return vs.Values[i], true
+		}
+		return nil, false
+	}
+	return nil, false
 }
 
 func reassignsRoot(info *types.Info, n ast.Node, key flow.Key) bool {
@@ -161,21 +255,6 @@ func reassignsRoot(info *types.Info, n ast.Node, key flow.Key) bool {
 func nodeReassignsRoot(info *types.Info, x ast.Node, v *types.Var) bool {
 	if as, ok := x.(*ast.AssignStmt); ok {
 		return assignTargetsVar(info, as, v)
-	}
-	if vs, ok := x.(*ast.ValueSpec); ok {
-		return valueSpecDefines(info, vs, v)
-	}
-	return false
-}
-
-func valueSpecDefines(info *types.Info, vs *ast.ValueSpec, v *types.Var) bool {
-	if len(vs.Values) == 0 {
-		return false
-	}
-	for _, name := range vs.Names {
-		if name.Name != "_" && info.Defs[name] == v {
-			return true
-		}
 	}
 	return false
 }
