@@ -17,7 +17,7 @@ const rootMessage = "a context is in scope, and this root context drops its canc
 
 var rootAnalyzer = &analysis.Analyzer{
 	Name:     "root",
-	Doc:      "report context.Background and context.TODO where a caller context is in scope",
+	Doc:      "report context.Background and context.TODO whose result is used where a named context is in scope; it stays silent in main and init, in a nil-check fallback, in a comparison, and in a composite literal that holds that context",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runRoot,
 }
@@ -184,7 +184,15 @@ func enclosingAssign(cur inspector.Cursor, call *ast.CallExpr) *ast.AssignStmt {
 
 func inRHS(as *ast.AssignStmt, call *ast.CallExpr) bool {
 	for _, rhs := range as.Rhs {
-		if stripParens(rhs) == call {
+		found := false
+		ast.Inspect(stripParens(rhs), func(n ast.Node) bool {
+			if n == call {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
 			return true
 		}
 	}

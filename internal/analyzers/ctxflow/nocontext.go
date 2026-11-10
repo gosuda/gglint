@@ -18,7 +18,7 @@ const httpDoReplacement = "http.NewRequestWithContext and (*http.Client).Do"
 
 var nocontextAnalyzer = &analysis.Analyzer{
 	Name:     "nocontext",
-	Doc:      "report calls that cannot be cancelled where a usable context is in scope",
+	Doc:      "report the table calls that cannot be cancelled where a named context is lexically visible; a request passed with its context to a helper that may apply it is not reported",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runNocontext,
 }
@@ -252,19 +252,47 @@ func hasNamedContextParam(info *types.Info, fn ast.Node) bool {
 }
 
 func hasContextLocalBefore(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr) bool {
-	for c := range fn.Preorder((*ast.Ident)(nil)) {
-		id, ok := c.Node().(*ast.Ident)
-		if !ok || id.Name == "" || id.Name == "_" || id.Pos() >= call.Pos() {
-			continue
-		}
-		if ownerOf(c) != fn {
-			continue
-		}
-		if v := varOf(pass.TypesInfo, id); v != nil && isNamedContextType(v.Type()) {
+	pkgScope := pass.Pkg.Scope()
+	if pkgScope == nil {
+		return false
+	}
+	fnNode := fn.Node()
+	if fnNode == nil {
+		return false
+	}
+	for _, obj := range pass.TypesInfo.Defs {
+		if v, ok := obj.(*types.Var); ok && visibleContextVar(pkgScope, v, fnNode, call) {
 			return true
 		}
 	}
 	return false
+}
+
+func visibleContextVar(pkgScope *types.Scope, v *types.Var, fnNode ast.Node, call *ast.CallExpr) bool {
+	return declaredBefore(v, fnNode, call) && scopeHolds(pkgScope, v, call)
+}
+
+func declaredBefore(v *types.Var, fnNode ast.Node, call *ast.CallExpr) bool {
+	if v == nil || v.IsField() || v.Name() == "" || v.Name() == "_" {
+		return false
+	}
+	if !isNamedContextType(v.Type()) {
+		return false
+	}
+	return v.Pos() < call.Pos() && v.Pos() >= fnNode.Pos() && v.Pos() <= fnNode.End()
+}
+
+func scopeHolds(pkgScope *types.Scope, v *types.Var, call *ast.CallExpr) bool {
+	parent := v.Parent()
+	if parent == nil || parent == pkgScope || !parent.Contains(call.Pos()) {
+		return false
+	}
+	inner := pkgScope.Innermost(call.Pos())
+	if inner == nil {
+		return false
+	}
+	_, visible := inner.LookupParent(v.Name(), call.Pos())
+	return visible == v
 }
 
 func isNamedContextType(t types.Type) bool {
@@ -329,27 +357,44 @@ func getsContextBeforeSend(pass *analysis.Pass, fn inspector.Cursor, call *ast.C
 		if !ok || c == call || c.Pos() < call.End() {
 			continue
 		}
-		if withContextOn(pass, c, v) || passedWithContext(pass, c, v) {
+		if withContextOn(pass, cc, c, v) || passedWithContext(pass, c, v) {
 			return true
 		}
 	}
 	return false
 }
 
-func withContextOn(pass *analysis.Pass, c *ast.CallExpr, v *types.Var) bool {
-	sel, ok := stripParens(c.Fun).(*ast.SelectorExpr)
-	if !ok || sel.Sel == nil || sel.Sel.Name != "WithContext" {
+func withContextOn(pass *analysis.Pass, cc inspector.Cursor, c *ast.CallExpr, v *types.Var) bool {
+	if !isWithContextCall(pass, c, v) {
 		return false
 	}
-	if !identResolvesTo(pass.TypesInfo, sel.X, v) {
+	if _, ok := cc.Parent().Node().(*ast.ExprStmt); ok {
 		return false
 	}
 	for _, arg := range c.Args {
-		if isContextValueType(pass.TypesInfo, arg) {
+		if usableContextArg(pass, arg) {
 			return true
 		}
 	}
 	return false
+}
+
+func isWithContextCall(pass *analysis.Pass, c *ast.CallExpr, v *types.Var) bool {
+	sel, ok := stripParens(c.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "WithContext" {
+		return false
+	}
+	return identResolvesTo(pass.TypesInfo, sel.X, v)
+}
+
+func usableContextArg(pass *analysis.Pass, arg ast.Expr) bool {
+	if !isContextValueType(pass.TypesInfo, arg) {
+		return false
+	}
+	if call, ok := stripParens(arg).(*ast.CallExpr); ok && isRootCall(pass.TypesInfo, call) {
+		return false
+	}
+	return true
 }
 
 func passedWithContext(pass *analysis.Pass, c *ast.CallExpr, v *types.Var) bool {

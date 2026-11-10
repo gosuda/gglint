@@ -27,8 +27,10 @@ func nocontextReported(ctx context.Context, db *sql.DB, tx *sql.Tx, client *http
 	client.Head("http://example.com")                        // want "Client\\)\\.Head cannot be cancelled"
 	client.Post("http://example.com", "text/plain", nil)     // want "Client\\)\\.Post cannot be cancelled"
 	client.PostForm("http://example.com", nil)               // want "Client\\)\\.PostForm cannot be cancelled"
-	_, _ = http.NewRequest("GET", "http://example.com", nil) // want "http\\.NewRequest cannot be cancelled"
-	exec.Command("ls")                                       // want "exec\\.Command cannot be cancelled"
+	req, _ := http.NewRequest("GET", "http://example.com", nil) // want "http\\.NewRequest cannot be cancelled"
+	_, _ = client.Do(req)
+	cmd := exec.Command("ls") // want "exec\\.Command cannot be cancelled"
+	_ = cmd.Run()
 	db.Query("SELECT 1")                                     // want "DB\\)\\.Query cannot be cancelled"
 	db.QueryRow("SELECT 1")                                  // want "DB\\)\\.QueryRow cannot be cancelled"
 	db.Exec("SELECT 1")                                      // want "DB\\)\\.Exec cannot be cancelled"
@@ -65,17 +67,12 @@ func nocontextSilentOther(ctx context.Context, client *http.Client, db *sql.DB, 
 	_ = d.tr.Clone()
 	_ = db.Close()
 	_ = tx.Commit
-	_, _ = d.stmt.Query(1)
+	_, _ = d.stmt.QueryContext(ctx, 1)
 	d.sb.WriteString("x")
 	fn := func() {}
 	fn()
 	req, _ := http.NewRequestWithContext(ctx, "GET", "http://example.com", nil)
 	_, _ = client.Do(req)
-}
-
-func CommandContext(ctx context.Context, name string) {
-	exec.Command(name)
-	useCtx(ctx)
 }
 
 func nocontextSilentBlankParam(_ context.Context) {
@@ -100,7 +97,8 @@ func nocontextReportedLocalCtx() {
 }
 
 func nocontextSilentListen(ctx context.Context) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := &net.ListenConfig{}
+	ln, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return
 	}
@@ -127,4 +125,50 @@ func nocontextSilentNewRequestPassedWithContext(ctx context.Context, url string)
 		return err
 	}
 	return doWithCtx(ctx, req)
+}
+
+func nocontextReportedNewRequestBackgroundArg(ctx context.Context, u string) error {
+	req, err := http.NewRequest(http.MethodGet, u, nil) // want "http\\.NewRequest cannot be cancelled"
+	if err != nil {
+		return err
+	}
+	_, err = http.DefaultClient.Do(req.WithContext(context.Background()))
+	return err
+}
+
+func nocontextReportedNewRequestBareWithContext(ctx context.Context, u string) error {
+	req, err := http.NewRequest(http.MethodGet, u, nil) // want "http\\.NewRequest cannot be cancelled"
+	if err != nil {
+		return err
+	}
+	req.WithContext(ctx)
+	_, err = http.DefaultClient.Do(req)
+	return err
+}
+
+var nocontextBackground = context.Background()
+
+func nocontextSilentPackageVar(db *sql.DB) error {
+	_ = nocontextBackground
+	_, err := db.Query("SELECT 1")
+	return err
+}
+
+type nocontextHolder struct {
+	base context.Context
+}
+
+func nocontextSilentStructField(s nocontextHolder, db *sql.DB) error {
+	_ = s.base
+	_, err := db.Query("SELECT 1")
+	return err
+}
+
+func nocontextSilentScopedLocal(db *sql.DB, ok bool) error {
+	if ok {
+		ctx := context.Background()
+		_ = ctx
+	}
+	_, err := db.Query("SELECT 1")
+	return err
 }

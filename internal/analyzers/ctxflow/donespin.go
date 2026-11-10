@@ -16,7 +16,7 @@ const donespinMessage = "this loop polls the context with a default case and nev
 
 var donespinAnalyzer = &analysis.Analyzer{
 	Name:     "donespin",
-	Doc:      "report a loop that polls a context Done channel with a non-blocking default",
+	Doc:      "report a for loop with no init or post whose only statement is a select with one context Done receive and a default that neither blocks nor leaves the loop; a default path that can block is not reported and only one communication clause is checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runDonespin,
 }
@@ -51,13 +51,11 @@ func directlyInFor(cur inspector.Cursor) bool {
 	if len(block.List) != 1 {
 		return false
 	}
-	switch n := cur.Parent().Parent().Node().(type) {
-	case *ast.ForStmt:
-		return n.Body == block
-	case *ast.RangeStmt:
-		return n.Body == block
+	n, ok := cur.Parent().Parent().Node().(*ast.ForStmt)
+	if !ok || n.Body != block {
+		return false
 	}
-	return false
+	return n.Init == nil && n.Post == nil
 }
 
 func splitDonespin(sel *ast.SelectStmt) (commClause, dfltClause *ast.CommClause, found bool) {
@@ -150,20 +148,50 @@ func (w *blockWalk) walk(n ast.Node) {
 	if _, ok := n.(*ast.FuncLit); ok {
 		return
 	}
-	if sel, ok := n.(*ast.SelectStmt); ok && hasDefault(sel) {
-		w.walkDefaultBody(sel)
+	if leavesLoop(n) {
+		w.blocked = true
+		return
+	}
+	if w.walkSelect(n) {
 		return
 	}
 	if isBlockingOp(w.info, n) {
 		w.blocked = true
 		return
 	}
+	w.walkChildren(n)
+}
+
+func (w *blockWalk) walkSelect(n ast.Node) bool {
+	sel, ok := n.(*ast.SelectStmt)
+	if !ok || !hasDefault(sel) {
+		return false
+	}
+	w.walkDefaultBody(sel)
+	return true
+}
+
+func (w *blockWalk) walkChildren(n ast.Node) {
 	for _, child := range childrenOf(n) {
 		w.walk(child)
 		if w.blocked {
 			return
 		}
 	}
+}
+
+func leavesLoop(n ast.Node) bool {
+	if _, ok := n.(*ast.ReturnStmt); ok {
+		return true
+	}
+	b, ok := n.(*ast.BranchStmt)
+	if !ok {
+		return false
+	}
+	if b.Tok == token.GOTO {
+		return true
+	}
+	return b.Tok == token.BREAK && b.Label != nil
 }
 
 func (w *blockWalk) walkDefaultBody(sel *ast.SelectStmt) {

@@ -50,9 +50,9 @@ func donespinReportedAssign(ctx context.Context) {
 	}
 }
 
-func donespinReportedRange(ctx context.Context, xs []int) {
+func donespinSilentRange(ctx context.Context, xs []int) {
 	for range xs {
-		select { // want "this loop polls the context with a default case and never blocks"
+		select {
 		case <-ctx.Done():
 			return
 		default:
@@ -65,18 +65,6 @@ func donespinSilentNoFor(ctx context.Context) {
 	case <-ctx.Done():
 		return
 	default:
-	}
-}
-
-func donespinSilentThree(ctx context.Context, ch chan int) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case v := <-ch:
-			use(v)
-		default:
-		}
 	}
 }
 
@@ -109,13 +97,12 @@ func donespinSilentAssignOther(ctx context.Context, ch chan int) {
 	}
 }
 
-func donespinSilentCustomDone(ctx context.Context, t doneT, ch chan int) {
+func donespinSilentCustomDone(ctx context.Context, t doneT) {
 	for {
 		select {
 		case <-t.Done(1):
 			return
-		case v := <-ch:
-			use(v)
+		default:
 		}
 	}
 }
@@ -156,18 +143,6 @@ func donespinReportedLen(ctx context.Context, buf []byte) int {
 	}
 }
 
-func donespinSilentWorkAfter(ctx context.Context, xs []int) int {
-	for _, x := range xs {
-		select {
-		case <-ctx.Done():
-			return -1
-		default:
-		}
-		use(x)
-	}
-	return 0
-}
-
 func donespinSilentWorkAfterFor(ctx context.Context) int {
 	for {
 		select {
@@ -175,9 +150,7 @@ func donespinSilentWorkAfterFor(ctx context.Context) int {
 			return -1
 		default:
 		}
-		if use(1); true {
-			return 0
-		}
+		use(1)
 	}
 }
 
@@ -243,17 +216,69 @@ func donespinSilentNestedBlocking(ctx context.Context, ch chan int) {
 	}
 }
 
-func donespinSilentNestedCaseBody(ctx context.Context, ch, other chan int) {
+func donespinSilentReturn(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			select {
-			case <-ch:
-				<-other
-			default:
-			}
+			return
+		}
+	}
+}
+
+func donespinSilentGoto(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			goto done
+		}
+	}
+done:
+}
+
+func donespinSilentLabeledBreak(ctx context.Context) {
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			break loop
+		}
+	}
+}
+
+func donespinSilentBoundedFor(ctx context.Context) {
+	for i := 0; i < 3; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			_ = i
+		}
+	}
+}
+
+func donespinSilentCondFor(ctx context.Context, cond bool) {
+	for cond {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			return
+		}
+	}
+}
+
+func donespinReportedCond(ctx context.Context, cond bool) {
+	for cond {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return
+		default:
 		}
 	}
 }

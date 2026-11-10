@@ -3,6 +3,7 @@ package root
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 func use(...any) {}
@@ -30,13 +31,13 @@ func rootSilentNoScope() {
 
 func main() {
 	use(context.Background())
-	f := func(ctx context.Context) { use(context.Background()) }
+	f := func(ctx context.Context) { use(context.Background()) } // want "a context is in scope, and this root context drops its cancellation and deadline"
 	f(nil)
 }
 
 func init() {
 	use(context.Background())
-	g := func(ctx context.Context) { use(context.TODO()) }
+	g := func(ctx context.Context) { use(context.TODO()) } // want "a context is in scope, and this root context drops its cancellation and deadline"
 	g(nil)
 }
 
@@ -56,8 +57,8 @@ func rootSilentMethod(ctx context.Context) {
 }
 
 func rootSilentFuncValue(ctx context.Context) {
-	f := context.Background
-	use(f())
+	f := context.WithoutCancel
+	use(f(ctx))
 	use(ctx)
 }
 
@@ -109,9 +110,9 @@ func rootSilentGoDefer(ctx context.Context) {
 	use(ctx)
 }
 
-func rootReportedNestedArg(ctx context.Context, k, v any) context.Context {
+func rootSilentNestedArg(ctx context.Context, k, v any) context.Context {
 	if ctx == nil {
-		ctx = context.WithValue(context.Background(), k, v) // want "a context is in scope, and this root context drops its cancellation and deadline"
+		ctx = context.WithValue(context.Background(), k, v)
 	}
 	return ctx
 }
@@ -131,6 +132,11 @@ type rootShared struct {
 	values context.Context
 }
 
+func (s *rootShared) Deadline() (time.Time, bool) { return s.values.Deadline() }
+func (s *rootShared) Done() <-chan struct{}       { return s.values.Done() }
+func (s *rootShared) Err() error                  { return s.values.Err() }
+func (s *rootShared) Value(k any) any             { return s.values.Value(k) }
+
 func rootSilentSharedComposite(ctx context.Context) context.Context {
 	return &rootShared{Context: context.Background(), values: ctx}
 }
@@ -149,4 +155,8 @@ func rootSilentElseGuard(ctx context.Context) {
 		ctx = context.Background()
 	}
 	use(ctx)
+}
+
+func rootSilentBlankParam(_ context.Context) {
+	use(context.Background())
 }

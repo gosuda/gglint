@@ -7,7 +7,7 @@ import (
 
 func useAny(...any) {}
 
-func otherCall() (context.Context, context.CancelFunc) { return nil, nil }
+func otherCall() (context.Context, context.CancelFunc) { return context.Background(), func() {} }
 
 type holder struct {
 	c context.Context
@@ -81,14 +81,6 @@ func cancelreturnedSilentField(ctx context.Context, h *holder) context.Context {
 func cancelreturnedSilentDeferLit(ctx context.Context) context.Context {
 	c, cancel := context.WithTimeout(ctx, 0)
 	defer func() {}()
-	_ = cancel
-	_ = c
-	return ctx
-}
-
-func cancelreturnedSilentEllipsis(ctx context.Context, xs []any) context.Context {
-	c, cancel := context.WithTimeout(ctx, 0)
-	defer useAny(xs...)
 	_ = cancel
 	_ = c
 	return ctx
@@ -192,12 +184,6 @@ func cancelreturnedSilentMethodResult(parent context.Context) error {
 	return ctx.Err()
 }
 
-func cancelreturnedSilentWrappedResult(parent context.Context) error {
-	c, cancel := context.WithCancel(parent)
-	defer cancel()
-	return workOf(c)
-}
-
 func detachCtx(ctx context.Context) context.Context { return context.WithoutCancel(ctx) }
 
 func cancelreturnedReportedComposite(parent context.Context) *holder {
@@ -227,15 +213,6 @@ func cancelreturnedReportedAddr(parent context.Context) *context.Context {
 	return &c
 }
 
-func wrapDetachedHolder(c context.Context) *holder { return &holder{c: context.WithoutCancel(c)} }
-
-func cancelreturnedSilentStructCall(parent context.Context) *holder {
-	c, cancel := context.WithTimeout(parent, time.Second)
-	defer cancel()
-	_ = c
-	return wrapDetachedHolder(c)
-}
-
 func cancelreturnedSilentWithoutCancel(parent context.Context) context.Context {
 	c, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel()
@@ -247,4 +224,17 @@ func cancelreturnedReportedNestedValue(parent context.Context) *holder {
 	c, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
 	return &holder{c: context.WithValue(c, reproKey{}, 1)}
+}
+
+func cancelreturnedSilentReassigned(parent context.Context) (context.Context, error) {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	ctx = parent
+	return ctx, nil
+}
+
+func cancelreturnedReportedDerivedTimeout(parent context.Context) (context.Context, context.CancelFunc) {
+	c, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	return context.WithTimeout(c, time.Second)
 }

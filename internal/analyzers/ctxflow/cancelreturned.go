@@ -17,7 +17,7 @@ const cancelMessage = "the deferred cancel runs before the caller uses the retur
 
 var cancelAnalyzer = &analysis.Analyzer{
 	Name:     "cancelreturned",
-	Doc:      "report a deferred cancel that runs before the caller uses the returned context",
+	Doc:      "report defer cancel() when the function returns the context that cancel controls, unless it also returns cancel or reassigns that context",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runCancel,
 }
@@ -48,7 +48,28 @@ func checkPair(pass *analysis.Pass, fn inspector.Cursor, p cancelPair) {
 	if mentionsVar(pass, fn, p.cancel) || !mentionsVar(pass, fn, p.ctx) {
 		return
 	}
+	if ctxReassigned(pass, fn, p.ctx) {
+		return
+	}
 	pass.Report(analysis.Diagnostic{Pos: site.Pos(), End: site.End(), Message: cancelMessage})
+}
+
+func ctxReassigned(pass *analysis.Pass, fn inspector.Cursor, ctx *types.Var) bool {
+	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
+		if ownerOf(cur) != fn {
+			continue
+		}
+		as, ok := cur.Node().(*ast.AssignStmt)
+		if !ok || as.Tok != token.ASSIGN {
+			continue
+		}
+		for _, lhs := range as.Lhs {
+			if identResolvesTo(pass.TypesInfo, lhs, ctx) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func deferredCancel(pass *analysis.Pass, fn inspector.Cursor, cancel *types.Var) (*ast.DeferStmt, bool) {

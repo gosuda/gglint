@@ -21,20 +21,7 @@ func Analyzers() []*analysis.Analyzer {
 
 func contextInScope(pass *analysis.Pass, cur inspector.Cursor) bool {
 	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		if hasContextParam(pass.TypesInfo, fn.Node()) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasContextParam(info *types.Info, fn ast.Node) bool {
-	ft := funcTypeOf(fn)
-	if ft == nil || ft.Params == nil {
-		return false
-	}
-	for _, field := range ft.Params.List {
-		if isContextType(info, field.Type) {
+		if hasNamedContextParam(pass.TypesInfo, fn.Node()) {
 			return true
 		}
 	}
@@ -72,12 +59,12 @@ func isContextType(info *types.Info, e ast.Expr) bool {
 }
 
 func inMainOrInit(cur inspector.Cursor) bool {
-	for fn := range cur.Enclosing((*ast.FuncDecl)(nil)) {
-		if d, ok := fn.Node().(*ast.FuncDecl); ok {
-			if d.Recv == nil && (d.Name.Name == "main" || d.Name.Name == "init") {
-				return true
-			}
+	for fn := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		d, ok := fn.Node().(*ast.FuncDecl)
+		if !ok {
+			return false
 		}
+		return d.Recv == nil && (d.Name.Name == "main" || d.Name.Name == "init")
 	}
 	return false
 }
