@@ -384,14 +384,33 @@ func Joined(pass *analysis.Pass, g *Graph, s Spawn, at ast.Node) bool {
 	if !ok {
 		return false
 	}
-	joins := g.joins(pass, s)
-	for _, n := range g.opaqueJoinNodes(pass, s) {
-		joins[n] = true
-	}
+	joins := g.cachedJoins(pass, s)
 	if joins[t] {
 		return true
 	}
 	return !g.reach(f, t, func(n ast.Node) bool { return joins[n] })
+}
+
+func (g *Graph) cachedJoins(pass *analysis.Pass, s Spawn) map[ast.Node]bool {
+	g.joinMu.Lock()
+	if g.joinMemo != nil {
+		if m, ok := g.joinMemo[s.Site]; ok {
+			g.joinMu.Unlock()
+			return m
+		}
+	}
+	g.joinMu.Unlock()
+	m := g.joins(pass, s)
+	for _, n := range g.opaqueJoinNodes(pass, s) {
+		m[n] = true
+	}
+	g.joinMu.Lock()
+	if g.joinMemo == nil {
+		g.joinMemo = map[ast.Node]map[ast.Node]bool{}
+	}
+	g.joinMemo[s.Site] = m
+	g.joinMu.Unlock()
+	return m
 }
 
 func (g *Graph) signaledKeys(pass *analysis.Pass, s Spawn) []Key {
@@ -799,6 +818,9 @@ type recvScan struct {
 
 func (s *recvScan) selects(fn ast.Node) {
 	ast.Inspect(fn, func(n ast.Node) bool {
+		if _, ok := n.(*ast.DeferStmt); ok {
+			return false
+		}
 		if lit, ok := n.(*ast.FuncLit); ok {
 			return n == fn || s.called[lit]
 		}

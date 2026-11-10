@@ -762,3 +762,14 @@ func TestDeferredLitCalleeJoins(t *testing.T) {
 		})
 	}
 }
+
+func TestDeferredSelectDoesNotJoin(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\ndefer func() { select { case <-done: } }()\ns = \"b\"\nreturn s\n}\n")
+	pass, fd, target := joinedTarget(t, pkg)
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if Joined(pass, g, sp, target) {
+		t.Fatalf("deferred select receive joins at registration")
+	}
+}

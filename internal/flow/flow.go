@@ -108,14 +108,15 @@ func promotionNames(sel *types.Selection, fallback string) string {
 
 // Graph is the control-flow graph of one function with a node index.
 type Graph struct {
-	fn        ast.Node
-	blocks    []*cfg.Block
-	index     map[ast.Node]*cfg.Block
-	pos       map[ast.Node]int
-	nestedSet map[ast.Node]bool
-	owner     map[ast.Node]ast.Node
-	rep       map[ast.Node]ast.Node
-
+	fn          ast.Node
+	blocks      []*cfg.Block
+	index       map[ast.Node]*cfg.Block
+	pos         map[ast.Node]int
+	nestedSet   map[ast.Node]bool
+	owner       map[ast.Node]ast.Node
+	rep         map[ast.Node]ast.Node
+	joinMu      sync.Mutex
+	joinMemo    map[ast.Node]map[ast.Node]bool
 	closureOnce sync.Once
 	closureVars map[*ast.FuncLit]*types.Var
 }
