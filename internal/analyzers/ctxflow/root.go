@@ -37,6 +37,9 @@ func checkRoot(pass *analysis.Pass, cur inspector.Cursor) {
 	if !resultUsed(cur) || !contextInScope(pass, cur) || inMainOrInit(cur) || nilGuarded(pass, cur, call) {
 		return
 	}
+	if isCompared(cur) || sharesCompositeWithContext(pass, cur) {
+		return
+	}
 	pass.Report(analysis.Diagnostic{Pos: call.Pos(), End: call.End(), Message: rootMessage})
 }
 
@@ -165,4 +168,41 @@ func comparesNilWith(info *types.Info, cond ast.Expr, v *types.Var) bool {
 		return true
 	}
 	return identResolvesTo(info, b.Y, v) && isNilIdent(info, b.X)
+}
+
+func isCompared(cur inspector.Cursor) bool {
+	bin, ok := cur.Parent().Node().(*ast.BinaryExpr)
+	if !ok {
+		return false
+	}
+	return bin.Op == token.EQL || bin.Op == token.NEQ
+}
+
+func sharesCompositeWithContext(pass *analysis.Pass, cur inspector.Cursor) bool {
+	var lit *ast.CompositeLit
+	for c := range cur.Enclosing((*ast.CompositeLit)(nil)) {
+		if l, ok := c.Node().(*ast.CompositeLit); ok {
+			lit = l
+			break
+		}
+	}
+	if lit == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(lit, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if v := varOf(pass.TypesInfo, id); v != nil && isContextParam(pass, cur, v) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }

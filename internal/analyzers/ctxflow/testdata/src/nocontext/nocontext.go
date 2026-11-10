@@ -73,3 +73,8 @@ func nocontextSilentOther(ctx context.Context, client *http.Client, db *sql.DB, 
 	req, _ := http.NewRequestWithContext(ctx, "GET", "http://example.com", nil)
 	_, _ = client.Do(req)
 }
+
+func CommandContext(ctx context.Context, name string) {
+	exec.Command(name)
+	useCtx(ctx)
+}

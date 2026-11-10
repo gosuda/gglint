@@ -155,3 +155,28 @@ func donespinReportedLen(ctx context.Context, buf []byte) int {
 		}
 	}
 }
+
+func donespinSilentWorkAfter(ctx context.Context, xs []int) int {
+	for _, x := range xs {
+		select {
+		case <-ctx.Done():
+			return -1
+		default:
+		}
+		use(x)
+	}
+	return 0
+}
+
+func donespinSilentWorkAfterFor(ctx context.Context) int {
+	for {
+		select {
+		case <-ctx.Done():
+			return -1
+		default:
+		}
+		if use(1); true {
+			return 0
+		}
+	}
+}

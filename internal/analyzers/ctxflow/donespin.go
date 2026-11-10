@@ -48,6 +48,9 @@ func directlyInFor(cur inspector.Cursor) bool {
 	if !ok {
 		return false
 	}
+	if len(block.List) != 1 {
+		return false
+	}
 	switch n := cur.Parent().Parent().Node().(type) {
 	case *ast.ForStmt:
 		return n.Body == block

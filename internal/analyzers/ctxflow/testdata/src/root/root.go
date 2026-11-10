@@ -119,3 +119,18 @@ func rootReportedNestedArg(ctx context.Context, k, v any) context.Context {
 func rootReportedRequest(r *http.Request) {
 	use(r, context.Background()) // want "a context is in scope, and this root context drops its cancellation and deadline"
 }
+
+func rootSilentCompared(ctx context.Context) {
+	if ctx != context.Background() {
+		use(ctx)
+	}
+}
+
+type rootShared struct {
+	context.Context
+	values context.Context
+}
+
+func rootSilentSharedComposite(ctx context.Context) context.Context {
+	return &rootShared{Context: context.Background(), values: ctx}
+}

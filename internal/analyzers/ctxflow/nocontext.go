@@ -3,6 +3,7 @@ package ctxflow
 import (
 	"go/ast"
 	"go/types"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -35,6 +36,9 @@ func checkNocontext(pass *analysis.Pass, cur inspector.Cursor) {
 	}
 	left, right, ok := nocontextTarget(pass.TypesInfo, call)
 	if !ok || !contextInScope(pass, cur) {
+		return
+	}
+	if isWrapper(pass, cur, call, right) {
 		return
 	}
 	pass.Report(analysis.Diagnostic{
@@ -153,4 +157,70 @@ func sqlDBTarget(recvName, method string) (left, right string, found bool) {
 		return recvName + "Begin", recvName + "BeginTx", true
 	}
 	return "", "", false
+}
+
+func isWrapper(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, right string) bool {
+	var name string
+	var fn inspector.Cursor
+	for fcur := range cur.Enclosing((*ast.FuncDecl)(nil)) {
+		if d, ok := fcur.Node().(*ast.FuncDecl); ok {
+			name = d.Name.Name
+			fn = fcur
+			break
+		}
+	}
+	if name == "" || !matchesReplacement(name, right) {
+		return false
+	}
+	if samePackage(pass, call) {
+		return true
+	}
+	return usesContextParam(pass, fn, cur)
+}
+
+func matchesReplacement(name, right string) bool {
+	for _, cand := range replacementNames(right) {
+		if name == cand {
+			return true
+		}
+	}
+	return false
+}
+
+func replacementNames(right string) []string {
+	var out []string
+	for part := range strings.SplitSeq(right, " and ") {
+		last := ""
+		for seg := range strings.SplitSeq(part, ".") {
+			last = seg
+		}
+		if last != "" {
+			out = append(out, last)
+		}
+	}
+	return out
+}
+
+func samePackage(pass *analysis.Pass, call *ast.CallExpr) bool {
+	fn := typeutil.StaticCallee(pass.TypesInfo, call)
+	if fn == nil || fn.Pkg() == nil || pass.Pkg == nil {
+		return false
+	}
+	return fn.Pkg().Path() == pass.Pkg.Path()
+}
+
+func usesContextParam(pass *analysis.Pass, fn, cur inspector.Cursor) bool {
+	for c := range fn.Preorder((*ast.Ident)(nil)) {
+		id, ok := c.Node().(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if _, isDef := pass.TypesInfo.Defs[id]; isDef {
+			continue
+		}
+		if v, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && v != nil && isContextParam(pass, cur, v) {
+			return true
+		}
+	}
+	return false
 }
