@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 	"sync"
 
 	"golang.org/x/tools/go/analysis"
@@ -117,6 +118,10 @@ type Graph struct {
 	rep         map[ast.Node]ast.Node
 	joinMu      sync.Mutex
 	joinMemo    map[ast.Node]map[ast.Node]bool
+	spanMemo    map[ast.Node]map[ast.Node]bool
+	nextMemo    map[ast.Node][]ast.Node
+	reachMemo   map[ast.Node]map[ast.Node]bool
+	predMemo    map[*cfg.Block][]*cfg.Block
 	closureOnce sync.Once
 	closureVars map[*ast.FuncLit]*types.Var
 }
@@ -382,7 +387,6 @@ func nodeSpan(n ast.Node) token.Pos {
 	return n.End() - n.Pos()
 }
 
-// Reaches reports whether some path leads from the node after from to the given to node without crossing a node for which avoid returns true; avoid may be nil.
 func (g *Graph) Reaches(from, to ast.Node, avoid func(ast.Node) bool) bool {
 	if g == nil {
 		return false
@@ -392,12 +396,52 @@ func (g *Graph) Reaches(from, to ast.Node, avoid func(ast.Node) bool) bool {
 	if f == nil || t == nil {
 		return false
 	}
+	if avoid == nil {
+		return g.reachSet(f)[t]
+	}
 	return g.reach(f, t, avoid)
+}
+
+func (g *Graph) reachSet(from ast.Node) map[ast.Node]bool {
+	g.joinMu.Lock()
+	if s, ok := g.reachMemo[from]; ok {
+		g.joinMu.Unlock()
+		return s
+	}
+	g.joinMu.Unlock()
+	s := g.flood(from, nil)
+	g.joinMu.Lock()
+	if g.reachMemo == nil {
+		g.reachMemo = map[ast.Node]map[ast.Node]bool{}
+	}
+	g.reachMemo[from] = s
+	g.joinMu.Unlock()
+	return s
+}
+
+func (g *Graph) flood(start ast.Node, avoid func(ast.Node) bool) map[ast.Node]bool {
+	m := map[ast.Node]bool{}
+	visited := map[ast.Node]bool{}
+	stack := slices.Clone(g.next(start))
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if visited[n] {
+			continue
+		}
+		visited[n] = true
+		m[n] = true
+		if avoid != nil && avoid(n) {
+			continue
+		}
+		stack = append(stack, g.next(n)...)
+	}
+	return m
 }
 
 func (g *Graph) reach(from, to ast.Node, avoid func(ast.Node) bool) bool {
 	visited := map[ast.Node]bool{}
-	stack := g.next(from)
+	stack := slices.Clone(g.next(from))
 	for len(stack) > 0 {
 		n := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -417,6 +461,23 @@ func (g *Graph) reach(from, to ast.Node, avoid func(ast.Node) bool) bool {
 }
 
 func (g *Graph) next(n ast.Node) []ast.Node {
+	g.joinMu.Lock()
+	if out, ok := g.nextMemo[n]; ok {
+		g.joinMu.Unlock()
+		return out
+	}
+	g.joinMu.Unlock()
+	out := g.succ(n)
+	g.joinMu.Lock()
+	if g.nextMemo == nil {
+		g.nextMemo = map[ast.Node][]ast.Node{}
+	}
+	g.nextMemo[n] = out
+	g.joinMu.Unlock()
+	return out
+}
+
+func (g *Graph) succ(n ast.Node) []ast.Node {
 	b := g.index[n]
 	if b == nil {
 		return nil
@@ -451,12 +512,25 @@ func (g *Graph) entries(b *cfg.Block, seen map[*cfg.Block]bool, out *[]ast.Node)
 }
 
 func (g *Graph) predecessors() map[*cfg.Block][]*cfg.Block {
-	out := make(map[*cfg.Block][]*cfg.Block)
+	g.joinMu.Lock()
+	if g.predMemo != nil {
+		out := g.predMemo
+		g.joinMu.Unlock()
+		return out
+	}
+	g.joinMu.Unlock()
+	built := make(map[*cfg.Block][]*cfg.Block)
 	for _, b := range g.blocks {
 		for _, s := range b.Succs {
-			out[s] = append(out[s], b)
+			built[s] = append(built[s], b)
 		}
 	}
+	g.joinMu.Lock()
+	if g.predMemo == nil {
+		g.predMemo = built
+	}
+	out := g.predMemo
+	g.joinMu.Unlock()
 	return out
 }
 

@@ -830,7 +830,7 @@ func (e *escaper) implicitAddr(sel *ast.SelectorExpr) bool {
 	if _, ok := sig.Recv().Type().(*types.Pointer); !ok {
 		return false
 	}
-	if _, ok := e.info.TypeOf(sel.X).(*types.Pointer); ok {
+	if _, ok := types.Unalias(e.info.TypeOf(sel.X)).(*types.Pointer); ok {
 		return false
 	}
 	return true

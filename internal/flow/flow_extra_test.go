@@ -699,6 +699,23 @@ func TestEscapesAlias(t *testing.T) {
 	}
 }
 
+func TestEscapesAliasPointerReceiver(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\ntype T struct{ n int }\nfunc (t *T) run() {}\ntype P = *T\nfunc f() {\nvar p P = &T{}\np.run()\n_ = p\n}")
+	decl := testFuncDeclAt(t, f.Decls, 3)
+	spec, ok := decl.Body.List[0].(*ast.DeclStmt).Decl.(*ast.GenDecl).Specs[0].(*ast.ValueSpec)
+	if !ok {
+		t.Fatalf("first stmt not var spec")
+	}
+	v, ok := info.Defs[spec.Names[0]].(*types.Var)
+	if !ok {
+		t.Fatalf("p not var")
+	}
+	if Escapes(info, decl, v) {
+		t.Fatalf("alias-to-pointer receiver escapes")
+	}
+}
+
 func TestEscapesDeleteArg(t *testing.T) {
 	t.Parallel()
 	f, info := checkTypes(t, "package p\nfunc f(k string) int {\nm := map[string]int{\"a\": 1}\ndelete(m, k)\nreturn 0\n}")

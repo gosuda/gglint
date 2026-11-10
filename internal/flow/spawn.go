@@ -388,7 +388,25 @@ func Joined(pass *analysis.Pass, g *Graph, s Spawn, at ast.Node) bool {
 	if joins[t] {
 		return true
 	}
-	return !g.reach(f, t, func(n ast.Node) bool { return joins[n] })
+	return !g.spanReach(pass, s, f)[t]
+}
+
+func (g *Graph) spanReach(pass *analysis.Pass, s Spawn, start ast.Node) map[ast.Node]bool {
+	g.joinMu.Lock()
+	if m, ok := g.spanMemo[s.Site]; ok {
+		g.joinMu.Unlock()
+		return m
+	}
+	g.joinMu.Unlock()
+	joins := g.cachedJoins(pass, s)
+	m := g.flood(start, func(n ast.Node) bool { return joins[n] })
+	g.joinMu.Lock()
+	if g.spanMemo == nil {
+		g.spanMemo = map[ast.Node]map[ast.Node]bool{}
+	}
+	g.spanMemo[s.Site] = m
+	g.joinMu.Unlock()
+	return m
 }
 
 func (g *Graph) cachedJoins(pass *analysis.Pass, s Spawn) map[ast.Node]bool {
