@@ -243,3 +243,38 @@ func viewescapeSilentFreshBuffer(in []string, out [][]byte) [][]byte {
 	}
 	return out
 }
+
+func viewescapeSilentLocalReturn(s string) []byte {
+	sc := bufio.NewScanner(bytes.NewBufferString(s))
+	for sc.Scan() {
+		if len(sc.Bytes()) > 0 {
+			return sc.Bytes()
+		}
+	}
+	return nil
+}
+
+func viewescapeSilentAssignBreak(s string) []byte {
+	sc := bufio.NewScanner(bytes.NewBufferString(s))
+	var first []byte
+	for sc.Scan() {
+		if len(sc.Bytes()) > 0 {
+			first = sc.Bytes()
+			break
+		}
+	}
+	return first
+}
+
+func viewescapeReportedAssignBreakKept(s string) []byte {
+	sc := bufio.NewScanner(bytes.NewBufferString(s))
+	var first []byte
+	for sc.Scan() {
+		if len(sc.Bytes()) > 0 {
+			first = sc.Bytes() // want "points into the buffer of"
+			break
+		}
+	}
+	sc.Scan()
+	return first
+}

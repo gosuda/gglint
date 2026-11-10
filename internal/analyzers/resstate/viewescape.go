@@ -62,6 +62,12 @@ func loopBody(n ast.Node) (ast.Node, bool) {
 	return nil, false
 }
 
+type viewSink struct {
+	expr   ast.Expr
+	ret    bool
+	assign *ast.AssignStmt
+}
+
 func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]bool) {
 	invalid := invalidReceivers(pass, loop)
 	if len(invalid) == 0 {
@@ -70,7 +76,7 @@ func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]b
 	views := viewDefs(pass, fn)
 	sinks := sinkExprs(pass, loop, body)
 	for _, s := range sinks {
-		v, recvExpr, viewMethod, ok := sinkView(pass, s, views)
+		v, recvExpr, viewMethod, ok := sinkView(pass, s.expr, views)
 		if !ok {
 			continue
 		}
@@ -81,16 +87,170 @@ func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]b
 		if recvFreshInBody(recvKey, body) {
 			continue
 		}
+		if viewSilent(pass, fn, loop, body, s, recvKey) {
+			continue
+		}
 		method, ok := invalidOther(invalid[recvKey], viewMethod)
 		if !ok {
 			continue
 		}
-		if seen[s.Pos()] {
+		if seen[s.expr.Pos()] {
 			continue
 		}
-		seen[s.Pos()] = true
-		pass.Reportf(s.Pos(), "%s points into the buffer of %s, and the next %s call overwrites it: store a copy made with bytes.Clone", types.ExprString(v), types.ExprString(recvExpr), method)
+		seen[s.expr.Pos()] = true
+		pass.Reportf(s.expr.Pos(), "%s points into the buffer of %s, and the next %s call overwrites it: store a copy made with bytes.Clone", types.ExprString(v), types.ExprString(recvExpr), method)
 	}
+}
+
+func viewSilent(pass *analysis.Pass, fn, loop, body ast.Node, sink viewSink, recvKey flow.Key) bool {
+	if sink.ret {
+		return recvLocalKept(pass, fn, recvKey)
+	}
+	if sink.assign == nil {
+		return false
+	}
+	return assignExitsLoop(body, sink.assign) && noInvalidAfter(pass, fn, loop, recvKey)
+}
+
+func recvLocalKept(pass *analysis.Pass, fn ast.Node, k flow.Key) bool {
+	if k.Path != "" {
+		return false
+	}
+	v, ok := k.Root.(*types.Var)
+	if !ok {
+		return false
+	}
+	return flow.IsLocal(pass.TypesInfo, fn, v) && !flow.Escapes(pass.TypesInfo, fn, v)
+}
+
+func assignExitsLoop(body ast.Node, target *ast.AssignStmt) bool {
+	list, nested := containingList(body, target)
+	if list == nil {
+		return false
+	}
+	idx := listIndex(list, target)
+	if idx < 0 || idx+1 >= len(list) {
+		return false
+	}
+	next := list[idx+1]
+	if exitsReturn(next) {
+		return true
+	}
+	return exitsBreak(next) && !nested
+}
+
+func exitsReturn(next ast.Stmt) bool {
+	_, ok := next.(*ast.ReturnStmt)
+	return ok
+}
+
+func exitsBreak(next ast.Stmt) bool {
+	br, ok := next.(*ast.BranchStmt)
+	return ok && br.Tok == token.BREAK && br.Label == nil
+}
+
+func containingList(body ast.Node, target *ast.AssignStmt) ([]ast.Stmt, bool) {
+	nested := insideCapture(body, target)
+	var result []ast.Stmt
+	ast.Inspect(body, func(n ast.Node) bool {
+		if result != nil {
+			return false
+		}
+		list, ok := stmtListOf(n)
+		if !ok {
+			return true
+		}
+		if listHolds(list, target) {
+			result = list
+			return false
+		}
+		return true
+	})
+	return result, nested
+}
+
+func stmtListOf(n ast.Node) ([]ast.Stmt, bool) {
+	switch x := n.(type) {
+	case *ast.BlockStmt:
+		return x.List, true
+	case *ast.CaseClause:
+		return x.Body, true
+	case *ast.CommClause:
+		return x.Body, true
+	}
+	return nil, false
+}
+
+func listHolds(list []ast.Stmt, target *ast.AssignStmt) bool {
+	for _, s := range list {
+		if s == ast.Stmt(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func listIndex(list []ast.Stmt, target *ast.AssignStmt) int {
+	for i, s := range list {
+		if s == ast.Stmt(target) {
+			return i
+		}
+	}
+	return -1
+}
+
+func insideCapture(body ast.Node, target *ast.AssignStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if n == body {
+			return true
+		}
+		switch n.(type) {
+		case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+			if n.Pos() <= target.Pos() && target.End() <= n.End() {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func noInvalidAfter(pass *analysis.Pass, fn, loop ast.Node, want flow.Key) bool {
+	found := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok && n != fn {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		return noInvalidAt(pass, call, loop, want, &found)
+	})
+	return !found
+}
+
+func noInvalidAt(pass *analysis.Pass, call *ast.CallExpr, loop ast.Node, want flow.Key, found *bool) bool {
+	if call.Pos() <= loop.End() {
+		return true
+	}
+	k, ok := flow.MethodKey(pass.TypesInfo, call)
+	if !ok || k != want {
+		return true
+	}
+	if viewInvalidName(pass, call) == "" {
+		return true
+	}
+	*found = true
+	return false
 }
 
 func recvFreshInBody(k flow.Key, body ast.Node) bool {
@@ -417,27 +577,42 @@ func isViewSourceType(t types.Type, name string) bool {
 	return matchViewSource(path, recv, name)
 }
 
-func sinkExprs(pass *analysis.Pass, loop, body ast.Node) []ast.Expr {
-	var out []ast.Expr
+func sinkExprs(pass *analysis.Pass, loop, body ast.Node) []viewSink {
+	var out []viewSink
 	ast.Inspect(body, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		switch x := n.(type) {
-		case *ast.CallExpr:
-			if isAppendCall(pass, x) {
-				out = appendElemArgs(x, out)
-			}
-		case *ast.SendStmt:
-			out = append(out, x.Value)
-		case *ast.AssignStmt:
-			out = appendAssignRHS(pass, loop, x, out)
-		case *ast.ReturnStmt:
-			out = append(out, x.Results...)
-		}
+		sinkStmt(pass, loop, n, &out)
 		return true
 	})
 	return out
+}
+
+func sinkStmt(pass *analysis.Pass, loop, n ast.Node, out *[]viewSink) {
+	switch x := n.(type) {
+	case *ast.CallExpr:
+		sinkAppend(pass, x, out)
+	case *ast.SendStmt:
+		*out = append(*out, viewSink{expr: x.Value})
+	case *ast.AssignStmt:
+		for _, e := range appendAssignRHS(pass, loop, x, nil) {
+			*out = append(*out, viewSink{expr: e, assign: x})
+		}
+	case *ast.ReturnStmt:
+		for _, e := range x.Results {
+			*out = append(*out, viewSink{expr: e, ret: true})
+		}
+	}
+}
+
+func sinkAppend(pass *analysis.Pass, x *ast.CallExpr, out *[]viewSink) {
+	if !isAppendCall(pass, x) {
+		return
+	}
+	for _, e := range appendElemArgs(x, nil) {
+		*out = append(*out, viewSink{expr: e})
+	}
 }
 
 func isAppendCall(pass *analysis.Pass, call *ast.CallExpr) bool {
