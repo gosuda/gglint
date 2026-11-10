@@ -252,3 +252,22 @@ func pairShortRedeclAfterReported() {
 	}
 	_ = s
 }
+
+func pairDeferUnlockSilent() {
+	var mu sync.Mutex
+	mu.Lock()
+	mu.Unlock()
+	defer mu.Unlock()
+	mu.Lock()
+}
+
+func pairJoinReported(c bool) {
+	var mu sync.Mutex
+	if c {
+		mu.Lock()
+	} else {
+		mu.Lock()
+	}
+	mu.Unlock()
+	mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+}

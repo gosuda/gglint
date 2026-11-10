@@ -152,3 +152,64 @@ func leakDeferAddrSilent(bad bool) error {
 	mu.Unlock()
 	return nil
 }
+
+func leakStoredAddrSilent(bad bool) error {
+	var mu sync.Mutex
+	p := &mu
+	_ = p
+	mu.Lock()
+	if bad {
+		return errBad
+	}
+	mu.Unlock()
+	return nil
+}
+
+func leakUnlockedReturnsSilent(s *S, n int) error {
+	s.mu.Lock()
+	if n > 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func leakLockedOnlySilent(s *S, bad bool) error {
+	s.mu.Lock()
+	if bad {
+		return errBad
+	}
+	s.mu.Unlock()
+	s.mu.Lock()
+	return errBad
+}
+
+func leakRelockSilent(s *S, n int) error {
+	s.mu.Lock()
+	if n == 0 {
+		s.mu.Unlock()
+		s.mu.Lock()
+		return errBad
+	}
+	return errBad
+}
+
+func leakIfNoElseSilent(s *S, n int) {
+	s.mu.Lock()
+	if n > 0 {
+		return
+	}
+	if n == 0 {
+		s.mu.Unlock()
+	}
+}
+
+func leakUnknownTailSilent(s *S, n int) {
+	s.mu.Lock()
+	if n > 0 {
+		return
+	}
+	touchLeak(&s.mu)
+	s.mu.Unlock()
+}

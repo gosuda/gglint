@@ -24,3 +24,16 @@ func trylockSilent() {
 	}
 	_ = n
 }
+
+func trylockAssignedSilent(mu *sync.Mutex) {
+	ok := mu.TryLock()
+	if ok {
+		mu.Unlock()
+	}
+}
+
+func trylockNestedReported(mu *sync.Mutex) {
+	func() {
+		mu.TryLock() // want "the result of mu.TryLock is dropped"
+	}()
+}

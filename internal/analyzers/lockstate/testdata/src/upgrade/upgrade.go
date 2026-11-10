@@ -15,6 +15,13 @@ func upgradeSilent() {
 	mu.Lock()
 }
 
+func upgradeDeferLockSilent() {
+	var mu sync.RWMutex
+	mu.RLock()
+	defer mu.Lock()
+	mu.RUnlock()
+}
+
 func upgradeAliasSilent() {
 	var mu sync.RWMutex
 	mu.RLock()

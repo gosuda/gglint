@@ -54,3 +54,10 @@ func deferloopUnlockedSilent(xs []int) {
 		mu.RUnlock()
 	}
 }
+
+func deferloopNoLockSilent(mu *sync.Mutex) {
+	mu.Lock()
+	for range 1 {
+		defer mu.Unlock()
+	}
+}
