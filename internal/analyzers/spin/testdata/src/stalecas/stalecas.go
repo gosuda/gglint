@@ -337,3 +337,16 @@ func stalecasReportedAddrAfter(n *atomic.Int64) {
 	}
 	use(&old)
 }
+func stalecasSilentRangeOuter(n *atomic.Int64) {
+	old := n.Load()
+	var reset func()
+	for range 2 {
+		for !n.CompareAndSwap(old, old+1) {
+			if reset != nil {
+				reset()
+			}
+		}
+		reset = func() { old = 0 }
+	}
+	use(old)
+}

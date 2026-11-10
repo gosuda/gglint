@@ -295,3 +295,15 @@ func pollReportedCond(ch chan int, stop *atomic.Bool) {
 	}
 	use(n)
 }
+func pollReportedCountedFlag(ch chan int, stop *atomic.Bool) {
+	n := 0
+	for i := 0; !stop.Load(); i++ { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			n++
+		}
+	}
+	use(n)
+}

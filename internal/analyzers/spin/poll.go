@@ -29,7 +29,7 @@ func checkPoll(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 	if !ok {
 		return
 	}
-	if isCounted(loop) {
+	if isCounted(pass.TypesInfo, loop) {
 		return
 	}
 	if defaultSpins(pass, def) {
@@ -44,8 +44,95 @@ func checkPoll(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 	pass.Reportf(loop.Pos(), "no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it")
 }
 
-func isCounted(loop *ast.ForStmt) bool {
-	return loop.Init != nil && loop.Cond != nil && loop.Post != nil
+func isCounted(info *types.Info, loop *ast.ForStmt) bool {
+	if loop.Init == nil || loop.Cond == nil || loop.Post == nil {
+		return false
+	}
+	inits := assignedVars(info, loop.Init)
+	if len(inits) == 0 {
+		return false
+	}
+	posts := assignedVars(info, loop.Post)
+	for v := range inits {
+		if posts[v] && condMentions(info, loop.Cond, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func assignedVars(info *types.Info, node ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	switch t := node.(type) {
+	case *ast.AssignStmt:
+		addAssignVars(info, t, out)
+	case *ast.IncDecStmt:
+		addIncDecVar(info, t, out)
+	case *ast.DeclStmt:
+		addDeclVars(info, t, out)
+	}
+	return out
+}
+
+func addAssignVars(info *types.Info, t *ast.AssignStmt, out map[*types.Var]bool) {
+	for _, e := range t.Lhs {
+		addRootVar(info, e, out)
+	}
+}
+
+func addIncDecVar(info *types.Info, t *ast.IncDecStmt, out map[*types.Var]bool) {
+	addRootVar(info, t.X, out)
+}
+
+func addRootVar(info *types.Info, e ast.Expr, out map[*types.Var]bool) {
+	id := rootIdent(e)
+	if id == nil {
+		return
+	}
+	if v, ok := info.ObjectOf(id).(*types.Var); ok {
+		out[v] = true
+	}
+}
+
+func addDeclVars(info *types.Info, t *ast.DeclStmt, out map[*types.Var]bool) {
+	decl, ok := t.Decl.(*ast.GenDecl)
+	if !ok {
+		return
+	}
+	for _, spec := range decl.Specs {
+		addSpecVars(info, spec, out)
+	}
+}
+
+func addSpecVars(info *types.Info, spec ast.Spec, out map[*types.Var]bool) {
+	vs, ok := spec.(*ast.ValueSpec)
+	if !ok {
+		return
+	}
+	for _, name := range vs.Names {
+		if v, ok := info.Defs[name].(*types.Var); ok {
+			out[v] = true
+		}
+	}
+}
+
+func condMentions(info *types.Info, cond ast.Expr, v *types.Var) bool {
+	found := false
+	ast.Inspect(cond, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if info.ObjectOf(id) == types.Object(v) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func defaultExits(pass *analysis.Pass, cur inspector.Cursor, def *ast.CommClause) bool {

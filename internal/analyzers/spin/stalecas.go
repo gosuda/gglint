@@ -49,22 +49,25 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt)
 type staleScope struct {
 	fn    ast.Node
 	loop  *ast.ForStmt
-	outer *ast.ForStmt
+	outer ast.Node
 }
 
-func outerLoop(cur inspector.Cursor, loop *ast.ForStmt, fn ast.Node) *ast.ForStmt {
+func outerLoop(cur inspector.Cursor, loop *ast.ForStmt, fn ast.Node) ast.Node {
 	if fn == nil {
 		return nil
 	}
-	for c := range cur.Enclosing((*ast.ForStmt)(nil)) {
-		node, ok := c.Node().(*ast.ForStmt)
-		if !ok || node == loop {
+	for c := range cur.Enclosing((*ast.ForStmt)(nil), (*ast.RangeStmt)(nil)) {
+		node := c.Node()
+		if node == ast.Node(loop) {
 			continue
 		}
 		if node.Pos() < fn.Pos() || node.End() > fn.End() {
 			continue
 		}
-		return node
+		switch node.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			return node
+		}
 	}
 	return nil
 }
@@ -76,8 +79,17 @@ func inStaleScope(n ast.Node, scope staleScope) bool {
 	return scope.outer != nil && withinOuter(n, scope.outer)
 }
 
-func withinOuter(n ast.Node, outer *ast.ForStmt) bool {
-	return outer.Body != nil && outer.Body.Pos() <= n.Pos() && n.Pos() < outer.Body.End()
+func withinOuter(n, outer ast.Node) bool {
+	var body *ast.BlockStmt
+	switch t := outer.(type) {
+	case *ast.ForStmt:
+		body = t.Body
+	case *ast.RangeStmt:
+		body = t.Body
+	default:
+		return false
+	}
+	return body != nil && body.Pos() <= n.Pos() && n.Pos() < body.End()
 }
 
 func staleShape(pass *analysis.Pass, loop *ast.ForStmt) (*types.Var, bool) {
@@ -287,7 +299,60 @@ func staleUnknown(info *types.Info, scope staleScope, old *types.Var) bool {
 	if scope.fn == nil {
 		return false
 	}
+	if hasUnorderedJump(info, scope.fn) {
+		return true
+	}
 	return capturedInScope(info, scope, old) || addrInScope(info, scope, old)
+}
+
+func hasUnorderedJump(info *types.Info, fn ast.Node) bool {
+	labels := collectLabels(info, fn)
+	found := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		branch, ok := n.(*ast.BranchStmt)
+		if !ok {
+			return true
+		}
+		if unorderedBranch(info, branch, labels) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func collectLabels(info *types.Info, fn ast.Node) map[types.Object]token.Pos {
+	labels := map[types.Object]token.Pos{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		labeled, ok := n.(*ast.LabeledStmt)
+		if !ok {
+			return true
+		}
+		if obj := info.ObjectOf(labeled.Label); obj != nil {
+			labels[obj] = labeled.Pos()
+		}
+		return true
+	})
+	return labels
+}
+
+func unorderedBranch(info *types.Info, branch *ast.BranchStmt, labels map[types.Object]token.Pos) bool {
+	if branch.Tok == token.GOTO {
+		return true
+	}
+	if branch.Label == nil {
+		return false
+	}
+	obj := info.ObjectOf(branch.Label)
+	if obj == nil {
+		return false
+	}
+	pos, ok := labels[obj]
+	return ok && branch.Pos() > pos
 }
 
 func capturedInScope(info *types.Info, scope staleScope, v *types.Var) bool {

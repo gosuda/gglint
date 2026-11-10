@@ -96,78 +96,125 @@ func reportContinue(pass *analysis.Pass, site continueSite, label string, k int,
 }
 
 func outerAdvanced(info *types.Info, site continueSite, k int) bool {
+	written := map[*types.Var]bool{}
 	for _, stmt := range site.list[:site.at] {
-		if assignsOuter(info, site.loop, stmt, site.errs) {
-			return true
-		}
+		collectOuterWrites(info, site.loop, stmt, site.errs, written)
 	}
-	if site.check.Init != nil && assignsOuter(info, site.loop, site.check.Init, site.errs) {
-		return true
+	if site.check.Init != nil {
+		collectOuterWrites(info, site.loop, site.check.Init, site.errs, written)
 	}
 	for _, stmt := range site.check.Body.List[:k] {
-		if assignsOuter(info, site.loop, stmt, site.errs) {
+		collectOuterWrites(info, site.loop, stmt, site.errs, written)
+	}
+	if len(written) == 0 {
+		return false
+	}
+	for _, stmt := range site.list[:site.at] {
+		if stmtReadsWritten(info, site.loop, stmt, site.errs, written) {
 			return true
 		}
 	}
-	return false
+	if site.check.Init != nil && stmtReadsWritten(info, site.loop, site.check.Init, site.errs, written) {
+		return true
+	}
+	return condReadsWritten(info, site.check.Cond, written)
 }
 
-func assignsOuter(info *types.Info, loop *ast.ForStmt, node ast.Node, errs map[*types.Var]bool) bool {
-	hit := false
+func collectOuterWrites(info *types.Info, loop *ast.ForStmt, node ast.Node, errs, out map[*types.Var]bool) {
 	walkNoLit(node, func(n ast.Node) bool {
-		if assignsOuterNode(info, loop, n, errs) {
-			hit = true
-		}
-		return !hit
+		addOuterNode(info, loop, n, errs, out)
+		return true
 	})
-	return hit
 }
 
-func assignsOuterNode(info *types.Info, loop *ast.ForStmt, n ast.Node, errs map[*types.Var]bool) bool {
+func addOuterNode(info *types.Info, loop *ast.ForStmt, n ast.Node, errs, out map[*types.Var]bool) {
 	switch t := n.(type) {
 	case *ast.AssignStmt:
-		return lhsHasOuter(info, loop, t.Lhs, errs)
+		addOuterLHS(info, loop, t.Lhs, errs, out)
 	case *ast.IncDecStmt:
-		return isOuterVar(info, loop, t.X, errs)
+		addOuterOne(info, loop, t.X, errs, out)
 	case *ast.RangeStmt:
-		return rangeAssignsOuter(info, loop, t, errs)
-	default:
-		return false
+		addOuterRange(info, loop, t, errs, out)
 	}
 }
 
-func lhsHasOuter(info *types.Info, loop *ast.ForStmt, lhs []ast.Expr, errs map[*types.Var]bool) bool {
+func addOuterLHS(info *types.Info, loop *ast.ForStmt, lhs []ast.Expr, errs, out map[*types.Var]bool) {
 	for _, e := range lhs {
-		if isOuterVar(info, loop, e, errs) {
-			return true
-		}
+		addOuterOne(info, loop, e, errs, out)
 	}
-	return false
 }
 
-func rangeAssignsOuter(info *types.Info, loop *ast.ForStmt, t *ast.RangeStmt, errs map[*types.Var]bool) bool {
+func addOuterOne(info *types.Info, loop *ast.ForStmt, e ast.Expr, errs, out map[*types.Var]bool) {
+	if v, ok := outerRootVar(info, loop, e, errs); ok {
+		out[v] = true
+	}
+}
+
+func addOuterRange(info *types.Info, loop *ast.ForStmt, t *ast.RangeStmt, errs, out map[*types.Var]bool) {
 	if t.Tok != token.ASSIGN {
-		return false
+		return
 	}
-	return isOuterVar(info, loop, t.Key, errs) || isOuterVar(info, loop, t.Value, errs)
+	addOuterOne(info, loop, t.Key, errs, out)
+	addOuterOne(info, loop, t.Value, errs, out)
 }
 
-func isOuterVar(info *types.Info, loop *ast.ForStmt, e ast.Expr, errs map[*types.Var]bool) bool {
+func outerRootVar(info *types.Info, loop *ast.ForStmt, e ast.Expr, errs map[*types.Var]bool) (*types.Var, bool) {
 	if e == nil {
-		return false
+		return nil, false
 	}
 	id := rootIdent(e)
 	if id == nil {
-		return false
+		return nil, false
 	}
 	v, ok := info.ObjectOf(id).(*types.Var)
 	if !ok || errs[v] {
-		return false
+		return nil, false
 	}
 	if v.Parent() == nil {
-		return true
+		return v, true
 	}
-	return v.Pos() < loop.Pos() || v.Pos() >= loop.End()
+	if v.Pos() < loop.Pos() || v.Pos() >= loop.End() {
+		return v, true
+	}
+	return nil, false
+}
+
+func stmtReadsWritten(info *types.Info, loop *ast.ForStmt, node ast.Node, errs, written map[*types.Var]bool) bool {
+	here := map[*types.Var]bool{}
+	collectOuterWrites(info, loop, node, errs, here)
+	found := false
+	walkNoLit(node, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		v, ok := info.Uses[id].(*types.Var)
+		if !ok || !written[v] || here[v] {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
+func condReadsWritten(info *types.Info, cond ast.Expr, written map[*types.Var]bool) bool {
+	found := false
+	ast.Inspect(cond, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if v, ok := info.Uses[id].(*types.Var); ok && written[v] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func errorCompared(info *types.Info, cond ast.Expr) bool {

@@ -209,3 +209,26 @@ func skipadvanceSilentCursorAdvance(words []string, n int) (out []int) {
 	}
 	return out
 }
+func skipadvanceReportedOuterWrite(xs []int, lastErr *error) {
+	i := 0
+	for i < len(xs) {
+		if err := doStep(xs[i]); err != nil {
+			*lastErr = err
+			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+		}
+		i++
+	}
+}
+
+func skipadvanceReportedCounter(xs []int) {
+	failures := 0
+	i := 0
+	for i < len(xs) {
+		if err := doStep(xs[i]); err != nil {
+			failures++
+			continue // want `this continue skips the statement that advances the loop, so the same item is retried forever: advance before continue`
+		}
+		i++
+	}
+	_ = failures
+}
