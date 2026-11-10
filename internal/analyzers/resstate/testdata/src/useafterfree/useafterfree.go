@@ -115,3 +115,23 @@ func useafterfreeSilentSliceHeader() {
 	syscall.Munmap(b)
 	_ = b[:0]
 }
+
+func useafterfreeReportedSliceCall() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	useFreeBytes(b[:]) // want "is used after it was freed"
+}
+
+func useafterfreeReportedSliceStore() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	x := b[:] // want "is used after it was freed"
+	_ = x
+}
+
+func useafterfreeSilentSelfSlice() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	b = b[:0]
+	_ = b
+}

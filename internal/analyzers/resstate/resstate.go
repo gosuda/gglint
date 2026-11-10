@@ -91,12 +91,58 @@ func closeFunc(pass *analysis.Pass, fn ast.Node) {
 	if g == nil {
 		return
 	}
+	cands := closeCandidates(pass, fn)
+	if len(cands) == 0 {
+		return
+	}
 	for _, v := range localsOf(pass, fn) {
 		if !hasCloseResult(v.Type()) {
 			continue
 		}
+		if !cands[v] {
+			continue
+		}
 		closeVar(pass, fn, g, v)
 	}
+}
+
+func closeCandidates(pass *analysis.Pass, fn ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
+		if v, ok := closeCandidateOf(pass, n); ok {
+			out[v] = true
+		}
+		return true
+	})
+	return out
+}
+
+func closeCandidateOf(pass *analysis.Pass, n ast.Node) (*types.Var, bool) {
+	es, ok := n.(*ast.ExprStmt)
+	if !ok {
+		return nil, false
+	}
+	call, ok := ast.Unparen(es.X).(*ast.CallExpr)
+	if !ok || len(call.Args) != 0 {
+		return nil, false
+	}
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Close" {
+		return nil, false
+	}
+	recv, ok := closeRecv(pass, call)
+	if !ok {
+		return nil, false
+	}
+	k, ok := flow.KeyOf(pass.TypesInfo, recv)
+	if !ok || k.Path != "" {
+		return nil, false
+	}
+	v, ok := k.Root.(*types.Var)
+	return v, ok
 }
 
 func putFunc(pass *analysis.Pass, fn ast.Node) {
@@ -104,8 +150,15 @@ func putFunc(pass *analysis.Pass, fn ast.Node) {
 	if g == nil {
 		return
 	}
+	cands := putCandidates(pass, fn)
+	if len(cands) == 0 {
+		return
+	}
 	for _, v := range localsOf(pass, fn) {
 		if !isPoolValue(v.Type()) {
+			continue
+		}
+		if !cands[v] {
 			continue
 		}
 		putVar(pass, fn, g, v)
@@ -117,8 +170,152 @@ func freeFunc(pass *analysis.Pass, fn ast.Node) {
 	if g == nil {
 		return
 	}
+	cands := freeCandidates(pass, fn)
+	if len(cands) == 0 {
+		return
+	}
 	for _, v := range localsOf(pass, fn) {
+		if !cands[v] {
+			continue
+		}
 		freeVar(pass, fn, g, v)
+	}
+}
+
+func putCandidates(pass *analysis.Pass, fn ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
+		if v, ok := putCandidateOf(pass, n); ok {
+			out[v] = true
+		}
+		return true
+	})
+	return out
+}
+
+func putCandidateOf(pass *analysis.Pass, n ast.Node) (*types.Var, bool) {
+	es, ok := n.(*ast.ExprStmt)
+	if !ok {
+		return nil, false
+	}
+	call, ok := ast.Unparen(es.X).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return nil, false
+	}
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != putMethod {
+		return nil, false
+	}
+	if !isPoolType(pass.TypesInfo.Types[sel.X].Type) {
+		return nil, false
+	}
+	k, ok := flow.KeyOf(pass.TypesInfo, call.Args[0])
+	if !ok || k.Path != "" {
+		return nil, false
+	}
+	v, ok := k.Root.(*types.Var)
+	return v, ok
+}
+
+func freeCandidates(pass *analysis.Pass, fn ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		es, ok := n.(*ast.ExprStmt)
+		if !ok {
+			return true
+		}
+		call, ok := ast.Unparen(es.X).(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		if !freeCallName(call) {
+			return true
+		}
+		collectFreeArgVars(pass, fn, call.Args[0], out)
+		return true
+	})
+	return out
+}
+
+func freeCallName(call *ast.CallExpr) bool {
+	if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
+		return sel.Sel.Name == "Munmap" || sel.Sel.Name == "free"
+	}
+	if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok {
+		return id.Name == cFreeFunc
+	}
+	return false
+}
+
+func collectFreeArgVars(pass *analysis.Pass, fn ast.Node, arg ast.Expr, out map[*types.Var]bool) {
+	ast.Inspect(arg, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		v, ok := pass.TypesInfo.Uses[id].(*types.Var)
+		if !ok || out[v] {
+			return true
+		}
+		out[v] = true
+		collectTempSources(pass, fn, v, out)
+		return true
+	})
+}
+
+func collectTempSources(pass *analysis.Pass, fn ast.Node, tv *types.Var, out map[*types.Var]bool) {
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if assignBindsTV(pass, x, tv) {
+				collectIdents(pass, x.Rhs, out)
+			}
+		case *ast.ValueSpec:
+			if valueSpecBindsTV(pass, x, tv) {
+				collectIdents(pass, x.Values, out)
+			}
+		}
+		return true
+	})
+}
+
+func assignBindsTV(pass *analysis.Pass, x *ast.AssignStmt, tv *types.Var) bool {
+	for _, l := range x.Lhs {
+		lid, ok := ast.Unparen(l).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if pass.TypesInfo.Uses[lid] == tv || pass.TypesInfo.Defs[lid] == tv {
+			return true
+		}
+	}
+	return false
+}
+
+func valueSpecBindsTV(pass *analysis.Pass, x *ast.ValueSpec, tv *types.Var) bool {
+	for _, l := range x.Names {
+		if pass.TypesInfo.Defs[l] == tv {
+			return true
+		}
+	}
+	return false
+}
+
+func collectIdents(pass *analysis.Pass, exprs []ast.Expr, out map[*types.Var]bool) {
+	for _, e := range exprs {
+		ast.Inspect(e, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if w, ok := pass.TypesInfo.Uses[id].(*types.Var); ok {
+				out[w] = true
+			}
+			return true
+		})
 	}
 }
 
@@ -263,6 +460,24 @@ func selfAssign(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 	if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
 		return false
 	}
+	if se, ok := ast.Unparen(as.Rhs[0]).(*ast.SliceExpr); ok {
+		return selfSliceAssign(pass, as, se, v)
+	}
+	return selfIdentAssign(pass, as, v)
+}
+
+func selfSliceAssign(pass *analysis.Pass, as *ast.AssignStmt, se *ast.SliceExpr, v *types.Var) bool {
+	if !exactVar(pass, se.X, v) {
+		return false
+	}
+	if isBlankIdent(as.Lhs[0]) {
+		return true
+	}
+	lid, lok := ast.Unparen(as.Lhs[0]).(*ast.Ident)
+	return lok && (pass.TypesInfo.Uses[lid] == v || pass.TypesInfo.Defs[lid] == v)
+}
+
+func selfIdentAssign(pass *analysis.Pass, as *ast.AssignStmt, v *types.Var) bool {
 	if isBlankIdent(as.Lhs[0]) {
 		rid, rok := ast.Unparen(as.Rhs[0]).(*ast.Ident)
 		return rok && pass.TypesInfo.Uses[rid] == v

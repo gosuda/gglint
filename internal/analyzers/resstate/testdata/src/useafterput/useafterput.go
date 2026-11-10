@@ -101,3 +101,27 @@ func useafterputReportedCallArg() {
 	resPool.Put(b)
 	useResBuf(b) // want "was returned to the pool"
 }
+
+func usePutBytes(p []byte) {
+	_ = p
+}
+
+func useafterputReportedSliceCall() {
+	b := resPool.Get().([]byte)
+	resPool.Put(b)
+	usePutBytes(b[:]) // want "was returned to the pool"
+}
+
+func useafterputReportedSliceStore() {
+	b := resPool.Get().([]byte)
+	resPool.Put(b)
+	x := b[:] // want "was returned to the pool"
+	_ = x
+}
+
+func useafterputSilentSelfSlice() {
+	b := resPool.Get().([]byte)
+	resPool.Put(b)
+	b = b[:0]
+	_ = b
+}

@@ -46,7 +46,7 @@ func outerIdent(pass *analysis.Pass, loop ast.Node, lhs ast.Expr) (*types.Var, b
 func outerAssignLive(pass *analysis.Pass, ctx loopCtx, sink *ast.AssignStmt, v *types.Var, recvKey flow.Key, viewMethod string) bool {
 	g := flow.NewGraph(pass, ctx.fn)
 	if g == nil {
-		return true
+		return false
 	}
 	calls := invalidCalls(pass, ctx.fn, recvKey, viewMethod)
 	if len(calls) == 0 {

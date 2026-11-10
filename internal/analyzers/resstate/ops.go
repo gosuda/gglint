@@ -89,7 +89,7 @@ func hasPutRelease(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 		return false
 	}
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Put" {
+	if !ok || sel.Sel.Name != putMethod {
 		return false
 	}
 	if len(call.Args) != 1 {
@@ -117,7 +117,7 @@ func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var) bool {
 	if fn == nil {
 		return false
 	}
-	if fn.Name() == "_Cfunc_free" {
+	if fn.Name() == cFreeFunc {
 		return freeArgsMention(pass, fnode, call, v)
 	}
 	pkg := fn.Pkg()
@@ -167,7 +167,7 @@ func litFreeFound(pass *analysis.Pass, lit *ast.FuncLit, x ast.Node, v *types.Va
 		return false
 	}
 	cfn := typeutil.StaticCallee(pass.TypesInfo, call)
-	if cfn == nil || cfn.Name() != "_Cfunc_free" {
+	if cfn == nil || cfn.Name() != cFreeFunc {
 		return false
 	}
 	return freeArgsMention(pass, lit, call, v)
@@ -376,6 +376,8 @@ const (
 	closeMethodWriteString = "WriteString"
 	lenBuiltin             = "len"
 	capBuiltin             = "cap"
+	putMethod              = "Put"
+	cFreeFunc              = "_Cfunc_free"
 )
 
 var closeFailPkgs = map[string]bool{"os": true, "net": true, "net/http": true}
@@ -506,9 +508,6 @@ func mentionsVar(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 
 func pruneMention(pass *analysis.Pass, x ast.Node) bool {
 	if _, ok := x.(*ast.FuncLit); ok {
-		return true
-	}
-	if _, ok := x.(*ast.SliceExpr); ok {
 		return true
 	}
 	if call, ok := x.(*ast.CallExpr); ok && lenCapCall(pass, call) {

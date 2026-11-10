@@ -37,6 +37,8 @@ func runViewescape(pass *analysis.Pass) (any, error) {
 
 func viewFunc(pass *analysis.Pass, fn ast.Node) {
 	seen := map[token.Pos]bool{}
+	var views map[*types.Var]viewSrc
+	ready := false
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if n != fn {
 			if _, ok := n.(*ast.FuncLit); ok {
@@ -47,7 +49,11 @@ func viewFunc(pass *analysis.Pass, fn ast.Node) {
 		if !ok {
 			return true
 		}
-		viewLoop(pass, fn, n, loop, seen)
+		if !ready {
+			views = viewDefs(pass, fn)
+			ready = true
+		}
+		viewLoop(pass, fn, n, loop, seen, views)
 		return true
 	})
 }
@@ -68,12 +74,11 @@ type viewSink struct {
 	assign *ast.AssignStmt
 }
 
-func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]bool) {
+func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]bool, views map[*types.Var]viewSrc) {
 	invalid := invalidReceivers(pass, loop)
 	if len(invalid) == 0 {
 		return
 	}
-	views := viewDefs(pass, fn)
 	ctx := loopCtx{fn: fn, loop: loop, body: body}
 	for _, s := range sinkExprs(pass, ctx) {
 		v, recvExpr, recvKey, viewMethod, ready := sinkReady(pass, ctx, views, s)
@@ -422,19 +427,9 @@ func viewReassignsAt(pass *analysis.Pass, n ast.Node, v *types.Var, after token.
 	case *ast.IncDecStmt:
 		return x.Pos() > after && viewTargetIs(pass, x.X, v)
 	case *ast.RangeStmt:
-		return rangeReassigns(pass, x, v, after)
+		return false
 	}
 	return false
-}
-
-func rangeReassigns(pass *analysis.Pass, x *ast.RangeStmt, v *types.Var, after token.Pos) bool {
-	if x.Pos() <= after {
-		return false
-	}
-	if t, ok := pass.TypesInfo.Types[x.X].Type.Underlying().(*types.Chan); ok && t != nil {
-		return false
-	}
-	return viewTargetIs(pass, x.Key, v) || viewTargetIs(pass, x.Value, v)
 }
 
 func viewAssigns(pass *analysis.Pass, lhs []ast.Expr, v *types.Var) bool {

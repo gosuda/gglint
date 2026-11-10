@@ -209,6 +209,16 @@ func viewescapeReportedRangeChannel(sc *bufio.Scanner, ch chan []byte, out [][]b
 	return out
 }
 
+func viewescapeReportedRangeSlice(sc *bufio.Scanner, xs [][]byte, out [][]byte) [][]byte {
+	for sc.Scan() {
+		b := sc.Bytes()
+		for _, b = range xs {
+		}
+		out = append(out, b) // want "points into the buffer of"
+	}
+	return out
+}
+
 func viewescapeSilentDiscardedPeek(r *bufio.Reader) {
 	var err error
 	for {

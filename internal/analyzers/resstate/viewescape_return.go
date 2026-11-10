@@ -35,7 +35,7 @@ func poolPutArg(pass *analysis.Pass, d *ast.DeferStmt, recvKey flow.Key) (ast.Ex
 		return nil, false
 	}
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Put" {
+	if !ok || sel.Sel.Name != putMethod {
 		return nil, false
 	}
 	if !isPoolType(pass.TypesInfo.Types[sel.X].Type) {
