@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/types/typeutil"
@@ -509,12 +510,7 @@ func (g *Graph) litRecvs(info *types.Info, lit *ast.FuncLit, sigs []Key) bool {
 }
 
 func hasKey(keys []Key, k Key) bool {
-	for _, e := range keys {
-		if e == k {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(keys, k)
 }
 
 func (g *Graph) callMentionsGroup(info *types.Info, c *ast.CallExpr, group Key, waits map[*types.Var]bool) bool {

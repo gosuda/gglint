@@ -68,36 +68,10 @@ type S struct{ buf [8]byte }
 var keep any
 func arraySlice(s S) { keep = s.buf[:] }
 `
-	f, info := checkTypes(t, src)
-	decl := findDecl(f, "assertAlias")
-	var x *types.Var
-	for _, field := range decl.Type.Params.List {
-		for _, id := range field.Names {
-			if id.Name == "x" {
-				if vv, ok := info.Defs[id].(*types.Var); ok {
-					x = vv
-				}
-			}
-		}
-	}
-	if x == nil {
-		t.Fatalf("x missing")
-	}
-	if !Escapes(info, decl, x) {
+	if !escapeOf(t, src, "assertAlias", "x") {
 		t.Fatalf("type assertion does not escape")
 	}
-	decl2 := findDecl(f, "arraySlice")
-	var s *types.Var
-	for _, field := range decl2.Type.Params.List {
-		for _, id := range field.Names {
-			if id.Name == "s" {
-				if vv, ok := info.Defs[id].(*types.Var); ok {
-					s = vv
-				}
-			}
-		}
-	}
-	if !Escapes(info, decl2, s) {
+	if !escapeOf(t, src, "arraySlice", "s") {
 		t.Fatalf("array field slice does not escape")
 	}
 }

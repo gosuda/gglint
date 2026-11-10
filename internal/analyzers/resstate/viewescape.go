@@ -182,12 +182,7 @@ func stmtListOf(n ast.Node) ([]ast.Stmt, bool) {
 }
 
 func listHolds(list []ast.Stmt, target *ast.AssignStmt) bool {
-	for _, s := range list {
-		if s == ast.Stmt(target) {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, ast.Stmt(target))
 }
 
 func listIndex(list []ast.Stmt, target *ast.AssignStmt) int {
