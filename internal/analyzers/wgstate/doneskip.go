@@ -79,42 +79,52 @@ func noteDoneExpr(info *types.Info, dones *[]doneCall, n *ast.ExprStmt) {
 }
 
 type skipCtx struct {
-	pass       *analysis.Pass
-	info       *types.Info
-	lit        *ast.FuncLit
-	dones      []doneCall
-	deferred   map[flow.Key]bool
-	topDone    []map[flow.Key]bool
-	topRelease []map[flow.Key]bool
+	pass         *analysis.Pass
+	info         *types.Info
+	lit          *ast.FuncLit
+	dones        []doneCall
+	deferred     map[flow.Key]bool
+	doneKeys     []flow.Key
+	firstDone    map[flow.Key]token.Pos
+	firstRelease map[flow.Key]token.Pos
+	topReady     bool
 }
 
 func newSkipCtx(pass *analysis.Pass, lit *ast.FuncLit, dones []doneCall, deferred map[flow.Key]bool) *skipCtx {
 	info := pass.TypesInfo
 	ctx := &skipCtx{pass: pass, info: info, lit: lit, dones: dones, deferred: deferred}
-	if lit.Body == nil {
-		return ctx
-	}
-	top := lit.Body.List
-	ctx.topDone = make([]map[flow.Key]bool, len(top)+1)
-	ctx.topRelease = make([]map[flow.Key]bool, len(top)+1)
-	ctx.topDone[0] = map[flow.Key]bool{}
-	ctx.topRelease[0] = map[flow.Key]bool{}
-	for i, s := range top {
-		ctx.topDone[i+1] = copyKeys(ctx.topDone[i], stmtDoneKeys(info, s))
-		ctx.topRelease[i+1] = copyKeys(ctx.topRelease[i], stmtReleaseKeys(info, s))
+	seen := map[flow.Key]bool{}
+	for _, d := range dones {
+		if !seen[d.key] {
+			seen[d.key] = true
+			ctx.doneKeys = append(ctx.doneKeys, d.key)
+		}
 	}
 	return ctx
 }
 
-func copyKeys(into map[flow.Key]bool, keys []flow.Key) map[flow.Key]bool {
-	out := make(map[flow.Key]bool, len(into)+len(keys))
-	for k := range into {
-		out[k] = true
+func (ctx *skipCtx) ensureTop() {
+	if ctx.topReady {
+		return
 	}
-	for _, k := range keys {
-		out[k] = true
+	ctx.topReady = true
+	ctx.firstDone = map[flow.Key]token.Pos{}
+	ctx.firstRelease = map[flow.Key]token.Pos{}
+	if ctx.lit.Body == nil {
+		return
 	}
-	return out
+	for _, s := range ctx.lit.Body.List {
+		for _, k := range stmtDoneKeys(ctx.info, s) {
+			if _, ok := ctx.firstDone[k]; !ok {
+				ctx.firstDone[k] = s.Pos()
+			}
+		}
+		for _, k := range stmtReleaseKeys(ctx.info, s) {
+			if _, ok := ctx.firstRelease[k]; !ok {
+				ctx.firstRelease[k] = s.Pos()
+			}
+		}
+	}
 }
 
 func reportReturns(ctx *skipCtx) {
@@ -324,17 +334,25 @@ func handleEnclosing(ctx *skipCtx, n ast.Node, ret *ast.ReturnStmt, done, releas
 }
 
 func collectTopPrefix(ctx *skipCtx, list []ast.Stmt, ret *ast.ReturnStmt, done, release map[flow.Key]bool) {
-	for i, s := range list {
+	ctx.ensureTop()
+	for _, s := range list {
 		if unwrap(s) == ast.Stmt(ret) {
 			return
 		}
 		if !containsRet(s, ret) {
 			continue
 		}
-		for k := range ctx.topDone[i] {
+		ctx.markTopPrefix(s.Pos(), done, release)
+		return
+	}
+}
+
+func (ctx *skipCtx) markTopPrefix(at token.Pos, done, release map[flow.Key]bool) {
+	for _, k := range ctx.doneKeys {
+		if p, ok := ctx.firstDone[k]; ok && p < at {
 			done[k] = true
 		}
-		for k := range ctx.topRelease[i] {
+		if p, ok := ctx.firstRelease[k]; ok && p < at {
 			release[k] = true
 		}
 	}
