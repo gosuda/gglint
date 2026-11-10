@@ -51,12 +51,12 @@ func gglintRules() []Rule {
 		{"errdrop", config.Standard, originGglint, "Reports a dropped error only when later code depends on the call having succeeded.", ReportOutsideTests, single(errdrop.Analyzer)},
 		{"chanstate", config.Standard, originGglint, "Reports channel operations that panic, deadlock, or strand a sender.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return chanstate.Analyzers() }},
 		{"lockstate", config.Standard, originGglint, "Reports lock misuse that panics, deadlocks, or guards nothing.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return lockstate.Analyzers() }},
-		{"wgstate", config.Standard, originGglint, "Reports WaitGroup and errgroup use that hangs Wait or lets it return early.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return wgstate.Analyzers() }},
+		{"wgstate", config.Standard, originGglint, "Reports WaitGroup misuse that hangs Wait or lets it return early, and errgroup Wait calls that hang.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return wgstate.Analyzers() }},
 		{"gorace", config.Standard, originGglint, "Reports variables that goroutines of one function access with a write and no ordering.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return gorace.Analyzers() }},
-		{"ctxflow", config.Standard, originGglint, "Reports contexts that drop the caller's cancellation or are cancelled before use.", ReportOutsideTests, func(config.Config) []*analysis.Analyzer { return ctxflow.Analyzers() }},
-		{"resstate", config.Standard, originGglint, "Reports values used after Close, Put, or free, and buffer views kept past their invalidation.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return resstate.Analyzers() }},
+		{"ctxflow", config.Standard, originGglint, "Reports contexts that drop the caller's cancellation, are cancelled before use, or are polled in a spinning loop.", ReportOutsideTests, func(config.Config) []*analysis.Analyzer { return ctxflow.Analyzers() }},
+		{"resstate", config.Standard, originGglint, "Reports os, net, and http calls after Close, uses after Put or free, and buffer views kept past an overwrite.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return resstate.Analyzers() }},
 		{"alias", config.Standard, originGglint, "Reports four shapes of append and copy whose writes land in memory still read, or in a dropped copy.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return alias.Analyzers() }},
-		{"spin", config.Standard, originGglint, "Reports five shapes of loop that keep running without making progress.", ReportOutsideTests, func(config.Config) []*analysis.Analyzer { return spin.Analyzers() }},
+		{"spin", config.Standard, originGglint, "Reports five shapes of loop that keep running without making progress; test files are skipped.", ReportOutsideTests, func(config.Config) []*analysis.Analyzer { return spin.Analyzers() }},
 		{"backingpin", config.Strict, originLogos, "Reports subslices and substrings that keep a backing store over 64 KiB alive past the function.", ReportEverywhere, single(backingpin.Analyzer)},
 	}
 }

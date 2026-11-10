@@ -7,7 +7,7 @@ import (
 	"github.com/gosuda/gglint/internal/config"
 )
 
-func TestGosecExcludesAuditChecksBelowStrict(t *testing.T) {
+func TestGosecExcludesTheStandardSkipListBelowStrict(t *testing.T) {
 	t.Parallel()
 	if got, want := gosecExcluded(config.Strict), []string{"G103", "G104"}; !slices.Equal(got, want) {
 		t.Errorf("strict gosecExcluded = %q, want %q", got, want)

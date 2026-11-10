@@ -83,7 +83,7 @@ func thirdPartyRules() []Rule {
 		{"musttag", standard, origin, "Requires field tags on structs passed to JSON, XML, YAML, and TOML marshaling functions.", ReportOutsideTests, construct(newMusttag)},
 		{"usetesting", standard, origin, "Reports os.CreateTemp(\"\", ...) in tests that name their test parameter, with a fix that passes its TempDir().", ReportWithFix, buildUsetesting},
 		{"gofumpt", standard, origin, "Reports files that are not gofumpt-formatted, with a fix that formats them.", ReportWithFix, single(gofumpt.Analyzer)},
-		{"gosec", standard, origin, "Reports security problems found by gosec; standard skips audit and permission checks.", ReportOutsideTests, buildGosec},
+		{"gosec", standard, origin, "Reports security problems found by gosec; standard skips G101, G103, G104, G115, G204, G301, G302, G304, G306, and G404.", ReportOutsideTests, buildGosec},
 		{"unparam", standard, origin, "Reports unexported function parameters and results that are unused or always the same value.", ReportEverywhere, single(unparam.Analyzer)},
 		{"misspell", standard, origin, "Reports commonly misspelled English words, with a fix that corrects them.", ReportWithFix, single(misspell.Analyzer)},
 		{"forcetypeassert", strict, origin, "Reports type assertions whose ok result is not checked.", ReportOutsideTests, single(forcetypeassert.Analyzer)},

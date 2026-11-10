@@ -729,3 +729,13 @@ func TestDeferredFlagsRejectValuesTheUpstreamParserRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestExhaustiveTreatsDefaultAsExhaustiveInStrictMode(t *testing.T) {
+	t.Parallel()
+	if got := findRule(t, "exhaustive").Mode; got != config.Strict {
+		t.Errorf("exhaustive mode = %v, want strict", got)
+	}
+	if got := flagValue(t, buildOne(t, "exhaustive", modeConfig(config.Strict)), "exhaustive", "d"); got != "true" {
+		t.Errorf("strict exhaustive flag d = %q, want %q", got, "true")
+	}
+}
