@@ -18,16 +18,18 @@ type indexedUse struct {
 }
 
 type funcIndex struct {
-	uses      map[*types.Var][]indexedUse
-	assigns   map[*types.Var][]token.Pos
-	nilChecks map[*types.Var][]token.Pos
+	uses       map[*types.Var][]indexedUse
+	assigns    map[*types.Var][]token.Pos
+	pathWrites map[*types.Var][]token.Pos
+	nilChecks  map[*types.Var][]token.Pos
 }
 
 func buildFuncIndex(pass *analysis.Pass, fn inspector.Cursor) *funcIndex {
 	idx := &funcIndex{
-		uses:      map[*types.Var][]indexedUse{},
-		assigns:   map[*types.Var][]token.Pos{},
-		nilChecks: map[*types.Var][]token.Pos{},
+		uses:       map[*types.Var][]indexedUse{},
+		assigns:    map[*types.Var][]token.Pos{},
+		pathWrites: map[*types.Var][]token.Pos{},
+		nilChecks:  map[*types.Var][]token.Pos{},
 	}
 	collectUses(pass, fn, idx)
 	collectAssigns(pass, fn, idx)
@@ -54,6 +56,9 @@ func collectAssigns(pass *analysis.Pass, fn inspector.Cursor, idx *funcIndex) {
 		}
 		for _, v := range assignedVars(pass, cur.Node()) {
 			idx.assigns[v] = append(idx.assigns[v], cur.Node().Pos())
+		}
+		for _, v := range pathVars(pass, cur.Node()) {
+			idx.pathWrites[v] = append(idx.pathWrites[v], cur.Node().Pos())
 		}
 	}
 }
@@ -119,25 +124,87 @@ func rangeStmtVars(pass *analysis.Pass, t *ast.RangeStmt) []*types.Var {
 }
 
 func varOfIdent(pass *analysis.Pass, e ast.Expr) *types.Var {
-	for {
-		switch t := ast.Unparen(e).(type) {
-		case *ast.Ident:
-			if v, ok := pass.TypesInfo.ObjectOf(t).(*types.Var); ok {
-				return v
-			}
-			return nil
-		case *ast.SelectorExpr:
-			e = t.X
-		case *ast.IndexExpr:
-			e = t.X
-		case *ast.IndexListExpr:
-			e = t.X
-		case *ast.StarExpr:
-			e = t.X
-		default:
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
+		return v
+	}
+	return nil
+}
+
+func pathVars(pass *analysis.Pass, n ast.Node) []*types.Var {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		return pathStmtVars(pass, t)
+	case *ast.IncDecStmt:
+		if v := pathRootVar(pass, t.X); v != nil {
+			return []*types.Var{v}
+		}
+	case *ast.RangeStmt:
+		if t.Tok != token.ASSIGN {
 			return nil
 		}
+		var out []*types.Var
+		for _, e := range []ast.Expr{t.Key, t.Value} {
+			if e == nil {
+				continue
+			}
+			if v := pathRootVar(pass, e); v != nil {
+				out = append(out, v)
+			}
+		}
+		return out
 	}
+	return nil
+}
+
+func pathStmtVars(pass *analysis.Pass, t *ast.AssignStmt) []*types.Var {
+	var out []*types.Var
+	for _, lhs := range t.Lhs {
+		if v := pathRootVar(pass, lhs); v != nil {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func pathRootVar(pass *analysis.Pass, e ast.Expr) *types.Var {
+	seen := false
+	for {
+		child, ok := pathStep(e)
+		if !ok {
+			break
+		}
+		e = child
+		seen = true
+	}
+	if !seen {
+		return nil
+	}
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
+		return v
+	}
+	return nil
+}
+
+func pathStep(e ast.Expr) (ast.Expr, bool) {
+	switch t := ast.Unparen(e).(type) {
+	case *ast.SelectorExpr:
+		return t.X, true
+	case *ast.IndexExpr:
+		return t.X, true
+	case *ast.IndexListExpr:
+		return t.X, true
+	case *ast.StarExpr:
+		return t.X, true
+	}
+	return nil, false
 }
 
 func nilComparedVar(pass *analysis.Pass, b *ast.BinaryExpr) *types.Var {
@@ -176,6 +243,11 @@ func (idx *funcIndex) hasAssignIn(v *types.Var, from, to token.Pos) bool {
 
 func (idx *funcIndex) hasNilCheckIn(v *types.Var, from, to token.Pos) bool {
 	return hasPosIn(idx.nilChecks[v], from, to)
+}
+
+func (idx *funcIndex) hasPathWriteBefore(v *types.Var, before token.Pos) bool {
+	list := idx.pathWrites[v]
+	return len(list) > 0 && list[0] < before
 }
 
 func hasPosIn(list []token.Pos, from, to token.Pos) bool {

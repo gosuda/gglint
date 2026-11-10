@@ -924,3 +924,64 @@ func outSilentFieldDefault(b []byte) Config {
 	json.Unmarshal(b, &c)
 	return c
 }
+
+func newP(s string) (*int, error) { return nil, errors.New(s) }
+
+func valueReportedStarDeref(s string) {
+	p, _ := newP(s) // want "p is used after the error of newP is dropped"
+	*p = 7
+}
+
+func outReportedFieldAfter(b []byte) Config {
+	var c Config
+	json.Unmarshal(b, &c) // want "c is read after the error of json.Unmarshal is dropped"
+	c.Port = 80
+	return c
+}
+
+type structVal struct{ V int }
+
+func parseS(s string) (structVal, error) {
+	if s == "" {
+		return structVal{}, errors.New("empty")
+	}
+	return structVal{}, nil
+}
+
+func valueStructSilent(s string) int {
+	v, _ := parseS(s)
+	return v.V
+}
+
+func outValuedSpecSilent(b []byte) Config {
+	var c Config = Config{Port: 1}
+	json.Unmarshal(b, &c)
+	return c
+}
+
+func closeFile(f *os.File) error { return f.Close() }
+
+func durableSilentWriteInit(p string, b []byte) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	return closeFile(f)
+}
+
+func durableSilentSyncUsed(p string, b []byte) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}

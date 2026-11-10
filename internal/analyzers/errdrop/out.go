@@ -230,6 +230,9 @@ func outHolds(call *ast.CallExpr, x *types.Var, memo *outMemo) bool {
 	if len(memo.idx.assigns[x]) > 0 {
 		return false
 	}
+	if memo.idx.hasPathWriteBefore(x, call.Pos()) {
+		return false
+	}
 	if takenBefore(memo, x, call.Pos()) {
 		return false
 	}
