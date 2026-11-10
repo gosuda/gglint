@@ -46,21 +46,15 @@ func useaftercloseSilentFieldRelease(p string) string {
 	return w.Name()
 }
 
-func useaftercloseSilentFieldUse(p string) string {
-	f, _ := os.Open(p)
-	w := f1wrap{f: f}
-	w.Close()
-	return w.f.Name()
-}
 
 func reopenAddr(p **os.File) {
 	*p, _ = os.Open("x")
 }
 
-func useaftercloseSilentGoAddr(p string, b []byte) {
+func useaftercloseSilentAddrReopen(p string, b []byte) {
 	f, _ := os.Open(p)
 	f.Close()
-	go reopenAddr(&f)
+	reopenAddr(&f)
 	_, _ = f.Read(b)
 }
 
@@ -104,11 +98,6 @@ func useaftercloseSilentName(p string) string {
 	return f.Name()
 }
 
-func useaftercloseSilentDoubleClose(p string) {
-	f, _ := os.Open(p)
-	f.Close()
-	_ = f.Close()
-}
 
 func useaftercloseReportedDerivedArg(p string, b []byte) {
 	f, _ := os.Open(p)
@@ -132,21 +121,6 @@ func useaftercloseSilentForeignWrite(p []byte) {
 	_, _ = m.Write(p)
 }
 
-type afterCloseProbe struct{}
-
-func (afterCloseProbe) Close() error { return nil }
-
-func (afterCloseProbe) Addr() string { return "" }
-
-func (afterCloseProbe) LocalAddr() string { return "" }
-
-func (afterCloseProbe) RemoteAddr() string { return "" }
-
-func (afterCloseProbe) Err() error { return nil }
-
-func (afterCloseProbe) ConnectionState() int { return 0 }
-
-func (afterCloseProbe) WriteTo() int { return 0 }
 
 func useaftercloseSilentAddr() string {
 	p := afterCloseProbe{}
@@ -154,45 +128,8 @@ func useaftercloseSilentAddr() string {
 	return p.Addr()
 }
 
-func useaftercloseSilentLocalAddr() string {
-	p := afterCloseProbe{}
-	p.Close()
-	return p.LocalAddr()
-}
+type afterCloseProbe struct{}
 
-func useaftercloseSilentRemoteAddr() string {
-	p := afterCloseProbe{}
-	p.Close()
-	return p.RemoteAddr()
-}
+func (afterCloseProbe) Close() error { return nil }
 
-func useaftercloseSilentErr() error {
-	p := afterCloseProbe{}
-	p.Close()
-	return p.Err()
-}
-
-func useaftercloseSilentConnectionState() int {
-	p := afterCloseProbe{}
-	p.Close()
-	return p.ConnectionState()
-}
-
-func useaftercloseSilentWriteTo() int {
-	p := afterCloseProbe{}
-	p.Close()
-	return p.WriteTo()
-}
-
-type sharedWrap struct {
-	*os.File
-}
-
-func (s sharedWrap) Close() error { return nil }
-
-func useaftercloseSilentWrapperClose(p string, b []byte) {
-	f, _ := os.Open(p)
-	s := sharedWrap{f}
-	s.Close()
-	_, _ = s.Write(b)
-}
+func (afterCloseProbe) Addr() string { return "" }

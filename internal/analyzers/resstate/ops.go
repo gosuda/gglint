@@ -146,22 +146,12 @@ func freeLitRelease(pass *analysis.Pass, call *ast.CallExpr, v *types.Var) (rele
 }
 
 func litFreeRelease(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
-	released := false
-	ast.Inspect(lit.Body, func(x ast.Node) bool {
-		if released {
-			return false
+	for _, s := range lit.Body.List {
+		if litFreeFound(pass, lit, s, v) {
+			return true
 		}
-		switch x.(type) {
-		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
-			return false
-		}
-		if litFreeFound(pass, lit, x, v) {
-			released = true
-			return false
-		}
-		return true
-	})
-	return released
+	}
+	return false
 }
 
 func litFreeFound(pass *analysis.Pass, lit *ast.FuncLit, x ast.Node, v *types.Var) bool {
@@ -518,6 +508,9 @@ func pruneMention(pass *analysis.Pass, x ast.Node) bool {
 	if _, ok := x.(*ast.FuncLit); ok {
 		return true
 	}
+	if _, ok := x.(*ast.SliceExpr); ok {
+		return true
+	}
 	if call, ok := x.(*ast.CallExpr); ok && lenCapCall(pass, call) {
 		return true
 	}
@@ -608,7 +601,7 @@ func mentionPos(pass *analysis.Pass, n ast.Node, v *types.Var) token.Pos {
 }
 
 func escapesVar(pass *analysis.Pass, fn, n ast.Node, v *types.Var) bool {
-	if takesAddr(pass, n, v) {
+	if takesAddr(pass, n, v) && !discardedAddr(n) {
 		return true
 	}
 	if callArgEscapes(pass, n, v) {
@@ -624,6 +617,19 @@ func escapesVar(pass *analysis.Pass, fn, n ast.Node, v *types.Var) bool {
 		return true
 	}
 	return litCaptures(pass, n, v)
+}
+
+func discardedAddr(n ast.Node) bool {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	for _, l := range as.Lhs {
+		if id, ok := ast.Unparen(l).(*ast.Ident); !ok || id.Name != "_" {
+			return false
+		}
+	}
+	return true
 }
 
 func takesAddr(pass *analysis.Pass, n ast.Node, v *types.Var) bool {

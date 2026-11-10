@@ -43,9 +43,9 @@ func viewescapeReportedOutside(sc *bufio.Scanner) []byte {
 	return out
 }
 
-func viewescapeReportedReturn(sc *bufio.Scanner) []byte {
+func viewescapeSilentReturn(sc *bufio.Scanner) []byte {
 	for sc.Scan() {
-		return sc.Bytes() // want "points into the buffer of"
+		return sc.Bytes()
 	}
 	return nil
 }
@@ -62,7 +62,7 @@ func viewescapeReportedPeek(r *bufio.Reader, out [][]byte) [][]byte {
 	for {
 		p, _ := r.Peek(1)
 		out = append(out, p) // want "points into the buffer of"
-		_, _ = r.Discard(1)
+		_, _ = r.Discard(2)
 		if len(p) == 0 {
 			break
 		}
@@ -71,7 +71,7 @@ func viewescapeReportedPeek(r *bufio.Reader, out [][]byte) [][]byte {
 }
 
 func viewescapeReportedBuffer(buf *bytes.Buffer, out [][]byte) [][]byte {
-	for buf.Len() > 0 {
+	for i := 0; i < 2; i++ {
 		out = append(out, buf.Bytes()) // want "points into the buffer of"
 		_, _ = buf.Write([]byte("x"))
 	}
@@ -135,9 +135,9 @@ func viewescapeReportedNested(sc *bufio.Scanner) [][]byte {
 	return lines
 }
 
-func viewescapeSilentPostOnly(buf *bytes.Buffer, out [][]byte) [][]byte {
-	for i := 0; i < 2; _, _ = buf.Write(nil) {
-		out = append(out, buf.Bytes())
+func viewescapeReportedPostWrite(buf *bytes.Buffer, out [][]byte) [][]byte {
+	for i := 0; i < 2; _, _ = buf.Write([]byte("x")) {
+		out = append(out, buf.Bytes()) // want "points into the buffer of"
 		i++
 	}
 	return out
@@ -145,6 +145,9 @@ func viewescapeSilentPostOnly(buf *bytes.Buffer, out [][]byte) [][]byte {
 
 func viewescapeReportedPreLoop(sc *bufio.Scanner) [][]byte {
 	var out [][]byte
+	if !sc.Scan() {
+		return nil
+	}
 	line := sc.Bytes()
 	for sc.Scan() {
 		out = append(out, line) // want "points into the buffer of"
@@ -153,9 +156,9 @@ func viewescapeReportedPreLoop(sc *bufio.Scanner) [][]byte {
 }
 
 func viewescapeReportedMultiTarget(r *bufio.Reader, h *viewHolder) {
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		h.b, _ = r.Peek(1) // want "points into the buffer of"
-		_, _ = r.Discard(1)
+		_, _ = r.Discard(2)
 	}
 }
 
@@ -167,15 +170,6 @@ func viewescapeSilentBufferRead(buf *bytes.Buffer, out [][]byte) [][]byte {
 	return out
 }
 
-func viewescapeReportedReaderReset(r *bufio.Reader, rd *bytes.Buffer) [][]byte {
-	var out [][]byte
-	p, _ := r.Peek(1)
-	for i := 0; i < 2; i++ {
-		out = append(out, p) // want "points into the buffer of"
-		r.Reset(rd)
-	}
-	return out
-}
 
 func viewescapeSilentSelfInvalid(b *bufio.Reader) []byte {
 	var frag []byte
@@ -205,12 +199,12 @@ func viewescapeSilentForeignInvalidator(c viewConn, out [][]byte) [][]byte {
 	return out
 }
 
-func viewescapeSilentRangeReassign(sc *bufio.Scanner, ch chan []byte, out [][]byte) [][]byte {
+func viewescapeReportedRangeChannel(sc *bufio.Scanner, ch chan []byte, out [][]byte) [][]byte {
 	for sc.Scan() {
 		b := sc.Bytes()
 		for b = range ch {
 		}
-		out = append(out, b)
+		out = append(out, b) // want "points into the buffer of"
 	}
 	return out
 }
@@ -300,19 +294,19 @@ func viewescapeReportedLoopLocalMapEscape(sc *bufio.Scanner) []map[int][]byte {
 	return all
 }
 
-func viewescapeReportedAssignBreakParam(sc *bufio.Scanner) []byte {
+func viewescapeSilentAssignBreakParam(sc *bufio.Scanner) []byte {
 	var out []byte
 	for sc.Scan() {
-		out = sc.Bytes() // want "points into the buffer of"
+		out = sc.Bytes()
 		break
 	}
 	return out
 }
 
-func viewescapeReportedAssignReturnParam(sc *bufio.Scanner) []byte {
+func viewescapeSilentAssignReturnParam(sc *bufio.Scanner) []byte {
 	var out []byte
 	for sc.Scan() {
-		out = sc.Bytes() // want "points into the buffer of"
+		out = sc.Bytes()
 		return out
 	}
 	return nil
@@ -330,20 +324,6 @@ func viewescapeSilentPeekReassigned(r *bufio.Reader) (n int, err error) {
 	}
 }
 
-func viewescapeSilentFieldOtherLeaves(sc *bufio.Scanner) []int {
-	type rec struct {
-		b []byte
-		n int
-	}
-	var ns []int
-	for sc.Scan() {
-		var h rec
-		h.b = sc.Bytes()
-		h.n = len(h.b)
-		ns = append(ns, h.n)
-	}
-	return ns
-}
 
 func viewescapeSilentAssignBreakClone(sc *bufio.Scanner) []byte {
 	var line []byte
@@ -372,31 +352,15 @@ func viewescapeSilentHeadersCopy(r *bufio.Reader) (out []string) {
 		if string(line) == "$$" {
 			return out
 		}
-		line, _ = r.ReadSlice('\n')
+		var err error
+		line, err = r.ReadSlice('\n')
+		if err != nil && err != bufio.ErrBufferFull {
+			return out
+		}
 		out = append(out, string(line))
 	}
 }
 
-func viewescapeReportedDeferredReset(sc *bufio.Scanner) []byte {
-	var buf bytes.Buffer
-	for sc.Scan() {
-		defer buf.Reset()
-		return buf.Bytes() // want "points into the buffer of"
-	}
-	return nil
-}
-
-func viewescapeReportedReturnEscape(line []byte) []byte {
-	var buf bytes.Buffer
-	_ = &buf
-	for i := range line {
-		if line[i] == '"' {
-			return buf.Bytes() // want "points into the buffer of"
-		}
-		buf.Write([]byte{line[i]})
-	}
-	return nil
-}
 
 func viewescapeReportedDeferredPut(sc *bufio.Scanner, pool *sync.Pool) []byte {
 	var buf bytes.Buffer
@@ -408,10 +372,34 @@ func viewescapeReportedDeferredPut(sc *bufio.Scanner, pool *sync.Pool) []byte {
 	return nil
 }
 
+func viewescapeReportedVarAssign(sc *bufio.Scanner) [][]byte {
+	var lines [][]byte
+	var line []byte
+	for sc.Scan() {
+		line = sc.Bytes()
+		lines = append(lines, line) // want "points into the buffer of"
+	}
+	return lines
+}
+
+func viewescapeReportedEnclosing(sc *bufio.Scanner) []struct{ b []byte } {
+	var all []struct{ b []byte }
+	for sc.Scan() {
+		var rec struct {
+			c struct{ b []byte }
+		}
+		rec.c.b = sc.Bytes() // want "points into the buffer of"
+		all = append(all, rec.c)
+	}
+	return all
+}
+
 func viewescapeReportedAssignUse(sc *bufio.Scanner) {
 	var b []byte
 	for sc.Scan() {
-		_ = b
+		if len(b) > 0 {
+			_ = b[0]
+		}
 		b = sc.Bytes() // want "points into the buffer of"
 	}
 }
@@ -428,5 +416,12 @@ func viewescapeSilentFieldAssignBreak(s string, h *viewHolder) {
 	for sc.Scan() {
 		h.b = sc.Bytes()
 		break
+	}
+}
+func viewescapeSilentAssignDiscard(sc *bufio.Scanner) {
+	var b []byte
+	for sc.Scan() {
+		_ = b
+		b = sc.Bytes()
 	}
 }

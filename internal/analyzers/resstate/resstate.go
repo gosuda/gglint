@@ -24,14 +24,14 @@ func Analyzers() []*analysis.Analyzer {
 
 var useaftercloseAnalyzer = &analysis.Analyzer{
 	Name:     "useafterclose",
-	Doc:      "reports method calls on values closed on every path to the call",
+	Doc:      "reports Read, Write, Seek, and similar methods on os, net, or net/http values after Close on every path",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUseafterclose,
 }
 
 var useafterputAnalyzer = &analysis.Analyzer{
 	Name:     "useafterput",
-	Doc:      "reports uses of values returned to a sync.Pool on every path",
+	Doc:      "reports uses of pointer, slice, or map values after they are passed to Put on every path",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUseafterput,
 }
@@ -45,7 +45,7 @@ var useafterfreeAnalyzer = &analysis.Analyzer{
 
 var viewescapeAnalyzer = &analysis.Analyzer{
 	Name:     "viewescape",
-	Doc:      "reports buffer views kept past the call that overwrites them",
+	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runViewescape,
 }
@@ -105,6 +105,9 @@ func putFunc(pass *analysis.Pass, fn ast.Node) {
 		return
 	}
 	for _, v := range localsOf(pass, fn) {
+		if !isPoolValue(v.Type()) {
+			continue
+		}
 		putVar(pass, fn, g, v)
 	}
 }
@@ -198,6 +201,9 @@ func putVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
 	if nilAssign(pass, n, v) {
 		return
 	}
+	if selfAssign(pass, n, v) {
+		return
+	}
 	if hasPutRelease(pass, n, v) {
 		pass.Reportf(mentionPos(pass, n, v), "%s was returned to the pool, and another goroutine may own it now: call Put after the last use", v.Name())
 		return
@@ -219,6 +225,9 @@ func freeVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) {
 		return
 	}
 	if nilAssign(pass, n, v) {
+		return
+	}
+	if selfAssign(pass, n, v) {
 		return
 	}
 	if hasFreeRelease(pass, fn, n, v) {
@@ -247,6 +256,28 @@ func nilAssign(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 		return false
 	}
 	return pass.TypesInfo.Types[as.Rhs[0]].IsNil()
+}
+
+func selfAssign(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		return false
+	}
+	if isBlankIdent(as.Lhs[0]) {
+		rid, rok := ast.Unparen(as.Rhs[0]).(*ast.Ident)
+		return rok && pass.TypesInfo.Uses[rid] == v
+	}
+	lid, lok := ast.Unparen(as.Lhs[0]).(*ast.Ident)
+	if !lok || pass.TypesInfo.Uses[lid] != v {
+		return false
+	}
+	rid, rok := ast.Unparen(as.Rhs[0]).(*ast.Ident)
+	return rok && pass.TypesInfo.Uses[rid] == v
+}
+
+func isBlankIdent(e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	return ok && id.Name == "_"
 }
 
 func localsOf(pass *analysis.Pass, fn ast.Node) []*types.Var {
@@ -299,4 +330,12 @@ func isPoolType(t types.Type) bool {
 	}
 	obj := named.Obj()
 	return obj.Name() == "Pool" && obj.Pkg() != nil && obj.Pkg().Path() == "sync"
+}
+
+func isPoolValue(t types.Type) bool {
+	switch types.Unalias(t).Underlying().(type) {
+	case *types.Pointer, *types.Slice, *types.Map:
+		return true
+	}
+	return false
 }

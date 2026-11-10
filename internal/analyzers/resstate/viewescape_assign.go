@@ -165,6 +165,7 @@ func returnReads(pass *analysis.Pass, ret *ast.ReturnStmt, v *types.Var, fn ast.
 
 func liveIdent(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k ast.Node, v *types.Var, avoid func(ast.Node) bool) bool {
 	skip := assignLHSIdents(pass, fn, v)
+	discard := discardRHSIdents(pass, fn, v)
 	found := false
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if found {
@@ -180,7 +181,7 @@ func liveIdent(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k ast.Node, v *t
 		if pass.TypesInfo.Uses[id] != v {
 			return true
 		}
-		if skip[id] {
+		if skip[id] || discard[id] {
 			return true
 		}
 		if g.Reaches(k, id, avoid) {
@@ -189,6 +190,32 @@ func liveIdent(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k ast.Node, v *t
 		return !found
 	})
 	return found
+}
+
+func discardRHSIdents(pass *analysis.Pass, fn ast.Node, v *types.Var) map[*ast.Ident]bool {
+	out := map[*ast.Ident]bool{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if lit, isLit := n.(*ast.FuncLit); isLit && lit != fn {
+			return false
+		}
+		markDiscardRHS(pass, n, v, out)
+		return true
+	})
+	return out
+}
+
+func markDiscardRHS(pass *analysis.Pass, n ast.Node, v *types.Var, out map[*ast.Ident]bool) {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		return
+	}
+	if !isBlankIdent(as.Lhs[0]) {
+		return
+	}
+	rid, ok := ast.Unparen(as.Rhs[0]).(*ast.Ident)
+	if ok && pass.TypesInfo.Uses[rid] == v {
+		out[rid] = true
+	}
 }
 
 func assignLHSIdents(pass *analysis.Pass, fn ast.Node, v *types.Var) map[*ast.Ident]bool {
@@ -256,46 +283,6 @@ func resultNamesHold(pass *analysis.Pass, f *ast.Field, v *types.Var) bool {
 	for _, n := range f.Names {
 		if pass.TypesInfo.Defs[n] == v {
 			return true
-		}
-	}
-	return false
-}
-
-func bareReturnKeeps(pass *analysis.Pass, fn ast.Node, v *types.Var, recvKey flow.Key) bool {
-	if recvLocalKept(pass, fn, recvKey) {
-		return false
-	}
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
-			return false
-		}
-		ret, ok := n.(*ast.ReturnStmt)
-		if !ok {
-			return true
-		}
-		for _, r := range ret.Results {
-			if bareVarOrSlice(pass, r, v) {
-				found = true
-				return false
-			}
-		}
-		return !found
-	})
-	return found
-}
-
-func bareVarOrSlice(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
-	u := ast.Unparen(e)
-	if id, ok := u.(*ast.Ident); ok {
-		return pass.TypesInfo.Uses[id] == v
-	}
-	if s, ok := u.(*ast.SliceExpr); ok {
-		if id, ok := ast.Unparen(s.X).(*ast.Ident); ok {
-			return pass.TypesInfo.Uses[id] == v
 		}
 	}
 	return false

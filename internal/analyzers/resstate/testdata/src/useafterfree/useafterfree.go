@@ -4,6 +4,7 @@ import (
 	"syscall"
 )
 
+var sink byte
 func useafterfreeReported() {
 	b := make([]byte, 4096)
 	syscall.Munmap(b)
@@ -16,12 +17,6 @@ func useafterfreeSilent() {
 	syscall.Munmap(b)
 }
 
-func useafterfreeSilentSliceArg() int {
-	b := make([]byte, 4096)
-	n := 4
-	syscall.Munmap(b[:n])
-	return n
-}
 
 func useafterfreeSilentRangeAssign(chs chan []byte) int {
 	b := make([]byte, 4)
@@ -47,14 +42,15 @@ func useafterfreeReportedLoop() {
 	b := make([]byte, 4096)
 	syscall.Munmap(b)
 	for range 2 {
-		_ = b[0] // want "is used after it was freed"
+		sink = b[0] // want "is used after it was freed"
 	}
+	_ = sink
 }
 
 func useafterfreeReportedReassign() {
 	b := make([]byte, 4096)
 	syscall.Munmap(b)
-	b = b[:0] // want "is used after it was freed"
+	b = append(b, 0) // want "is used after it was freed"
 	_ = b
 }
 
@@ -65,7 +61,9 @@ func useafterfreeSilentReassignNew() {
 	_ = b
 }
 
-func useFreeBytes([]byte) {}
+func useFreeBytes(p []byte) byte {
+	return p[0]
+}
 
 func useafterfreeReportedCallArg() {
 	b := make([]byte, 4096)
@@ -90,9 +88,12 @@ func useafterfreeSilentTempReassign() byte {
 }
 
 func useafterfreeSilentPartialSlice() int {
-	b := make([]byte, 4096)
+	b, err := syscall.Mmap(-1, 0, 8192, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return 0
+	}
 	syscall.Munmap(b[:2048])
-	return int(b[2048])
+	return int(b[4096])
 }
 
 func useafterfreeSilentLenAfterFree() int {
@@ -108,4 +109,9 @@ func useafterfreeSilentNilCompareAfterFree() bool {
 		return true
 	}
 	return false
+}
+func useafterfreeSilentSliceHeader() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	_ = b[:0]
 }

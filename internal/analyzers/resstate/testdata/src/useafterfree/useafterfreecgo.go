@@ -29,4 +29,11 @@ func useafterfreeReportedLenFieldAfterFree() int {
 	C.free(unsafe.Pointer(p))
 	return len((*freeNode)(p).items) // want "is used after it was freed"
 }
+func useafterfreeSilentCgoFreeLast() byte {
+	p := C.malloc(16)
+	*(*byte)(p) = 1
+	v := *(*byte)(p)
+	C.free(unsafe.Pointer(p))
+	return v
+}
 

@@ -75,190 +75,86 @@ func viewLoop(pass *analysis.Pass, fn, loop, body ast.Node, seen map[token.Pos]b
 	}
 	views := viewDefs(pass, fn)
 	ctx := loopCtx{fn: fn, loop: loop, body: body}
-	sinks := sinkExprs(pass, ctx)
-	for _, s := range sinks {
-		v, recvExpr, viewMethod, ok := sinkView(pass, s.expr, views)
-		if !ok {
+	for _, s := range sinkExprs(pass, ctx) {
+		v, recvExpr, recvKey, viewMethod, ready := sinkReady(pass, ctx, views, s)
+		if !ready {
 			continue
 		}
-		recvKey, ok := flow.KeyOf(pass.TypesInfo, recvExpr)
-		if !ok {
+		if tryPoolReport(pass, ctx, poolNeed{s: s, view: v, recv: recvExpr, key: recvKey}, seen) {
 			continue
 		}
-		if recvFreshInBody(recvKey, body) {
-			continue
-		}
-		if viewSilent(pass, ctx, s, recvKey, viewMethod) {
-			continue
-		}
-		method, ok := invalidOther(invalid[recvKey], viewMethod)
-		if !ok {
-			continue
-		}
-		if seen[s.expr.Pos()] {
+		method, found := invalidOther(invalid[recvKey], viewMethod)
+		if !found || seen[s.expr.Pos()] {
 			continue
 		}
 		seen[s.expr.Pos()] = true
-		pass.Reportf(s.expr.Pos(), "%s points into the buffer of %s, and the next %s call overwrites it: store a copy made with bytes.Clone", types.ExprString(v), types.ExprString(recvExpr), method)
+		pass.Reportf(s.expr.Pos(), "%s points into the buffer of %s, and a later %s call may overwrite it: store a copy made with bytes.Clone", types.ExprString(v), types.ExprString(recvExpr), method)
 	}
+}
+
+type poolNeed struct {
+	s    viewSink
+	view ast.Expr
+	recv ast.Expr
+	key  flow.Key
+}
+
+func tryPoolReport(pass *analysis.Pass, ctx loopCtx, need poolNeed, seen map[token.Pos]bool) bool {
+	if !need.s.ret {
+		return false
+	}
+	pool, pooled := deferredPoolPut(pass, ctx.fn, need.key)
+	if !pooled {
+		return false
+	}
+	if seen[need.s.expr.Pos()] {
+		return true
+	}
+	seen[need.s.expr.Pos()] = true
+	pass.Reportf(need.s.expr.Pos(), "%s points into the buffer of %s, and the deferred Put of %s hands it to the pool where another goroutine may overwrite it: store a copy made with bytes.Clone", types.ExprString(need.view), types.ExprString(need.recv), types.ExprString(pool))
+	return true
+}
+
+func sinkReady(pass *analysis.Pass, ctx loopCtx, views map[*types.Var]viewSrc, s viewSink) (view, recvExpr ast.Expr, recvKey flow.Key, viewMethod string, ready bool) {
+	v, recv, method, ok := sinkView(pass, s.expr, views)
+	if !ok {
+		return nil, nil, flow.Key{}, "", false
+	}
+	k, ok := flow.KeyOf(pass.TypesInfo, recv)
+	if !ok || recvFreshInBody(k, ctx.body) || viewSilent(pass, ctx, s, k, method) {
+		return nil, nil, flow.Key{}, "", false
+	}
+	return v, recv, k, method, true
 }
 
 func viewSilent(pass *analysis.Pass, ctx loopCtx, sink viewSink, recvKey flow.Key, viewMethod string) bool {
 	if sink.ret {
-		return returnKept(pass, ctx.fn, sink, recvKey, viewMethod)
+		return returnSilent(pass, ctx.fn, recvKey)
 	}
-	if sink.assign == nil {
-		return false
-	}
-	v, ok := outerViewVar(pass, ctx.loop, sink.assign, sink.expr)
-	if !ok {
-		if !recvLocalKept(pass, ctx.fn, recvKey) {
-			return false
+	if sink.assign != nil {
+		if v, ok := outerViewVar(pass, ctx.loop, sink.assign, sink.expr); ok {
+			return !outerAssignLive(pass, ctx, sink.assign, v, recvKey, viewMethod)
 		}
-		return assignExitsLoop(ctx.body, sink.assign) && noInvalidAfter(pass, ctx.fn, ctx.loop, recvKey)
+		return !invalidAfter(pass, ctx.fn, sink.assign, recvKey, viewMethod)
 	}
-	if outerAssignLive(pass, ctx, sink.assign, v, recvKey, viewMethod) {
-		return false
-	}
-	if bareReturnKeeps(pass, ctx.fn, v, recvKey) {
-		return false
-	}
-	return true
+	return !invalidAfter(pass, ctx.fn, sink.expr, recvKey, viewMethod)
 }
 
-func recvLocalKept(pass *analysis.Pass, fn ast.Node, k flow.Key) bool {
-	if k.Path != "" {
-		return false
-	}
-	v, ok := k.Root.(*types.Var)
-	if !ok {
-		return false
-	}
-	return flow.IsLocal(pass.TypesInfo, fn, v) && !flow.Escapes(pass.TypesInfo, fn, v)
+func returnSilent(pass *analysis.Pass, fn ast.Node, recvKey flow.Key) bool {
+	_, pooled := deferredPoolPut(pass, fn, recvKey)
+	return !pooled
 }
 
-func assignExitsLoop(body ast.Node, target *ast.AssignStmt) bool {
-	list, nested := containingList(body, target)
-	if list == nil {
+func invalidAfter(pass *analysis.Pass, fn, from ast.Node, recvKey flow.Key, viewMethod string) bool {
+	g := flow.NewGraph(pass, fn)
+	if g == nil {
 		return false
 	}
-	idx := listIndex(list, target)
-	if idx < 0 || idx+1 >= len(list) {
-		return false
-	}
-	next := list[idx+1]
-	if exitsReturn(next) {
-		return true
-	}
-	return exitsBreak(next) && !nested
-}
-
-func exitsReturn(next ast.Stmt) bool {
-	_, ok := next.(*ast.ReturnStmt)
-	return ok
-}
-
-func exitsBreak(next ast.Stmt) bool {
-	br, ok := next.(*ast.BranchStmt)
-	return ok && br.Tok == token.BREAK && br.Label == nil
-}
-
-func containingList(body ast.Node, target *ast.AssignStmt) ([]ast.Stmt, bool) {
-	nested := insideCapture(body, target)
-	var result []ast.Stmt
-	ast.Inspect(body, func(n ast.Node) bool {
-		if result != nil {
-			return false
-		}
-		list, ok := stmtListOf(n)
-		if !ok {
+	for _, k := range invalidCalls(pass, fn, recvKey, viewMethod) {
+		if g.Reaches(from, k, nil) {
 			return true
 		}
-		if listHolds(list, target) {
-			result = list
-			return false
-		}
-		return true
-	})
-	return result, nested
-}
-
-func stmtListOf(n ast.Node) ([]ast.Stmt, bool) {
-	switch x := n.(type) {
-	case *ast.BlockStmt:
-		return x.List, true
-	case *ast.CaseClause:
-		return x.Body, true
-	case *ast.CommClause:
-		return x.Body, true
 	}
-	return nil, false
-}
-
-func listHolds(list []ast.Stmt, target *ast.AssignStmt) bool {
-	return slices.Contains(list, ast.Stmt(target))
-}
-
-func listIndex(list []ast.Stmt, target *ast.AssignStmt) int {
-	for i, s := range list {
-		if s == ast.Stmt(target) {
-			return i
-		}
-	}
-	return -1
-}
-
-func insideCapture(body ast.Node, target *ast.AssignStmt) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if n == body {
-			return true
-		}
-		switch n.(type) {
-		case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-			if n.Pos() <= target.Pos() && target.End() <= n.End() {
-				found = true
-				return false
-			}
-		}
-		return true
-	})
-	return found
-}
-
-func noInvalidAfter(pass *analysis.Pass, fn, loop ast.Node, want flow.Key) bool {
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok && n != fn {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		return noInvalidAt(pass, call, loop, want, &found)
-	})
-	return !found
-}
-
-func noInvalidAt(pass *analysis.Pass, call *ast.CallExpr, loop ast.Node, want flow.Key, found *bool) bool {
-	if call.Pos() <= loop.End() {
-		return true
-	}
-	k, ok := flow.MethodKey(pass.TypesInfo, call)
-	if !ok || k != want {
-		return true
-	}
-	if viewInvalidName(pass, call) == "" {
-		return true
-	}
-	*found = true
 	return false
 }
 
@@ -325,6 +221,9 @@ func invalidParts(loop ast.Node) []ast.Node {
 		if x.Body != nil {
 			parts = append(parts, x.Body)
 		}
+		if x.Post != nil {
+			parts = append(parts, x.Post)
+		}
 		return parts
 	case *ast.RangeStmt:
 		parts := []ast.Node{}
@@ -388,7 +287,7 @@ func viewInvalidRecvTable(name string) []viewRecv {
 	case viewScanName:
 		return []viewRecv{scanner}
 	case viewResetName:
-		return []viewRecv{buffer, reader}
+		return []viewRecv{buffer}
 	case closeMethodWrite, viewWriteStringName:
 		return []viewRecv{buffer}
 	case closeMethodRead:
@@ -455,7 +354,7 @@ func viewDefs(pass *analysis.Pass, fn ast.Node) map[*types.Var]viewSrc {
 			return false
 		}
 		as, ok := n.(*ast.AssignStmt)
-		if !ok || as.Tok != token.DEFINE {
+		if !ok || (as.Tok != token.DEFINE && as.Tok != token.ASSIGN) {
 			return true
 		}
 		viewDefineAdd(pass, out, defPos, as)
@@ -486,7 +385,10 @@ func viewDefineOne(pass *analysis.Pass, out map[*types.Var]viewSrc, defPos map[*
 	}
 	v, ok := pass.TypesInfo.Defs[id].(*types.Var)
 	if !ok {
-		return
+		v, ok = pass.TypesInfo.Uses[id].(*types.Var)
+		if !ok {
+			return
+		}
 	}
 	recv, method, ok := viewCallOf(pass, rhs)
 	if !ok {
@@ -520,9 +422,19 @@ func viewReassignsAt(pass *analysis.Pass, n ast.Node, v *types.Var, after token.
 	case *ast.IncDecStmt:
 		return x.Pos() > after && viewTargetIs(pass, x.X, v)
 	case *ast.RangeStmt:
-		return x.Pos() > after && (viewTargetIs(pass, x.Key, v) || viewTargetIs(pass, x.Value, v))
+		return rangeReassigns(pass, x, v, after)
 	}
 	return false
+}
+
+func rangeReassigns(pass *analysis.Pass, x *ast.RangeStmt, v *types.Var, after token.Pos) bool {
+	if x.Pos() <= after {
+		return false
+	}
+	if t, ok := pass.TypesInfo.Types[x.X].Type.Underlying().(*types.Chan); ok && t != nil {
+		return false
+	}
+	return viewTargetIs(pass, x.Key, v) || viewTargetIs(pass, x.Value, v)
 }
 
 func viewAssigns(pass *analysis.Pass, lhs []ast.Expr, v *types.Var) bool {
@@ -805,17 +717,24 @@ func outerTarget(pass *analysis.Pass, loop ast.Node, lhs ast.Expr) bool {
 
 func carriesView(pass *analysis.Pass, escape, target ast.Expr) bool {
 	tk, ok := flow.KeyOf(pass.TypesInfo, target)
-	if ok {
-		ek, ok := flow.KeyOf(pass.TypesInfo, escape)
-		if !ok {
-			return false
-		}
-		if ek.Root != tk.Root {
-			return false
-		}
-		return ek.Path == "" || ek.Path == tk.Path
+	if !ok {
+		return carriesMapView(pass, escape, target)
 	}
-	return carriesMapView(pass, escape, target)
+	ek, ok := flow.KeyOf(pass.TypesInfo, escape)
+	if !ok || ek.Root != tk.Root {
+		return false
+	}
+	return prefixCarry(ek.Path, tk.Path)
+}
+
+func prefixCarry(escapePath, targetPath string) bool {
+	if escapePath == "" || escapePath == targetPath {
+		return true
+	}
+	if len(targetPath) <= len(escapePath) {
+		return false
+	}
+	return targetPath[:len(escapePath)] == escapePath && targetPath[len(escapePath)] == '.'
 }
 
 func carriesMapView(pass *analysis.Pass, escape, target ast.Expr) bool {

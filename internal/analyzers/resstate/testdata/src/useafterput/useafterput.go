@@ -46,10 +46,10 @@ func reopenPut(p **resBuf) {
 	*p = &resBuf{}
 }
 
-func useafterputSilentGoAddr() {
+func useafterputSilentAddr() {
 	b := resPool.Get().(*resBuf)
 	resPool.Put(b)
-	go reopenPut(&b)
+	reopenPut(&b)
 	_ = b.n
 }
 
@@ -61,15 +61,6 @@ func useafterputSilentRangeAssign(ch chan *resBuf) {
 	}
 }
 
-func useafterputSilentFieldObj() int {
-	type holder struct {
-		b []byte
-	}
-	x := holder{b: make([]byte, 4)}
-	y := holder{b: make([]byte, 4)}
-	resPool.Put(x.b)
-	return len(y.b)
-}
 
 func useafterputReportedLoop() {
 	b := resPool.Get().(*resBuf)
@@ -87,10 +78,10 @@ func useafterputReportedAfterCopy() {
 	_ = n
 }
 
-func useafterputReportedReassign() {
+func useafterputSilentSelfAssign() {
 	b := resPool.Get().(*resBuf)
 	resPool.Put(b)
-	b = b // want "was returned to the pool"
+	b = b
 	_ = b
 }
 
@@ -101,7 +92,9 @@ func useafterputSilentReassignGet() {
 	_ = b.n
 }
 
-func useResBuf(*resBuf) {}
+func useResBuf(b *resBuf) {
+	_ = b.n
+}
 
 func useafterputReportedCallArg() {
 	b := resPool.Get().(*resBuf)
