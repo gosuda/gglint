@@ -404,9 +404,6 @@ func collectAliases(info *types.Info, body *ast.BlockStmt, v *types.Var) map[*ty
 	for changed := true; changed; {
 		changed = false
 		ast.Inspect(body, func(n ast.Node) bool {
-			if lit, ok := n.(*ast.FuncLit); ok && lit.Body != body {
-				return false
-			}
 			switch n := n.(type) {
 			case *ast.AssignStmt:
 				changed = aliasAssign(info, n, out) || changed
@@ -462,18 +459,57 @@ func aliasLHS(info *types.Info, lhs ast.Expr, out map[*types.Var]bool) bool {
 func resolvesTo(info *types.Info, e ast.Expr, out map[*types.Var]bool) bool {
 	e = ast.Unparen(e)
 	if id, ok := e.(*ast.Ident); ok {
-		if vv, ok := info.Uses[id].(*types.Var); ok && out[vv] {
-			return true
-		}
-		if vv, ok := info.Defs[id].(*types.Var); ok && out[vv] {
-			return true
-		}
-		return false
+		return resolvesIdent(info, id, out)
 	}
 	if sel, ok := e.(*ast.SelectorExpr); ok && info.Selections[sel] != nil && info.Selections[sel].Kind() == types.MethodVal {
 		return resolvesTo(info, sel.X, out)
 	}
+	if s, ok := e.(*ast.SliceExpr); ok {
+		return resolvesTo(info, s.X, out)
+	}
+	if u, ok := e.(*ast.TypeAssertExpr); ok {
+		return resolvesTo(info, u.X, out)
+	}
+	if c, ok := e.(*ast.CallExpr); ok {
+		return resolvesCall(info, c, out)
+	}
+	if c, ok := e.(*ast.CompositeLit); ok {
+		return resolvesComposite(info, c, out)
+	}
 	return false
+}
+
+func resolvesIdent(info *types.Info, id *ast.Ident, out map[*types.Var]bool) bool {
+	if vv, ok := info.Uses[id].(*types.Var); ok && out[vv] {
+		return true
+	}
+	if vv, ok := info.Defs[id].(*types.Var); ok && out[vv] {
+		return true
+	}
+	return false
+}
+
+func resolvesCall(info *types.Info, c *ast.CallExpr, out map[*types.Var]bool) bool {
+	if !info.Types[c.Fun].IsType() || len(c.Args) != 1 {
+		return false
+	}
+	return resolvesTo(info, c.Args[0], out)
+}
+
+func resolvesComposite(info *types.Info, c *ast.CompositeLit, out map[*types.Var]bool) bool {
+	for _, elt := range c.Elts {
+		if resolvesElt(info, elt, out) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvesElt(info *types.Info, elt ast.Expr, out map[*types.Var]bool) bool {
+	if kv, ok := elt.(*ast.KeyValueExpr); ok {
+		return resolvesTo(info, kv.Value, out)
+	}
+	return resolvesTo(info, elt, out)
 }
 
 func isRef(t types.Type) bool {
@@ -715,7 +751,7 @@ func (e *escaper) compute(x ast.Expr, esc bool) bool {
 	case *ast.FuncLit:
 		return e.capturedList(x.Body.List)
 	case *ast.CallExpr:
-		return e.call(x)
+		return e.callWith(x, esc)
 	case *ast.UnaryExpr:
 		return e.unary(x, esc)
 	default:
@@ -729,6 +765,9 @@ func (e *escaper) projection(x ast.Expr, esc bool) (ast.Expr, bool) {
 		return nil, false
 	}
 	if _, ok := x.(*ast.ParenExpr); ok {
+		return c, esc
+	}
+	if _, ok := x.(*ast.TypeAssertExpr); ok {
 		return c, esc
 	}
 	return c, esc && (e.captured || e.addr)
@@ -801,12 +840,34 @@ func (e *escaper) indexRest(x ast.Expr, esc bool) bool {
 }
 
 func (e *escaper) slice(s *ast.SliceExpr, esc bool) bool {
+	if esc && isArrayType(e.info.TypeOf(s.X)) {
+		return e.sliceArray(s, esc)
+	}
 	return e.optExpr(s.X, esc) || e.optExpr(s.Low, esc) || e.optExpr(s.High, esc) || e.optExpr(s.Max, esc)
 }
 
-func (e *escaper) call(c *ast.CallExpr) bool {
+func isArrayType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Array)
+	return ok
+}
+
+func (e *escaper) sliceArray(s *ast.SliceExpr, esc bool) bool {
+	prev := e.addr
+	e.addr = true
+	r := e.optExpr(s.X, esc)
+	e.addr = prev
+	if r {
+		return true
+	}
+	return e.optExpr(s.Low, esc) || e.optExpr(s.High, esc) || e.optExpr(s.Max, esc)
+}
+
+func (e *escaper) callWith(c *ast.CallExpr, esc bool) bool {
 	if lit, ok := ast.Unparen(c.Fun).(*ast.FuncLit); ok {
-		return e.litCall(lit, c)
+		return e.litCallWith(lit, c, esc)
 	}
 	if e.recv(c) {
 		return true
@@ -814,10 +875,29 @@ func (e *escaper) call(c *ast.CallExpr) bool {
 	if e.expr(c.Fun, false) {
 		return true
 	}
+	if e.info.Types[c.Fun].IsType() {
+		return e.conversionArgs(c, esc)
+	}
 	return e.exprs(c.Args, !e.plain(c))
 }
 
-func (e *escaper) litCall(lit *ast.FuncLit, c *ast.CallExpr) bool {
+func (e *escaper) conversionArgs(c *ast.CallExpr, esc bool) bool {
+	if !esc || len(c.Args) != 1 {
+		return false
+	}
+	if !isArrayType(e.info.TypeOf(c)) && !isRef(e.info.TypeOf(c)) {
+		return false
+	}
+	if !isArrayType(e.info.TypeOf(c.Args[0])) && !isRef(e.info.TypeOf(c.Args[0])) {
+		return false
+	}
+	return e.exprs(c.Args, esc)
+}
+
+func (e *escaper) litCallWith(lit *ast.FuncLit, c *ast.CallExpr, esc bool) bool {
+	if esc && e.returnsAlias(lit) {
+		return true
+	}
 	prev := e.inlit
 	e.inlit = !e.captured
 	found := e.list(lit.Body.List, e.captured)
@@ -828,12 +908,58 @@ func (e *escaper) litCall(lit *ast.FuncLit, c *ast.CallExpr) bool {
 	return e.exprs(c.Args, true)
 }
 
+func (e *escaper) returnsAlias(lit *ast.FuncLit) bool {
+	found := false
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		r, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, res := range r.Results {
+			if resolvesTo(e.info, res, e.alias) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
 func (e *escaper) recv(c *ast.CallExpr) bool {
 	sel, ok := ast.Unparen(c.Fun).(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
+	if e.implicitAddr(sel) {
+		return true
+	}
 	return e.expr(sel.X, e.captured)
+}
+
+func (e *escaper) implicitAddr(sel *ast.SelectorExpr) bool {
+	got := e.info.Selections[sel]
+	if got == nil {
+		return false
+	}
+	fn, ok := got.Obj().(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() == "sync" {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	if _, ok := sig.Recv().Type().(*types.Pointer); !ok {
+		return false
+	}
+	if _, ok := e.info.TypeOf(sel.X).(*types.Pointer); ok {
+		return false
+	}
+	return true
 }
 
 func (e *escaper) plain(c *ast.CallExpr) bool {

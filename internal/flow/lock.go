@@ -59,8 +59,8 @@ func mutexKeys(info *types.Info, fn ast.Node) []Key {
 	var keys []Key
 	seen := map[Key]bool{}
 	ast.Inspect(fn, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return n == fn
+		if lit, ok := n.(*ast.FuncLit); ok && n != fn && !calledInPlace(fn, lit) {
+			return false
 		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok || mutexMethod(typeutil.StaticCallee(info, call)) == "" {
@@ -75,34 +75,60 @@ func mutexKeys(info *types.Info, fn ast.Node) []Key {
 	return keys
 }
 
-func lockTransfer(info *types.Info, n ast.Node, k Key, h bool) bool {
-	out := h
-	ast.Inspect(n, func(x ast.Node) bool {
-		switch x.(type) {
-		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+func calledInPlace(scope ast.Node, lit *ast.FuncLit) bool {
+	found := false
+	ast.Inspect(scope, func(n ast.Node) bool {
+		if found {
 			return false
 		}
-		call, ok := x.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		m := mutexMethod(typeutil.StaticCallee(info, call))
-		if m == "" {
-			return true
-		}
-		ck, ok := MethodKey(info, call)
-		if !ok || ck != k {
-			return true
-		}
-		switch m {
-		case "Lock", "RLock":
-			out = true
-		case "Unlock", "RUnlock":
-			out = false
+		if c, ok := n.(*ast.CallExpr); ok && ast.Unparen(c.Fun) == lit {
+			found = true
+			return false
 		}
 		return true
 	})
+	return found
+}
+
+func lockTransfer(info *types.Info, n ast.Node, k Key, h bool) bool {
+	out := h
+	ast.Inspect(n, func(x ast.Node) bool {
+		return transferStep(info, n, k, x, &out)
+	})
 	return out
+}
+
+func transferStep(info *types.Info, scope ast.Node, k Key, x ast.Node, out *bool) bool {
+	if lit, ok := x.(*ast.FuncLit); ok && !calledInPlace(scope, lit) {
+		return false
+	}
+	switch x.(type) {
+	case *ast.GoStmt, *ast.DeferStmt:
+		return false
+	}
+	return transferCall(info, k, x, out)
+}
+
+func transferCall(info *types.Info, k Key, x ast.Node, out *bool) bool {
+	call, ok := x.(*ast.CallExpr)
+	if !ok {
+		return true
+	}
+	m := mutexMethod(typeutil.StaticCallee(info, call))
+	if m == "" {
+		return true
+	}
+	ck, ok := MethodKey(info, call)
+	if !ok || ck != k {
+		return true
+	}
+	switch m {
+	case "Lock", "RLock":
+		*out = true
+	case "Unlock", "RUnlock":
+		*out = false
+	}
+	return true
 }
 
 func mutexMethod(fn *types.Func) string {
