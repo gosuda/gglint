@@ -35,3 +35,9 @@ func doublecloseSilentRange(chans []chan int) {
 	close(ch)
 }
 
+
+func doublecloseReportedGoClose() {
+	ch := make(chan int, 1)
+	close(ch)
+	go close(ch) // want `ch is already closed on every path to this close, which panics: close it once`
+}

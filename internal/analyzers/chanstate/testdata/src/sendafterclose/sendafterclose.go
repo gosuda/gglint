@@ -17,9 +17,3 @@ func sendaftercloseSilentGo() {
 	ch <- 1
 	go close(ch)
 }
-
-func sendaftercloseSilentGoClose() {
-	ch := make(chan int, 1)
-	go close(ch)
-	ch <- 1
-}

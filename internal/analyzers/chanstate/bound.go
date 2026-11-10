@@ -15,14 +15,17 @@ func upperBoundRecvs(info *types.Info, fn ast.Node, k flow.Key, senders map[*ast
 	if body == nil {
 		return 0, true
 	}
+	backward := backwardLabels(fn)
+	if len(backward) > 0 {
+		return 0, false
+	}
 	if anyRangeOver(info, fn, k) {
 		return 0, false
 	}
 	w := &boundWalker{
-		info:     info,
-		key:      k,
-		senders:  senders,
-		backward: backwardLabels(fn),
+		info:    info,
+		key:     k,
+		senders: senders,
 	}
 	w.walkStmts(body.List)
 	if w.unknown {
@@ -49,17 +52,15 @@ func anyRangeOver(info *types.Info, fn ast.Node, k flow.Key) bool {
 }
 
 type boundWalker struct {
-	info     *types.Info
-	key      flow.Key
-	senders  map[*ast.FuncLit]bool
-	backward map[string]bool
-	trips    []int64
-	loopBad  []bool
-	badLoop  int
-	lits     []*ast.FuncLit
-	badLabel int
-	total    int64
-	unknown  bool
+	info    *types.Info
+	key     flow.Key
+	senders map[*ast.FuncLit]bool
+	trips   []int64
+	loopBad []bool
+	badLoop int
+	lits    []*ast.FuncLit
+	total   int64
+	unknown bool
 }
 
 func backwardLabels(fn ast.Node) map[string]bool {
@@ -198,14 +199,7 @@ func (w *boundWalker) walkStmtSpawn(s ast.Stmt) {
 }
 
 func (w *boundWalker) walkLabeled(s *ast.LabeledStmt) {
-	enter := w.backward[s.Label.Name]
-	if enter {
-		w.badLabel++
-	}
 	w.walkStmt(s.Stmt)
-	if enter {
-		w.badLabel--
-	}
 }
 
 func (w *boundWalker) walkIf(s *ast.IfStmt) {
@@ -379,10 +373,6 @@ func (w *boundWalker) walkCall(c *ast.CallExpr) {
 }
 
 func (w *boundWalker) addSite() {
-	if w.badLabel > 0 {
-		w.unknown = true
-		return
-	}
 	if w.badLoop > 0 {
 		w.unknown = true
 		return
@@ -395,6 +385,9 @@ func (w *boundWalker) addSite() {
 	}
 	mult := int64(1)
 	for _, t := range w.trips {
+		if t <= 0 {
+			return
+		}
 		if mult > boundCap/t {
 			mult = boundCap
 			break

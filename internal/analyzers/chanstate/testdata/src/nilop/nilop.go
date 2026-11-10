@@ -81,3 +81,8 @@ func nilopSilentUnsafeSizeof() uintptr {
 	var c chan int
 	return unsafe.Sizeof(<-c)
 }
+
+func nilopReportedGoClose() {
+	var ch chan int
+	go close(ch) // want `ch is declared and never made, so this operation blocks forever \(close panics\): make the channel first`
+}

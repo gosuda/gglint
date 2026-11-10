@@ -276,31 +276,6 @@ func loopsIdent(info *types.Info, n ast.Node, id *ast.Ident) bool {
 	return found
 }
 
-func underSelect(fn, target ast.Node) bool {
-	found := false
-	ast.Inspect(fn, func(x ast.Node) bool {
-		if found {
-			return false
-		}
-		sel, ok := x.(*ast.SelectStmt)
-		if !ok {
-			return true
-		}
-		for _, c := range sel.Body.List {
-			cc, ok := c.(*ast.CommClause)
-			if !ok || cc.Comm == nil {
-				continue
-			}
-			if withinNode(cc.Comm, target) {
-				found = true
-				return false
-			}
-		}
-		return true
-	})
-	return found
-}
-
 func withinNode(outer, inner ast.Node) bool {
 	return outer.Pos() <= inner.Pos() && inner.End() <= outer.End()
 }

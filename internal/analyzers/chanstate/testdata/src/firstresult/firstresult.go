@@ -682,3 +682,40 @@ LFirstGoto:
 	<-ch
 	return 1
 }
+
+func firstresultReportedZeroTrip() int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }() // want `3 goroutines send on ch and at most 1 values are received with capacity 0`
+	}
+	for j := 0; j < 0; j++ {
+		<-ch
+	}
+	return <-ch
+}
+
+func firstresultReportedRangeZero() int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }() // want `3 goroutines send on ch and at most 1 values are received with capacity 0`
+	}
+	for range 0 {
+		<-ch
+	}
+	return <-ch
+}
+
+func firstresultSilentBackwardGoto() int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }()
+	}
+	n := 0
+Top:
+	n++
+	<-ch
+	if n < 3 {
+		goto Top
+	}
+	return 0
+}
