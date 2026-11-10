@@ -54,8 +54,9 @@ func checkLoopList(pass *analysis.Pass, scopes []loopScope) {
 		if len(sc.list) == 0 || lastIsExit(sc.list) {
 			continue
 		}
+		memo := map[flow.Key]loopFacts{}
 		for i, st := range sc.list {
-			checkLoopDefer(pass, sc, i, st)
+			checkLoopDefer(pass, sc, i, st, memo)
 		}
 	}
 }
@@ -71,7 +72,13 @@ func lastIsExit(list []ast.Stmt) bool {
 	return false
 }
 
-func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt) {
+type loopFacts struct {
+	inLoop     bool
+	reassigned bool
+	unlocks    bool
+}
+
+func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt, memo map[flow.Key]loopFacts) {
 	ds, ok := st.(*ast.DeferStmt)
 	if !ok {
 		return
@@ -84,16 +91,25 @@ func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt) {
 	if want == "" {
 		return
 	}
-	if rootInLoop(pass.TypesInfo, dk, sc) {
-		return
-	}
-	if rootReassigned(pass.TypesInfo, dk, sc) {
-		return
-	}
 	if !loopHasLock(pass, sc.list, i, dk, want) {
 		return
 	}
-	if loopUnlocks(pass, sc.list, dk) {
+	f, ok := memo[dk]
+	if !ok {
+		f = loopFacts{
+			inLoop:     rootInLoop(pass.TypesInfo, dk, sc),
+			reassigned: rootReassigned(pass.TypesInfo, dk, sc),
+			unlocks:    loopUnlocks(pass, sc.list, dk),
+		}
+		memo[dk] = f
+	}
+	if f.inLoop {
+		return
+	}
+	if f.reassigned {
+		return
+	}
+	if f.unlocks {
 		return
 	}
 	recv := recvText(pass.TypesInfo, ds.Call)

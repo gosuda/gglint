@@ -54,12 +54,12 @@ func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key)
 	tr := func(n ast.Node, s state) state {
 		return applyNode(info, key, n, s)
 	}
-	pre := collectPre(g, entry, tr)
+	pre, order := collectPre(g, entry, tr)
 	rets := returnsIn(fn)
 	if len(rets) == 0 {
 		return
 	}
-	holders := unlockHolders(pre, info, key)
+	holders := unlockHolders(order, info, key)
 	if len(holders) == 0 {
 		return
 	}
@@ -201,9 +201,9 @@ func isUnlockMethod(m string) bool {
 	return m == methodUnlock || m == methodRUnlock
 }
 
-func unlockHolders(pre map[ast.Node]state, info *types.Info, key flow.Key) []ast.Node {
+func unlockHolders(order []ast.Node, info *types.Info, key flow.Key) []ast.Node {
 	var out []ast.Node
-	for n := range pre {
+	for _, n := range order {
 		if _, ok := n.(*ast.DeferStmt); ok {
 			continue
 		}

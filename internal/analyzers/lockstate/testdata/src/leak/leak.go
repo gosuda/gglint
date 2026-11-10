@@ -135,3 +135,20 @@ func (s *S) unlockWith(err error) error {
 	s.mu.Unlock()
 	return err
 }
+
+func releaseForLeak(m *sync.Mutex, held bool) {
+	if held {
+		m.Unlock()
+	}
+}
+
+func leakDeferAddrSilent(bad bool) error {
+	var mu sync.Mutex
+	mu.Lock()
+	defer releaseForLeak(&mu, bad)
+	if bad {
+		return errBad
+	}
+	mu.Unlock()
+	return nil
+}

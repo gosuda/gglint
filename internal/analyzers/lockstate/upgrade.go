@@ -35,9 +35,9 @@ func checkUpgradeKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.K
 	tr := func(n ast.Node, s state) state {
 		return applyNode(info, key, n, s)
 	}
-	pre := collectPre(g, entry, tr)
-	for n, s := range pre {
-		reportUpgradeOps(pass, n, key, s)
+	pre, order := collectPre(g, entry, tr)
+	for _, n := range order {
+		reportUpgradeOps(pass, n, key, pre[n])
 	}
 }
 

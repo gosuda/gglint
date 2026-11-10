@@ -163,8 +163,21 @@ func pairNestedReported(mu *sync.RWMutex) {
 	mu.Unlock() // want "is not write-locked here, so this Unlock panics"
 }
 
-func pairReassignedSilent(p *pairS) { // the caller holds p.mu locked on entry
+func newLockedPairS() pairS {
 	var s pairS
-	s = *p
+	s.mu.Lock()
+	return s
+}
+
+func pairReassignedSilent() {
+	var s pairS
+	s = newLockedPairS()
 	s.mu.Unlock()
+}
+
+func pairReassignBeforeReported(p *pairS) int {
+	var s pairS
+	s.mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+	s = *p
+	return 0
 }

@@ -35,9 +35,9 @@ func checkPairKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key)
 	tr := func(n ast.Node, s state) state {
 		return applyNode(info, key, n, s)
 	}
-	pre := collectPre(g, entry, tr)
-	for n, s := range pre {
-		reportPairOps(pass, n, key, s)
+	pre, order := collectPre(g, entry, tr)
+	for _, n := range order {
+		reportPairOps(pass, n, key, pre[n])
 	}
 }
 

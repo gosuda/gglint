@@ -130,21 +130,92 @@ func entryState(info *types.Info, fn ast.Node, key flow.Key) state {
 	if def, ok := flow.DefinedBy(info, fn, v); ok && !emptyLiteral(def) {
 		return unknownState
 	}
-	if assignedBeyondDecl(info, fn, v) {
-		return unknownState
-	}
 	if lockExposed(info, fn, key) {
 		return unknownState
 	}
 	return freeState
 }
 
-func assignsVar(info *types.Info, n ast.Node, v *types.Var) bool {
-	as, ok := n.(*ast.AssignStmt)
+func reassignsRoot(info *types.Info, n ast.Node, key flow.Key) bool {
+	v, ok := key.Root.(*types.Var)
 	if !ok {
 		return false
 	}
-	return assignTargetsVar(info, as, v)
+	hit := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if hit {
+			return false
+		}
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		if nodeReassignsRoot(info, x, v) {
+			hit = true
+			return false
+		}
+		return true
+	})
+	return hit
+}
+
+func nodeReassignsRoot(info *types.Info, x ast.Node, v *types.Var) bool {
+	if as, ok := x.(*ast.AssignStmt); ok {
+		return assignTargetsVar(info, as, v)
+	}
+	if vs, ok := x.(*ast.ValueSpec); ok {
+		return valueSpecDefines(info, vs, v)
+	}
+	return false
+}
+
+func valueSpecDefines(info *types.Info, vs *ast.ValueSpec, v *types.Var) bool {
+	if len(vs.Values) == 0 {
+		return false
+	}
+	for _, name := range vs.Names {
+		if name.Name != "_" && info.Defs[name] == v {
+			return true
+		}
+	}
+	return false
+}
+
+func addrInExpr(info *types.Info, e ast.Expr, key flow.Key) bool {
+	handed := false
+	ast.Inspect(e, func(x ast.Node) bool {
+		if handed {
+			return false
+		}
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		if u, ok := x.(*ast.UnaryExpr); ok && u.Op == token.AND && encloses(info, u.X, key) {
+			handed = true
+			return false
+		}
+		return true
+	})
+	return handed
+}
+
+func handsAddress(info *types.Info, n ast.Node, key flow.Key) bool {
+	switch n := n.(type) {
+	case *ast.DeferStmt:
+		for _, arg := range n.Call.Args {
+			if addrInExpr(info, arg, key) {
+				return true
+			}
+		}
+	case *ast.SendStmt:
+		return addrInExpr(info, n.Value, key)
+	case *ast.ReturnStmt:
+		for _, r := range n.Results {
+			if addrInExpr(info, r, key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func assignTargetsVar(info *types.Info, as *ast.AssignStmt, v *types.Var) bool {
@@ -158,28 +229,6 @@ func assignTargetsVar(info *types.Info, as *ast.AssignStmt, v *types.Var) bool {
 		}
 	}
 	return false
-}
-
-func assignedBeyondDecl(info *types.Info, fn ast.Node, v *types.Var) bool {
-	var fnLit *ast.FuncLit
-	if l, ok := fn.(*ast.FuncLit); ok {
-		fnLit = l
-	}
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if l, ok := n.(*ast.FuncLit); ok && l != fnLit {
-			return false
-		}
-		if assignsVar(info, n, v) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
 }
 
 func emptyLiteral(e ast.Expr) bool {
@@ -531,6 +580,12 @@ func applyNode(info *types.Info, key flow.Key, n ast.Node, cur state) state {
 	if cur == bottomState {
 		return bottomState
 	}
+	if reassignsRoot(info, n, key) {
+		return unknownState
+	}
+	if handsAddress(info, n, key) {
+		return unknownState
+	}
 	if ds, ok := n.(*ast.DeferStmt); ok {
 		return deferArgs(info, key, ds, cur)
 	}
@@ -545,6 +600,11 @@ func applyNode(info *types.Info, key flow.Key, n ast.Node, cur state) state {
 }
 
 func deferArgs(info *types.Info, key flow.Key, ds *ast.DeferStmt, cur state) state {
+	for _, arg := range ds.Call.Args {
+		if addrInExpr(info, arg, key) {
+			return unknownState
+		}
+	}
 	next := cur
 	for _, arg := range ds.Call.Args {
 		ast.Inspect(arg, func(x ast.Node) bool {
@@ -631,12 +691,16 @@ func goNodeSharesKey(info *types.Info, n ast.Node, key flow.Key) bool {
 	return false
 }
 
-func collectPre(g *flow.Graph, entry state, tr func(ast.Node, state) state) map[ast.Node]state {
+func collectPre(g *flow.Graph, entry state, tr func(ast.Node, state) state) (map[ast.Node]state, []ast.Node) {
 	out := map[ast.Node]state{}
+	var order []ast.Node
 	flow.Forward(g, entry, tr, joinState, func(n ast.Node, s state) {
+		if _, ok := out[n]; !ok {
+			order = append(order, n)
+		}
 		out[n] = s
 	})
-	return out
+	return out, order
 }
 
 type opCall struct {
