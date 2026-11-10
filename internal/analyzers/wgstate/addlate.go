@@ -17,7 +17,7 @@ import (
 
 var addlateAnalyzer = &analysis.Analyzer{
 	Name:     "addlate",
-	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it; a literal that receives, ranges over a channel, or locks or waits is not reported, because that wait can order the Add",
+	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable, even when that variable may hold another function by then; an Add in a go or defer statement does not; a literal that receives, ranges over a channel, or locks or waits is not reported, because that wait can order the Add",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runAddlate,
 }
@@ -56,7 +56,8 @@ func firstAddPositions(pass *analysis.Pass, fn ast.Node) map[flow.Key]token.Pos 
 		return out
 	}
 	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
+		switch n.(type) {
+		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
@@ -104,7 +105,8 @@ func litAddKeys(pass *analysis.Pass, lit *ast.FuncLit) []flow.Key {
 
 func mergeInPlaceAdds(pass *analysis.Pass, body *ast.BlockStmt, out map[flow.Key]token.Pos) {
 	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
+		switch n.(type) {
+		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
@@ -131,30 +133,28 @@ func mergeVarLitAdds(pass *analysis.Pass, fn ast.Node, body *ast.BlockStmt, out 
 }
 
 type varLitSet struct {
-	counts map[*types.Var]int
-	lits   map[*types.Var]*ast.FuncLit
-	calls  map[*types.Var]token.Pos
+	lits  map[*types.Var][]*ast.FuncLit
+	calls map[*types.Var]token.Pos
 }
 
 func newVarLitSet() *varLitSet {
-	return &varLitSet{counts: map[*types.Var]int{}, lits: map[*types.Var]*ast.FuncLit{}, calls: map[*types.Var]token.Pos{}}
+	return &varLitSet{lits: map[*types.Var][]*ast.FuncLit{}, calls: map[*types.Var]token.Pos{}}
 }
 
 func collectVarLits(info *types.Info, body *ast.BlockStmt, set *varLitSet) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch n := n.(type) {
-		case *ast.FuncLit:
-			return false
-		case *ast.GoStmt:
-			return false
-		case *ast.DeferStmt:
-			return false
 		case *ast.AssignStmt:
 			noteAssignLit(info, n, set)
-			return true
 		case *ast.ValueSpec:
 			noteValueLit(info, n, set)
-			return true
+		}
+		return true
+	})
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+			return false
 		case *ast.CallExpr:
 			noteVarCall(info, n, set.calls)
 			return true
@@ -164,15 +164,12 @@ func collectVarLits(info *types.Info, body *ast.BlockStmt, set *varLitSet) {
 }
 
 func applyVarLits(pass *analysis.Pass, fn ast.Node, set *varLitSet, out map[flow.Key]token.Pos) {
-	for v, lit := range set.lits {
-		applyOneVarLit(pass, fn, v, lit, set, out)
+	for v, lits := range set.lits {
+		applyOneVarLit(pass, fn, v, lits, set, out)
 	}
 }
 
-func applyOneVarLit(pass *analysis.Pass, fn ast.Node, v *types.Var, lit *ast.FuncLit, set *varLitSet, out map[flow.Key]token.Pos) {
-	if set.counts[v] != 1 {
-		return
-	}
+func applyOneVarLit(pass *analysis.Pass, fn ast.Node, v *types.Var, lits []*ast.FuncLit, set *varLitSet, out map[flow.Key]token.Pos) {
 	if !flow.IsLocal(pass.TypesInfo, fn, v) {
 		return
 	}
@@ -180,9 +177,16 @@ func applyOneVarLit(pass *analysis.Pass, fn ast.Node, v *types.Var, lit *ast.Fun
 	if !ok {
 		return
 	}
-	for _, k := range litAddKeys(pass, lit) {
-		if p, dup := out[k]; !dup || cp < p {
-			out[k] = cp
+	seen := map[flow.Key]bool{}
+	for _, lit := range lits {
+		for _, k := range litAddKeys(pass, lit) {
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			if p, dup := out[k]; !dup || cp < p {
+				out[k] = cp
+			}
 		}
 	}
 }
@@ -197,10 +201,9 @@ func noteAssignLit(info *types.Info, s *ast.AssignStmt, set *varLitSet) {
 		if !ok {
 			continue
 		}
-		set.counts[v]++
 		if len(s.Lhs) == 1 && len(s.Rhs) == 1 && i == 0 {
 			if lit, ok := ast.Unparen(s.Rhs[0]).(*ast.FuncLit); ok {
-				set.lits[v] = lit
+				set.lits[v] = append(set.lits[v], lit)
 			}
 		}
 	}
@@ -215,10 +218,9 @@ func noteValueLit(info *types.Info, s *ast.ValueSpec, set *varLitSet) {
 		if !ok {
 			continue
 		}
-		set.counts[v]++
 		if len(s.Names) == 1 && len(s.Values) == 1 && i == 0 {
 			if lit, ok := ast.Unparen(s.Values[0]).(*ast.FuncLit); ok {
-				set.lits[v] = lit
+				set.lits[v] = append(set.lits[v], lit)
 			}
 		}
 	}

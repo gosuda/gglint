@@ -1,6 +1,9 @@
 package addlate
 
-import "sync"
+import (
+	"log"
+	"sync"
+)
 
 func work() {}
 
@@ -252,5 +255,52 @@ func addlateSilentLitInPlace() {
 	}()
 	wg.Add(1)
 	wg.Done()
+	wg.Wait()
+}
+func addlateSilentVarLitReassigned(verbose bool) {
+	var wg sync.WaitGroup
+	add := func() {
+		wg.Add(1)
+	}
+	if verbose {
+		add = func() {
+			log.Print("add")
+			wg.Add(1)
+		}
+	}
+	add()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Wait()
+}
+func addlateReportedGoLitNoOrder() {
+	var wg sync.WaitGroup
+	go func() {
+		wg.Add(1)
+	}()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addlateReportedDirectGoDeferNoOrder() {
+	var wg sync.WaitGroup
+	go wg.Add(1)
+	defer wg.Add(1)
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
 	wg.Wait()
 }
