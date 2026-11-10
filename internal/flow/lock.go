@@ -169,63 +169,84 @@ func inPlaceEffect(info *types.Info, lit *ast.FuncLit, k Key, incoming bool) boo
 	if lit.Body == nil {
 		return incoming
 	}
-	found := scanLitOps(info, lit, k)
-	if found.unlock {
-		return false
-	}
-	if found.lock && !found.branch {
+	if directLockHeld(info, lit, k) && !anyUnlock(info, lit, k) {
 		return true
+	}
+	if anyUnlock(info, lit, k) {
+		return false
 	}
 	return incoming
 }
 
-type litOps struct {
-	lock   bool
-	unlock bool
-	branch bool
+func directLockHeld(info *types.Info, lit *ast.FuncLit, k Key) bool {
+	for _, s := range lit.Body.List {
+		if stmtLocks(info, s, k) {
+			return true
+		}
+	}
+	return false
 }
 
-func scanLitOps(info *types.Info, lit *ast.FuncLit, k Key) litOps {
-	var found litOps
+func stmtLocks(info *types.Info, s ast.Node, k Key) bool {
+	locked := false
+	ast.Inspect(s, func(x ast.Node) bool {
+		if locked {
+			return false
+		}
+		switch x.(type) {
+		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt, *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+			return false
+		}
+		if call, ok := x.(*ast.CallExpr); ok {
+			if isLockOp(info, call, k) {
+				locked = true
+				return false
+			}
+		}
+		return true
+	})
+	return locked
+}
+
+func anyUnlock(info *types.Info, lit *ast.FuncLit, k Key) bool {
+	found := false
+	called := calledLiterals(lit.Body)
 	ast.Inspect(lit.Body, func(x ast.Node) bool {
-		return visitLitNode(info, lit, k, x, &found)
+		if found {
+			return false
+		}
+		if _, ok := x.(*ast.GoStmt); ok {
+			return false
+		}
+		if f, ok := x.(*ast.FuncLit); ok {
+			if _, ok := called[f]; !ok {
+				return false
+			}
+			return true
+		}
+		if call, ok := x.(*ast.CallExpr); ok && isUnlockOp(info, call, k) {
+			found = true
+			return false
+		}
+		return true
 	})
 	return found
 }
 
-func visitLitNode(info *types.Info, lit *ast.FuncLit, k Key, x ast.Node, found *litOps) bool {
-	if _, ok := x.(*ast.FuncLit); ok {
-		return x == lit
-	}
-	if _, ok := x.(*ast.GoStmt); ok {
+func isLockOp(info *types.Info, call *ast.CallExpr, k Key) bool {
+	m := mutexMethod(typeutil.StaticCallee(info, call))
+	if m != opLock && m != opRLock {
 		return false
 	}
-	switch x.(type) {
-	case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-		found.branch = true
-		return true
-	}
-	call, ok := x.(*ast.CallExpr)
-	if !ok {
-		return true
-	}
-	noteMutexOp(info, call, k, found)
-	return true
+	ck, ok := MethodKey(info, call)
+	return ok && ck == k
 }
 
-func noteMutexOp(info *types.Info, call *ast.CallExpr, k Key, found *litOps) {
+func isUnlockOp(info *types.Info, call *ast.CallExpr, k Key) bool {
 	m := mutexMethod(typeutil.StaticCallee(info, call))
-	if m == "" {
-		return
+	if m != opUnlock && m != opRUnlock {
+		return false
 	}
 	ck, ok := MethodKey(info, call)
-	if !ok || ck != k {
-		return
-	}
-	if m == opLock || m == opRLock {
-		found.lock = true
-	}
-	if m == opUnlock || m == opRUnlock {
-		found.unlock = true
-	}
+	return ok && ck == k
 }

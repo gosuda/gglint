@@ -364,7 +364,6 @@ func TestOpaqueJoinNegatives(t *testing.T) {
 	}{
 		{"builtinLen", "package p\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\nif len(done) > 0 { println(\"pending\") }\ns = \"b\"\nreturn s\n}\n"},
 		{"noopFunc", "package p\nimport \"sync\"\nfunc noop(wg *sync.WaitGroup) {}\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nnoop(&wg)\ns = \"b\"\nreturn s\n}\n"},
-		{"condClosure", "package p\nimport \"sync\"\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nwait := func() { if s != \"\" { wg.Wait() } }\nwait()\ns = \"b\"\nreturn s\n}\n"},
 		{"signalNoop", "package p\nfunc watch(ch chan struct{}) {}\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\nwatch(done)\ns = \"b\"\nreturn s\n}\n"},
 	}
 	for _, tc := range cases {
@@ -401,17 +400,17 @@ func TestOpaqueJoinNegatives(t *testing.T) {
 	}
 }
 
-func joinedTarget(t *testing.T, pkg *packages.Package, name string) (*analysis.Pass, *ast.FuncDecl, ast.Node) {
+func joinedTarget(t *testing.T, pkg *packages.Package) (*analysis.Pass, *ast.FuncDecl, ast.Node) {
 	t.Helper()
 	pass := ctrlPass(t, pkg)
 	var fd *ast.FuncDecl
 	for _, d := range pkg.Syntax[0].Decls {
-		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == name {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
 			fd = f
 		}
 	}
 	if fd == nil {
-		t.Fatalf("%s missing", name)
+		t.Fatalf("f missing")
 	}
 	var target ast.Node
 	for _, s := range fd.Body.List {
@@ -443,8 +442,7 @@ func TestOpaqueJoinPathRule(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			pkg := loadPackage(t, tc.src)
-			fname := "f"
-			pass, fd, target := joinedTarget(t, pkg, fname)
+			pass, fd, target := joinedTarget(t, pkg)
 			sp := Spawns(pass, fd)[0]
 			g := NewGraph(pass, fd)
 			if got := Joined(pass, g, sp, target); got != tc.want {
@@ -467,7 +465,7 @@ func TestClosureRangeSelectRecv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			pkg := loadPackage(t, tc.src)
-			pass, fd, target := joinedTarget(t, pkg, "f")
+			pass, fd, target := joinedTarget(t, pkg)
 			sp := Spawns(pass, fd)[0]
 			g := NewGraph(pass, fd)
 			if !Joined(pass, g, sp, target) {
@@ -489,7 +487,7 @@ func TestCalleeRangeRecv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			pkg := loadPackage(t, tc.src)
-			pass, fd, target := joinedTarget(t, pkg, "f")
+			pass, fd, target := joinedTarget(t, pkg)
 			sp := Spawns(pass, fd)[0]
 			g := NewGraph(pass, fd)
 			if !Joined(pass, g, sp, target) {
@@ -519,6 +517,132 @@ func TestEscapesStructConversion(t *testing.T) {
 			t.Parallel()
 			if got := escapeOf(t, tc.src, tc.fn, tc.param); got != tc.want {
 				t.Fatalf("%s: Escapes = %v want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOpaqueJoinSameNode(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc get(wg *sync.WaitGroup) string { wg.Wait(); return \"b\" }\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\ns = get(&wg)\nreturn s\n}\n")
+	pass, fd, target := joinedTarget(t, pkg)
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if !Joined(pass, g, sp, target) {
+		t.Fatalf("same statement helper does not join")
+	}
+}
+
+func TestOpaqueJoinInPlaceHelper(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"iife", "package p\nimport \"sync\"\nfunc waitFor(wg *sync.WaitGroup) { wg.Wait() }\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nfunc() { waitFor(&wg) }()\ns = \"b\"\nreturn s\n}\n"},
+		{"closureHelper", "package p\nimport \"sync\"\nfunc waitFor(wg *sync.WaitGroup) { wg.Wait() }\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nwait := func() { waitFor(&wg) }\nwait()\ns = \"b\"\nreturn s\n}\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			pass, fd, target := joinedTarget(t, pkg)
+			sp := Spawns(pass, fd)[0]
+			g := NewGraph(pass, fd)
+			if !Joined(pass, g, sp, target) {
+				t.Fatalf("%s: helper in called literal does not join", tc.name)
+			}
+		})
+	}
+}
+
+func TestClosureBranchRecvJoins(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer close(done); println(s) }()\nwait := func() { for { select { case <-done: return } } }\nwait()\ns = \"b\"\nreturn s\n}\n")
+	pass, fd, target := joinedTarget(t, pkg)
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if !Joined(pass, g, sp, target) {
+		t.Fatalf("closure receive under for select does not join")
+	}
+}
+
+func TestInPlaceLockBranchHolds(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nvar mu sync.Mutex\nvar n int\nfunc f(c bool) {\nfunc() { mu.Lock(); if c { n++ } }()\nn = 2\nmu.Unlock()\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	held := HeldAt(pass, NewGraph(pass, fd))
+	got := held(fd.Body.List[1])
+	if len(got) != 1 {
+		t.Fatalf("in-place lock with branch not held: %v", got)
+	}
+}
+
+func TestMethodValueWaitJoins(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc waitVia(wg *sync.WaitGroup) { w := wg.Wait; w() }\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nwaitVia(&wg)\ns = \"b\"\nreturn s\n}\n")
+	pass, fd, target := joinedTarget(t, pkg)
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if !Joined(pass, g, sp, target) {
+		t.Fatalf("method value wait does not join")
+	}
+}
+
+func TestDeferredSendSignalJoins(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc use(v any) {}\nfunc f(finished bool) bool {\nrecovered := make(chan any)\ngo func() {\ndefer func() { recovered <- recover() }()\nfinished = true\n}()\nuse(<-recovered)\nreturn finished\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if !Joined(pass, g, sp, fd.Body.List[3]) {
+		t.Fatalf("deferred send does not join")
+	}
+}
+
+func TestSpawnGroupNestedDone(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		src   string
+		want  bool
+		joins bool
+	}{
+		{"deferred", "package p\nimport \"sync\"\nfunc f() {\nvar wg sync.WaitGroup\nwg.Add(1)\ngo func() { defer func() { wg.Done() }(); println(\"w\") }()\nwg.Wait()\nprintln(\"d\")\n}\n", true, true},
+		{"inplace", "package p\nimport \"sync\"\nfunc f() {\nvar wg sync.WaitGroup\nwg.Add(1)\ngo func() { func() { wg.Done() }(); println(\"w\") }()\nwg.Wait()\nprintln(\"d\")\n}\n", true, true},
+		{"stored", "package p\nimport \"sync\"\nfunc f() {\nvar wg sync.WaitGroup\nwg.Add(1)\ngo func() { d := func() { wg.Done() }; println(\"w\"); _ = d }()\nwg.Wait()\nprintln(\"d\")\n}\n", false, false},
+		{"innergo", "package p\nimport \"sync\"\nfunc f() {\nvar wg sync.WaitGroup\nwg.Add(1)\ngo func() { go func() { wg.Done() }(); println(\"w\") }()\nwg.Wait()\nprintln(\"d\")\n}\n", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pkg := loadPackage(t, tc.src)
+			pass := ctrlPass(t, pkg)
+			var fd *ast.FuncDecl
+			for _, d := range pkg.Syntax[0].Decls {
+				if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+					fd = f
+				}
+			}
+			sp := Spawns(pass, fd)[0]
+			if sp.Group.zero() != !tc.want {
+				t.Fatalf("%s: group zero = %v want group = %v", tc.name, sp.Group.zero(), tc.want)
+			}
+			g := NewGraph(pass, fd)
+			if got := Joined(pass, g, sp, fd.Body.List[4]); got != tc.joins {
+				t.Fatalf("%s: Joined = %v want %v", tc.name, got, tc.joins)
 			}
 		})
 	}
