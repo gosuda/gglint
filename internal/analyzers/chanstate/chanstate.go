@@ -21,7 +21,7 @@ func Analyzers() []*analysis.Analyzer {
 		mk("selfdeadlock", "reports an unbuffered channel whose send and receive are both in this goroutine", runSelfdeadlock),
 		mk("rangeunclosed", "reports a range over a local channel that no code closes", runRangeunclosed),
 		mk("orphansend", "reports a spawned send that blocks forever when the parent returns through its other select case", runOrphansend),
-		mk("firstresult", "reports more goroutine sends on a channel than the receives and capacity can drain", runFirstresult),
+		mk("firstresult", "reports more goroutine sends on a channel than the receives and capacity can drain; silent when the loop body receives", runFirstresult),
 	}
 }
 

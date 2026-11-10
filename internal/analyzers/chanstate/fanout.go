@@ -196,14 +196,24 @@ func drainIfRecvs(info *types.Info, s *ast.IfStmt, k flow.Key) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	elseCount, ok := elseStraightRecvs(info, s.Else, k)
+	elseCount, ok := drainElseRecvs(info, s.Else, k)
 	if !ok {
 		return 0, false
 	}
-	if bodyCount != elseCount {
-		return 0, false
+	if bodyCount < elseCount {
+		return header + bodyCount, true
 	}
-	return header + bodyCount, true
+	return header + elseCount, true
+}
+
+func drainElseRecvs(info *types.Info, elseStmt ast.Stmt, k flow.Key) (int64, bool) {
+	if body, ok := elseStmt.(*ast.BlockStmt); ok {
+		return blockStraightRecvs(info, body, k)
+	}
+	if s, ok := elseStmt.(*ast.IfStmt); ok {
+		return drainIfRecvs(info, s, k)
+	}
+	return 0, false
 }
 
 func blockStraightRecvs(info *types.Info, body *ast.BlockStmt, k flow.Key) (int64, bool) {
@@ -218,14 +228,6 @@ func blockStraightRecvs(info *types.Info, body *ast.BlockStmt, k flow.Key) (int6
 		n += recvCount(info, st, k)
 	}
 	return n, true
-}
-
-func elseStraightRecvs(info *types.Info, elseStmt ast.Stmt, k flow.Key) (int64, bool) {
-	body, ok := elseStmt.(*ast.BlockStmt)
-	if !ok {
-		return 0, false
-	}
-	return blockStraightRecvs(info, body, k)
 }
 
 func uncondRecvs(info *types.Info, x ast.Expr, k flow.Key) int64 {

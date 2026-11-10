@@ -1,7 +1,5 @@
 package firstresult
 
-import "time"
-
 func useFirst(v int) { _ = v }
 
 func workFirst() {}
@@ -331,15 +329,28 @@ func firstresultSilentIfElseBalanced(c bool) int {
 	}
 	return 0
 }
+func firstresultReportedIfElseUnbalanced(c bool) int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }() // want `3 goroutines send on ch and 2 values are received with capacity 0`
+	}
+	if c {
+		<-ch
+		<-ch
+		<-ch
+	} else {
+		<-ch
+		<-ch
+	}
+	return 0
+}
+
 
 func firstresultSilentMakeInLoop() {
-	for i := 0; i < 1000; i++ {
-		out := make(chan error)
-		go func() { out <- nil }()
-		select {
-		case <-out:
-		case <-time.After(time.Second):
-		}
+	for i := 0; i < 3; i++ {
+		out := make(chan int)
+		go func() { out <- i }()
+		<-out
 	}
 }
 
@@ -349,7 +360,6 @@ func firstresultSilentSelectRecvInLoop() {
 		go func() { ch <- i }()
 		select {
 		case <-ch:
-		default:
 		}
 	}
 }
