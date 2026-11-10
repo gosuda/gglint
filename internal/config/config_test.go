@@ -252,8 +252,8 @@ func TestLoadCarriesEveryFileFieldAndRootsExcludesAtConfigDir(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFile(t, dir, filepath.Join("conf", config.FileName), `
 mode = "strict"
-enable = ["dupl", "goconst"]
-disable = ["noinit"]
+enable = ["dupl", "dupl"]
+disable = ["placeholder"]
 
 [run]
 tests = false
@@ -273,7 +273,7 @@ text = "too complex"
 
 [[exclude]]
 tests = true
-rules = ["goconst"]
+rules = ["dupl"]
 
 [[exclude]]
 tests = false
@@ -285,8 +285,8 @@ text = "x"
 		Path:        path,
 		ExcludeBase: filepath.Dir(path),
 		Mode:        config.Strict,
-		Enable:      []string{"dupl", "goconst"},
-		Disable:     []string{"noinit"},
+		Enable:      []string{"dupl", "dupl"},
+		Disable:     []string{"placeholder"},
 		BuildTags:   []string{"e2e", "integration"},
 		Complexity:  limits,
 		Deny: []config.Deny{
@@ -295,7 +295,7 @@ text = "x"
 		},
 		Excludes: []config.Exclude{
 			{Paths: []string{"^legacy/"}, Rules: []string{"complexity", "staticcheck:SA1019"}, Text: "too complex"},
-			{Tests: new(true), Rules: []string{"goconst"}},
+			{Tests: new(true), Rules: []string{"dupl"}},
 			{Tests: new(false), Text: "x"},
 		},
 	}

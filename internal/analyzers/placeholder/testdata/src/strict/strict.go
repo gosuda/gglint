@@ -62,7 +62,7 @@ func mixedCase() {}
 //go:generate echo TODO
 func generateDirective() {}
 
-//nolint:errcheck // TODO: revisit the error policy
+//nolint:printf // TODO: revisit the error policy
 func nolintDirective() {}
 
 func notAComment() string {

@@ -72,7 +72,7 @@ func xtoolsRules() []Rule {
 		nilness.Analyzer, reflectvaluecompare.Analyzer, scannererr.Analyzer, sortslice.Analyzer,
 		sqlrowserr.Analyzer, unusedwrite.Analyzer,
 	}
-	out := []Rule{{"modernize", config.Standard, originGoAnalysis, "Suggests modern Go replacements for outdated idioms and library calls.", ReportEverywhere, buildModernize}}
+	out := []Rule{{"modernize", config.Standard, originGoAnalysis, "Suggests modern Go replacements for outdated idioms and library calls.", ReportWithFix, buildModernize}}
 	for _, a := range basic {
 		out = append(out, passRule(config.Basic, a))
 	}
@@ -88,7 +88,5 @@ func passRule(mode config.Mode, a *analysis.Analyzer) Rule {
 }
 
 func buildModernize(config.Config) []*analysis.Analyzer {
-	return slices.DeleteFunc(slices.Clone(modernize.Suite), func(a *analysis.Analyzer) bool {
-		return a == modernize.AtomicTypesAnalyzer
-	})
+	return slices.Clone(modernize.Suite)
 }

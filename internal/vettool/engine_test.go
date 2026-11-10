@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -121,7 +122,7 @@ func loadTinyPackage(t *testing.T) *packages.Package {
 	dir := t.TempDir()
 	files := map[string]string{
 		"go.mod": "module example.com/p\n\ngo 1.27\n",
-		"p.go":   "package p\n\nfunc g() error { return nil }\n\nfunc f() { _ = g() }\n",
+		"p.go":   "package p\n\nimport \"sync\"\n\ntype T struct {\n\tmu sync.Mutex\n\tn int\n}\n\nfunc (t *T) A() { t.mu.Lock(); t.n++; t.mu.Unlock() }\n\nfunc (t *T) B() { t.mu.Lock(); t.n--; t.mu.Unlock() }\n",
 	}
 	for name, src := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
@@ -156,17 +157,21 @@ func analyzeWithEngine(cfg config.Config, pkg *packages.Package) error {
 		return fmt.Errorf("mode %v: analyze: %w", cfg.Mode, err)
 	}
 	var failures []error
-	blankFindings := 0
+	found := 0
 	for _, root := range graph.Roots {
 		if root.Err != nil {
 			failures = append(failures, fmt.Errorf("mode %v: %s: %w", cfg.Mode, root.Analyzer.Name, root.Err))
 		}
-		if root.Analyzer.Name == "errcheck" {
-			blankFindings += len(root.Diagnostics)
+		if root.Analyzer.Name == "checklocks" {
+			for _, d := range root.Diagnostics {
+				if strings.Contains(d.Message, "may require checklocks annotation") {
+					found++
+				}
+			}
 		}
 	}
-	if want := cfg.Mode >= config.Standard; (blankFindings > 0) != want {
-		failures = append(failures, fmt.Errorf("mode %v: errcheck reported %d blank-assignment findings, want any = %v", cfg.Mode, blankFindings, want))
+	if want := cfg.Mode >= config.Strict; (found > 0) != want {
+		failures = append(failures, fmt.Errorf("mode %v: checklocks reported %d findings, want any = %v", cfg.Mode, found, want))
 	}
 	return errors.Join(failures...)
 }
@@ -182,6 +187,9 @@ func TestConcurrentBuildsKeepSharedAnalyzersIsolated(t *testing.T) {
 	for _, mode := range []config.Mode{config.Basic, config.Standard, config.Strict} {
 		for range workersPerMode {
 			cfg := config.Config{Mode: mode, Complexity: config.ComplexityFor(mode), Tests: true}
+			if mode < config.Strict {
+				cfg.Enable = []string{"checklocks"}
+			}
 			jobs = append(jobs, job{cfg: cfg, pkg: loadTinyPackage(t)})
 		}
 	}

@@ -422,8 +422,7 @@ func assertConcerns(t *testing.T, dir string, reports map[config.Mode]jsonReport
 		needle  string
 		message string
 	}{
-		{"goroutine", config.Standard, "d/d.go", "go work()", "goroutine is not joined: use errgroup.Group.Go or sync.WaitGroup.Go"},
-		{"capturerace", config.Standard, "e/e.go", "go func()", "s is written after a goroutine that captures it starts: pass it as an argument or synchronize first"},
+		{"goroutine", config.Strict, "d/d.go", "go work()", "bare go statement: use errgroup.Group.Go or sync.WaitGroup.Go"},
 		{"complexity", config.Standard, "f/f.go", "func Branchy", "function Branchy is too complex: cyclomatic complexity 17 exceeds 15"},
 		{"chanblock", config.Strict, "g/g.go", "ch <- 1", "channel send can block forever: select on ctx.Done() or use a buffered channel"},
 		{"placeholder", config.Standard, "h/h.go", "panic(", "placeholder panic: implement this path"},
@@ -444,7 +443,7 @@ func assertConcerns(t *testing.T, dir string, reports map[config.Mode]jsonReport
 
 var (
 	modeNames   = []string{"basic", "standard", "strict"}
-	catalogSize = [...]int{54, 101, 122}
+	catalogSize = [...]int{51, 83, 95}
 	origins     = []string{"go/analysis", "staticcheck", "third-party", "gvisor", "logos", "gglint"}
 )
 
@@ -599,7 +598,7 @@ var directiveCases = []directiveCase{
 	{"rule:check token suppresses its own check", "staticcheck:SA4000 //", [3][]string{}, map[string][3]bool{"staticcheck:SA4000": never}},
 	{"rule:check token leaves other checks of the rule reported", "staticcheck:SA4001 //", inAll("unused nolint directive for staticcheck:SA4001"), map[string][3]bool{"staticcheck:SA4000": always}},
 	{"rule token suppresses every check of the rule", "//nolint:staticcheck //", [3][]string{}, map[string][3]bool{"staticcheck:SA4000": never}},
-	{"directive naming an unmatched selected rule reports it unused and still suppresses the matched rule", `"errcheckpair")`, inAll("unused nolint directive for errcheck"), map[string][3]bool{"printf": never}},
+	{"directive naming an unmatched selected rule reports it unused and still suppresses the matched rule", `"lostcancelpair")`, inAll("unused nolint directive for lostcancel"), map[string][3]bool{"printf": never}},
 	{"trailing comma is malformed in every mode and suppresses nothing", `"trailingcomma")`, inAll("malformed nolint directive"), map[string][3]bool{"printf": always}},
 	{"reason without slashes is malformed in every mode and suppresses nothing", `"noslash")`, inAll("malformed nolint directive"), map[string][3]bool{"printf": always}},
 	{"typecheck token beside a selected rule is rejected and the rule is unused", `"typecheckpair")`, inAll("typecheck findings cannot be suppressed", "unused nolint directive for printf"), nil},

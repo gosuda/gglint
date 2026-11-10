@@ -28,16 +28,13 @@ func logosPorts() []logosPort {
 	return []logosPort{
 		{dir: "correctness_infinite_recursion", rule: "infinite_recursion", cfg: basic},
 		{dir: "correctness_arena_pointer_escape", rule: "stackaddr", cfg: basic},
-		{dir: "correctness_typed_nil_return", rule: "typednil", cfg: basic},
+		{dir: "correctness_typed_nil_return", rule: "typednil", cfg: strict},
 		{dir: "correctness_unclosed_io_closer", rule: "closer", cfg: strict},
 		{dir: "correctness_unbounded_channel_op", rule: "chanblock", cfg: strict},
 		{dir: "correctness_printf_misuse", rule: "printf", cfg: basic},
 		{dir: "correctness_httpresponse", rule: "httpresponse", cfg: basic},
-		{dir: "correctness_structtag_malformed", rule: "structtag_malformed", cfg: basic},
-		{dir: "concurrency_concurrent_multiword_race", rule: "capturerace", cfg: standard},
-		{dir: "concurrency_unsupervised_goroutine", rule: "goroutine", cfg: standard},
+		{dir: "concurrency_unsupervised_goroutine", rule: "goroutine", cfg: config.Config{Mode: config.Standard, Enable: []string{"goroutine"}}},
 		{dir: "concurrency_reentrant_withlock_deadlock", rule: "reentrant_withlock_deadlock", cfg: basic},
-		{dir: "slop_discarded_error", rule: "discarded_error", cfg: standard},
 		{dir: "slop_err_chain_reset", rule: "err_chain_reset", cfg: standard},
 		{dir: "slop_todo_placeholder", rule: "placeholder", cfg: strict},
 		{dir: "complexity_cognitive_overflow", rule: "complexity", cfg: logosLimits},
@@ -48,7 +45,6 @@ func logosPorts() []logosPort {
 		{dir: "suspicious_string_intconv", rule: "stringintconv", cfg: basic},
 		{dir: "suspicious_self_assignment", rule: "assign", cfg: basic},
 		{dir: "suspicious_defer_in_loop", rule: "gocritic", cfg: standard},
-		{dir: "portability_serialized_unsized_int", rule: "unsizedint", cfg: strict},
 	}
 }
 

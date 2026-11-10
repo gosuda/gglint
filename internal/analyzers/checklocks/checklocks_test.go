@@ -8,7 +8,7 @@ import (
 	"github.com/gosuda/gglint/internal/analyzertest"
 )
 
-func TestFixtures(t *testing.T) { //nolint:paralleltest // Analyzer.Flags writes checklocks package variables.
+func TestFixtures(t *testing.T) {
 	for _, flag := range []string{"atomic", "wrappers", "inferred"} {
 		previous := Analyzer.Flags.Lookup(flag).Value.String()
 		if err := Analyzer.Flags.Set(flag, "true"); err != nil {

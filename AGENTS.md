@@ -9,6 +9,7 @@
 ## loGos parity
 
 - The `// want` lines under `internal/rules/testdata/src/` come from the `// ERROR` lines of the loGos fixtures. Do not edit them to match an analyzer. When `TestLogosPorts` fails, change the analyzer to match the loGos rule source. Never report more than loGos does.
+- A loGos rule that leaves the catalog loses its fixture under internal/rules/testdata/src/ in the same change.
 - Copied loGos fixtures keep their copyright header. `third_party/logos/LICENSE` covers them.
 
 ## Analysis facts

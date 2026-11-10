@@ -111,7 +111,7 @@ func captureStderr(t *testing.T, run func()) string {
 	return string(out)
 }
 
-func TestMainReportsMissingConfigAsInternalError(t *testing.T) { //nolint:paralleltest // swaps os.Stderr and registers flag.CommandLine
+func TestMainReportsMissingConfigAsInternalError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	unit := writeFile(t, "unit.cfg", []byte(`{"VetxOnly":false}`))
 	code := 0

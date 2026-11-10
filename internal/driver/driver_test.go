@@ -57,7 +57,7 @@ func vet(t *testing.T, run goRun) ([]finding.Finding, error) {
 	return driver.Vet(t.Context(), invocation(t.TempDir()))
 }
 
-func TestVetMapsEachDiagnosticFieldOntoTheFinding(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
+func TestVetMapsEachDiagnosticFieldOntoTheFinding(t *testing.T) {
 	cases := []struct {
 		name, diagnostic string
 		want             finding.Finding
@@ -96,7 +96,7 @@ func TestVetMapsEachDiagnosticFieldOntoTheFinding(t *testing.T) { //nolint:paral
 			}},
 		},
 	}
-	for _, c := range cases { //nolint:paralleltest // subtests set PATH through installGo
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := vet(t, goRun{stdout: `{"m/a":{"modernize_forvar":[` + c.diagnostic + `]}}` + "\n"})
 			if err != nil {
@@ -114,8 +114,8 @@ func pos(path string, line, column int) finding.Position {
 	return finding.Position{Path: path, Line: line, Column: column}
 }
 
-func TestVetCollectsEveryPackageAndAnalyzerInTheStream(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
-	stream := `{"m/a":{"printf":[{"posn":"/w/a.go:1:1","message":"a1"}],"errcheck":[{"posn":"/w/a.go:2:1","message":"a2"}]}}` + "\n" +
+func TestVetCollectsEveryPackageAndAnalyzerInTheStream(t *testing.T) {
+	stream := `{"m/a":{"printf":[{"posn":"/w/a.go:1:1","message":"a1"}],"nilness":[{"posn":"/w/a.go:2:1","message":"a2"}]}}` + "\n" +
 		`{"m/b":{"printf":[{"posn":"/w/b.go:1:1","message":"b1"},{"posn":"/w/b.go:2:1","message":"b2"}]}}` + "\n"
 	got, err := vet(t, goRun{stdout: stream})
 	if err != nil {
@@ -126,13 +126,13 @@ func TestVetCollectsEveryPackageAndAnalyzerInTheStream(t *testing.T) { //nolint:
 		seen = append(seen, f.Rule+"|"+f.Message)
 	}
 	slices.Sort(seen)
-	if want := []string{"errcheck|a2", "printf|a1", "printf|b1", "printf|b2"}; !slices.Equal(seen, want) {
+	if want := []string{"nilness|a2", "printf|a1", "printf|b1", "printf|b2"}; !slices.Equal(seen, want) {
 		t.Fatalf("findings = %v, want %v", seen, want)
 	}
 }
 
-func TestVetCleanOutputHasNoFindingsAndNoError(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
-	for _, stdout := range []string{"", "{}\n", `{"m/a":{}}`, `{"m/a":{"printf":[]}}` + "\n" + `{"m/b":{"errcheck":[]}}`} { //nolint:paralleltest // subtests set PATH through installGo
+func TestVetCleanOutputHasNoFindingsAndNoError(t *testing.T) {
+	for _, stdout := range []string{"", "{}\n", `{"m/a":{}}`, `{"m/a":{"printf":[]}}` + "\n" + `{"m/b":{"nilness":[]}}`} {
 		t.Run(strconv.Quote(stdout), func(t *testing.T) {
 			got, err := vet(t, goRun{stdout: stdout, stderr: "go: downloading example.com/x v1.0.0\n"})
 			if err != nil || len(got) != 0 {
@@ -142,17 +142,17 @@ func TestVetCleanOutputHasNoFindingsAndNoError(t *testing.T) { //nolint:parallel
 	}
 }
 
-func TestVetAnalyzerErrorObjectIsInternalError(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
-	const failure = `"errcheck":{"error":"boom"}`
+func TestVetAnalyzerErrorObjectIsInternalError(t *testing.T) {
+	const failure = `"nilness":{"error":"boom"}`
 	cases := map[string]string{
 		"alone":                          `{"m/z":{` + failure + `}}`,
 		"after another package's output": `{"m/a":{"printf":[{"posn":"/w/a.go:1:1","message":"m"}]}}` + "\n" + `{"m/z":{` + failure + `}}`,
 		"beside a diagnostic analyzer":   `{"m/z":{"printf":[{"posn":"/w/a.go:1:1","message":"m"}],` + failure + `}}`,
 	}
-	for name, stdout := range cases { //nolint:paralleltest // subtests set PATH through installGo
+	for name, stdout := range cases {
 		t.Run(name, func(t *testing.T) {
 			got, err := vet(t, goRun{stdout: stdout})
-			if want := "internal: m/z: errcheck: boom"; err == nil || err.Error() != want {
+			if want := "internal: m/z: nilness: boom"; err == nil || err.Error() != want {
 				t.Fatalf("error = %v, want %q", err, want)
 			}
 			if got != nil {
@@ -162,14 +162,14 @@ func TestVetAnalyzerErrorObjectIsInternalError(t *testing.T) { //nolint:parallel
 	}
 }
 
-func TestVetMalformedStdoutIsLoadError(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
-	for _, stdout := range []string{ //nolint:paralleltest // subtests set PATH through installGo
+func TestVetMalformedStdoutIsLoadError(t *testing.T) {
+	for _, stdout := range []string{
 		`{"m/a":`,
 		`[1]`,
 		`{} trailing`,
 		`{"m/a":{"printf":"text"}}`,
 		`{"m/a":{"printf":[{"posn":5}]}}`,
-		`{"m/a":{"errcheck":{"error":5}}}`,
+		`{"m/a":{"nilness":{"error":5}}}`,
 	} {
 		t.Run(stdout, func(t *testing.T) {
 			got, err := vet(t, goRun{stdout: stdout})
@@ -183,7 +183,7 @@ func TestVetMalformedStdoutIsLoadError(t *testing.T) { //nolint:paralleltest // 
 	}
 }
 
-func TestVetTypecheckLineGrammar(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
+func TestVetTypecheckLineGrammar(t *testing.T) {
 	work := t.TempDir()
 	typecheck := func(path string, line, column int, message string) *finding.Finding {
 		return &finding.Finding{Rule: finding.TypecheckRule, Message: message, Pos: pos(path, line, column)}
@@ -207,7 +207,7 @@ func TestVetTypecheckLineGrammar(t *testing.T) { //nolint:paralleltest // instal
 		{"a.go:1:2:", nil},
 		{"go: no Go files in /w", nil},
 	}
-	for _, c := range cases { //nolint:paralleltest // subtests set PATH through installGo
+	for _, c := range cases {
 		t.Run(c.line, func(t *testing.T) {
 			stderr := "# m/a\n" + c.line + "\n"
 			installGo(t, goRun{stderr: stderr, code: 1})
@@ -228,7 +228,7 @@ func TestVetTypecheckLineGrammar(t *testing.T) { //nolint:paralleltest // instal
 	}
 }
 
-func TestVetFailureKeepsAnalyzerFindingsBesideTypecheck(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
+func TestVetFailureKeepsAnalyzerFindingsBesideTypecheck(t *testing.T) {
 	got, err := vet(t, goRun{
 		stdout: `{"m/b":{"printf":[{"posn":"/w/b.go:1:1","message":"bad verb"}]}}`,
 		stderr: "# m/a\n/w/a.go:4:2: undefined: x\n",
@@ -247,7 +247,7 @@ func TestVetFailureKeepsAnalyzerFindingsBesideTypecheck(t *testing.T) { //nolint
 	}
 }
 
-func TestGoCommandLine(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
+func TestGoCommandLine(t *testing.T) {
 	cases := []struct {
 		name      string
 		fix       bool
@@ -259,7 +259,7 @@ func TestGoCommandLine(t *testing.T) { //nolint:paralleltest // installGo stubs 
 		{"fix", true, nil, []string{"-config=/cache/config.json", "-fix", "-vettool=/opt/gglint"}},
 		{"fix with tags", true, []string{"integration"}, []string{"-config=/cache/config.json", "-fix", "-tags=integration", "-vettool=/opt/gglint"}},
 	}
-	for _, c := range cases { //nolint:paralleltest // subtests set PATH through installGo
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dir := installGo(t, goRun{})
 			inv := invocation(t.TempDir())
@@ -302,7 +302,7 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-func TestFixErrorClassification(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
+func TestFixErrorClassification(t *testing.T) {
 	cases := []struct {
 		name    string
 		run     goRun
@@ -312,7 +312,7 @@ func TestFixErrorClassification(t *testing.T) { //nolint:paralleltest // install
 		{"failure with a source position", goRun{stderr: "# m/a\n./a.go:1:2: undefined: x\n", code: 1}, "<nil>"},
 		{"failure without a source position", goRun{stderr: "\ngo: go.mod file not found\n\n", code: 1}, "load: go: go.mod file not found"},
 	}
-	for _, c := range cases { //nolint:paralleltest // subtests set PATH through installGo
+	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			installGo(t, c.run)
 			err := driver.Fix(t.Context(), invocation(t.TempDir()))
@@ -334,7 +334,7 @@ func TestMissingGoCommandIsLoadError(t *testing.T) {
 	}
 }
 
-func TestCanceledContextIsReportedAsCancellation(t *testing.T) { //nolint:paralleltest // installGo stubs go through process-global PATH.
+func TestCanceledContextIsReportedAsCancellation(t *testing.T) {
 	installGo(t, goRun{})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
