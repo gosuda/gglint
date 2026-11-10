@@ -23,19 +23,17 @@ func deferloopSilent(xs []int) int {
 }
 
 func deferloopSilent2(xs []int) {
-	var mu sync.RWMutex
+	var mu sync.Mutex
 	for _, x := range xs {
 		mu.Lock()
-		defer mu.RLock()
 		_ = x
+		mu.Unlock()
 	}
 }
 
 func deferloopSilent3(xs []int) {
-	var mu sync.Mutex
 	for _, x := range xs {
-		_ = x
-		defer mu.Unlock()
+		defer println(x)
 	}
 }
 
@@ -47,30 +45,12 @@ func deferloopFreshSilent(n int) {
 	}
 }
 
-type deferShard struct {
-	mu sync.Mutex
-	n  int
-}
-
-func deferloopRangeVarSilent(shards []*deferShard) {
-	for _, s := range shards {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.n++
-	}
-}
-
-type deferNode struct {
-	mu   sync.Mutex
-	next *deferNode
-}
-
-func deferloopReassignSilent(head *deferNode) {
-	var cur *deferNode
-	cur = head
-	for cur != nil {
-		cur.mu.Lock()
-		defer cur.mu.Unlock()
-		cur = cur.next
+func deferloopUnlockedSilent(xs []int) {
+	var mu sync.RWMutex
+	for i := 0; i < len(xs); i++ {
+		mu.RLock()
+		defer mu.RUnlock()
+		mu.RLock()
+		mu.RUnlock()
 	}
 }

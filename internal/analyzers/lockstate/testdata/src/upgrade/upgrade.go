@@ -92,3 +92,13 @@ func upgradeNestedReported(mu *sync.RWMutex) {
 	mu.RUnlock()
 	mu.Lock() // want "is read-locked by this goroutine, so this Lock waits for itself"
 }
+func upgradeAddrStoredSilent() {
+	var mu sync.RWMutex
+	p := &mu
+	mu.RLock()
+	mu.RLock()
+	p.RUnlock()
+	mu.RUnlock()
+	mu.Lock()
+	mu.Unlock()
+}

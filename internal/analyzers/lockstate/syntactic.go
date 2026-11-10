@@ -93,6 +93,9 @@ func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt) {
 	if !loopHasLock(pass, sc.list, i, dk, want) {
 		return
 	}
+	if loopUnlocks(pass, sc.list, dk) {
+		return
+	}
 	recv := recvText(pass.TypesInfo, ds.Call)
 	pass.Reportf(ds.Call.Pos(), "the deferred unlock runs at function exit, so the second iteration locks %s while it is held: unlock at the end of each iteration", recv)
 }
@@ -264,6 +267,15 @@ func stmtIsLock(pass *analysis.Pass, st ast.Stmt, key flow.Key, want string) boo
 	return ok && k == key && m == want
 }
 
+func loopUnlocks(pass *analysis.Pass, list []ast.Stmt, key flow.Key) bool {
+	for _, st := range list {
+		if stmtIsLock(pass, st, key, methodUnlock) || stmtIsLock(pass, st, key, methodRUnlock) {
+			return true
+		}
+	}
+	return false
+}
+
 func runTrylock(pass *analysis.Pass) (any, error) {
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
 		checkTrylock(pass, cur.Node())
@@ -402,7 +414,7 @@ func checkSelfcopyCall(pass *analysis.Pass, rv *types.Var, call *ast.CallExpr) {
 		return
 	}
 	recv := recvText(pass.TypesInfo, call)
-	pass.Reportf(call.Pos(), "this method has a value receiver, so it locks a copy of %s and excludes nothing: use a pointer receiver", recv)
+	pass.Reportf(call.Pos(), "this method has a value receiver, so it locks a copy of %s: other callers are not excluded, and a caller that already holds the lock makes this Lock wait forever: use a pointer receiver", recv)
 }
 
 func pathHasPointer(root types.Type, path string) bool {

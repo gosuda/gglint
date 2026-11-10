@@ -38,38 +38,46 @@ func modStep(op string, cur modState) modState {
 	case "Lock":
 		return modState{kind: modWrite}
 	case "RLock":
-		if cur.kind == modWrite {
-			return modState{kind: modUnknown}
-		}
-		if cur.kind == modRead {
-			if !cur.exact {
-				return modInexactRead(cur.depth + 1)
-			}
-			return modState{kind: modRead, depth: cur.depth + 1, exact: true}
-		}
-		if cur.kind == modUnknown {
-			return modInexactRead(1)
-		}
-		return modState{kind: modRead, depth: 1, exact: true}
+		return modRLock(cur)
 	case "Unlock":
 		if cur.kind == modWrite {
 			return modState{kind: modFree}
 		}
 		return modState{kind: modUnknown}
 	case "RUnlock":
-		if cur.kind == modRead && !cur.exact {
-			if cur.depth >= 2 {
-				return modInexactRead(cur.depth - 1)
-			}
-			return modState{kind: modUnknown}
+		return modRUnlock(cur)
+	}
+	return modState{kind: modUnknown}
+}
+
+func modRLock(cur modState) modState {
+	if cur.kind == modWrite {
+		return modState{kind: modUnknown}
+	}
+	if cur.kind == modRead {
+		if !cur.exact {
+			return modInexactRead(cur.depth + 1)
 		}
-		if cur.kind == modRead && cur.depth > 1 {
-			return modState{kind: modRead, depth: cur.depth - 1, exact: true}
-		}
-		if cur.kind == modRead {
-			return modState{kind: modFree}
+		return modState{kind: modRead, depth: cur.depth + 1, exact: true}
+	}
+	if cur.kind == modUnknown {
+		return modInexactRead(1)
+	}
+	return modState{kind: modRead, depth: 1, exact: true}
+}
+
+func modRUnlock(cur modState) modState {
+	if cur.kind == modRead && !cur.exact {
+		if cur.depth >= 2 {
+			return modInexactRead(cur.depth - 1)
 		}
 		return modState{kind: modUnknown}
+	}
+	if cur.kind == modRead && cur.depth > 1 {
+		return modState{kind: modRead, depth: cur.depth - 1, exact: true}
+	}
+	if cur.kind == modRead {
+		return modState{kind: modFree}
 	}
 	return modState{kind: modUnknown}
 }

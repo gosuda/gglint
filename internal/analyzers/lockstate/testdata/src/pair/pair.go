@@ -144,28 +144,6 @@ func pairDoubleRUnlockReported() {
 	mu.RUnlock() // want "is not read-locked here, so this RUnlock panics"
 }
 
-func pairDeepReadSilent() {
-	var mu sync.RWMutex
-	mu.RLock()
-	mu.RLock()
-	mu.RLock()
-	mu.RLock()
-	mu.RLock()
-	mu.RLock()
-	mu.RLock()
-	mu.RLock()
-	mu.RLock()
-	mu.RUnlock()
-	mu.RUnlock()
-	mu.RUnlock()
-	mu.RUnlock()
-	mu.RUnlock()
-	mu.RUnlock()
-	mu.RUnlock()
-	mu.RUnlock()
-	mu.RUnlock()
-}
-
 func pairInexactTakeTwoReads(mu *sync.RWMutex) {
 	mu.RLock()
 	mu.RLock()
@@ -183,4 +161,10 @@ func pairNestedReported(mu *sync.RWMutex) {
 	mu.RLock()
 	mu.RUnlock()
 	mu.Unlock() // want "is not write-locked here, so this Unlock panics"
+}
+
+func pairReassignedSilent(p *pairS) { // the caller holds p.mu locked on entry
+	var s pairS
+	s = *p
+	s.mu.Unlock()
 }

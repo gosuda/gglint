@@ -41,6 +41,9 @@ func checkLeak(pass *analysis.Pass, fn ast.Node) {
 
 func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key) {
 	info := pass.TypesInfo
+	if storedAddress(info, fn, key) {
+		return
+	}
 	if hasDeferred(info, fn, key) {
 		return
 	}
@@ -102,7 +105,7 @@ func (c *leakCtx) reportOne(r *ast.ReturnStmt) {
 	if !c.good(r) && !c.endFree {
 		return
 	}
-	c.pass.Reportf(r.Pos(), "this return leaves %s locked while another return unlocks it, so the next Lock blocks forever: defer the unlock right after the lock", c.recv)
+	c.pass.Reportf(r.Pos(), "this return leaves %s locked while another path unlocks it: unlock before returning, or defer the unlock right after the lock", c.recv)
 }
 
 func (c *leakCtx) good(skip *ast.ReturnStmt) bool {

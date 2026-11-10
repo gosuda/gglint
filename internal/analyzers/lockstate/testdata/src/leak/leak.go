@@ -14,7 +14,7 @@ var errBad = errors.New("bad")
 func leakReported(s *S, bad bool) error {
 	s.mu.Lock()
 	if bad {
-		return errBad // want "this return leaves s.mu locked while another return unlocks it"
+		return errBad // want "this return leaves s.mu locked while another path unlocks it: unlock before returning"
 	}
 	s.mu.Unlock()
 	return nil
@@ -23,7 +23,7 @@ func leakReported(s *S, bad bool) error {
 func leakReported2(s *S, bad bool) {
 	s.mu.Lock()
 	if bad {
-		return // want "this return leaves s.mu locked while another return unlocks it"
+		return // want "this return leaves s.mu locked while another path unlocks it: unlock before returning"
 	}
 	s.mu.Unlock()
 }
@@ -39,6 +39,7 @@ func leakSilent(s *S, bad bool) error {
 
 func leakSilent2(s *S) int {
 	s.mu.Lock()
+	s.mu.Unlock()
 	return 1
 }
 
@@ -63,6 +64,7 @@ func touchLeak(m *sync.Mutex) {
 func tailUnknownSilent(s *S, n int) {
 	s.mu.Lock()
 	if n > 0 {
+		s.mu.Unlock()
 		return
 	}
 	touchLeak(&s.mu)
@@ -72,7 +74,7 @@ func tailUnknownSilent(s *S, n int) {
 func endFreeReported(s *S, n int) {
 	s.mu.Lock()
 	if n > 0 {
-		return // want "this return leaves s.mu locked while another return unlocks it"
+		return // want "this return leaves s.mu locked while another path unlocks it: unlock before returning"
 	}
 	if n == 0 {
 		s.mu.Unlock()
@@ -95,13 +97,13 @@ type embedS struct {
 	sync.Mutex
 }
 
-func leakTextReported(s *embedS, bad bool) error {
+func leakTextReported(s *embedS, bad bool) error { // the caller holds s.Mutex on entry
 	if bad {
 		s.Mutex.Unlock()
 	}
 	s.Lock()
 	if bad {
-		return errBad // want "this return leaves s locked while another return unlocks it"
+		return errBad // want "this return leaves s locked while another path unlocks it: unlock before returning"
 	}
 	s.Unlock()
 	return nil
@@ -111,12 +113,13 @@ type leakR struct {
 	mu sync.RWMutex
 }
 
-func leakMismatchSilent(r *leakR, bad bool) {
+func leakReadSilent(r *leakR, bad bool) {
 	r.mu.RLock()
 	if bad {
+		r.mu.RUnlock()
 		return
 	}
-	r.mu.Unlock()
+	r.mu.RUnlock()
 }
 
 func leakHelperReleaseSilent(s *S, ok bool) error {

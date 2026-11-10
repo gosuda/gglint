@@ -28,6 +28,9 @@ func checkPair(pass *analysis.Pass, fn ast.Node) {
 
 func checkPairKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key) {
 	info := pass.TypesInfo
+	if storedAddress(info, fn, key) {
+		return
+	}
 	entry := entryState(info, fn, key)
 	tr := func(n ast.Node, s state) state {
 		return applyNode(info, key, n, s)

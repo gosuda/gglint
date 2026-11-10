@@ -130,10 +130,56 @@ func entryState(info *types.Info, fn ast.Node, key flow.Key) state {
 	if def, ok := flow.DefinedBy(info, fn, v); ok && !emptyLiteral(def) {
 		return unknownState
 	}
+	if assignedBeyondDecl(info, fn, v) {
+		return unknownState
+	}
 	if lockExposed(info, fn, key) {
 		return unknownState
 	}
 	return freeState
+}
+
+func assignsVar(info *types.Info, n ast.Node, v *types.Var) bool {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	return assignTargetsVar(info, as, v)
+}
+
+func assignTargetsVar(info *types.Info, as *ast.AssignStmt, v *types.Var) bool {
+	if as.Tok != token.ASSIGN {
+		return false
+	}
+	for _, lhs := range as.Lhs {
+		id, ok := ast.Unparen(lhs).(*ast.Ident)
+		if ok && id.Name != "_" && info.Uses[id] == v {
+			return true
+		}
+	}
+	return false
+}
+
+func assignedBeyondDecl(info *types.Info, fn ast.Node, v *types.Var) bool {
+	var fnLit *ast.FuncLit
+	if l, ok := fn.(*ast.FuncLit); ok {
+		fnLit = l
+	}
+	found := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if l, ok := n.(*ast.FuncLit); ok && l != fnLit {
+			return false
+		}
+		if assignsVar(info, n, v) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func emptyLiteral(e ast.Expr) bool {
@@ -265,26 +311,65 @@ func mutexFunSet(info *types.Info, fn ast.Node, key flow.Key) map[ast.Expr]bool 
 	return funs
 }
 
-func takesAddress(info *types.Info, n ast.Node, key flow.Key) bool {
+func storedAddress(info *types.Info, fn ast.Node, key flow.Key) bool {
+	var fnLit *ast.FuncLit
+	if l, ok := fn.(*ast.FuncLit); ok {
+		fnLit = l
+	}
 	found := false
-	ast.Inspect(n, func(x ast.Node) bool {
+	ast.Inspect(fn, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		if _, ok := x.(*ast.FuncLit); ok {
+		if l, ok := n.(*ast.FuncLit); ok && l != fnLit {
 			return false
 		}
-		u, ok := x.(*ast.UnaryExpr)
-		if !ok {
-			return true
-		}
-		if encloses(info, u.X, key) {
-			found = true
-			return false
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			if rhsStoresAddress(info, n.Rhs, key) {
+				found = true
+				return false
+			}
+		case *ast.ValueSpec:
+			if rhsStoresAddress(info, n.Values, key) {
+				found = true
+				return false
+			}
 		}
 		return true
 	})
 	return found
+}
+
+func rhsStoresAddress(info *types.Info, rhs []ast.Expr, key flow.Key) bool {
+	for _, e := range rhs {
+		if storesAddrInExpr(info, e, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func storesAddrInExpr(info *types.Info, e ast.Expr, key flow.Key) bool {
+	stored := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if stored {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		u, ok := n.(*ast.UnaryExpr)
+		if !ok {
+			return true
+		}
+		if u.Op == token.AND && encloses(info, u.X, key) {
+			stored = true
+			return false
+		}
+		return true
+	})
+	return stored
 }
 
 func collectKeys(info *types.Info, fn ast.Node) []flow.Key {
@@ -324,11 +409,7 @@ func joinState(a, b state) state {
 		return a
 	}
 	if a.kind == readKind && b.kind == readKind && (!a.exact || !b.exact) {
-		depth := a.depth
-		if b.depth < depth {
-			depth = b.depth
-		}
-		return inexactReadState(depth)
+		return inexactReadState(min(a.depth, b.depth))
 	}
 	return unknownState
 }
@@ -453,9 +534,6 @@ func applyNode(info *types.Info, key flow.Key, n ast.Node, cur state) state {
 	if ds, ok := n.(*ast.DeferStmt); ok {
 		return deferArgs(info, key, ds, cur)
 	}
-	if takesAddress(info, n, key) {
-		return unknownState
-	}
 	skips := mutexFunSet(info, n, key)
 	next := cur
 	ast.Inspect(n, func(x ast.Node) bool {
@@ -469,9 +547,6 @@ func applyNode(info *types.Info, key flow.Key, n ast.Node, cur state) state {
 func deferArgs(info *types.Info, key flow.Key, ds *ast.DeferStmt, cur state) state {
 	next := cur
 	for _, arg := range ds.Call.Args {
-		if takesAddress(info, arg, key) {
-			return unknownState
-		}
 		ast.Inspect(arg, func(x ast.Node) bool {
 			var cont bool
 			next, cont = visitNode(info, key, x, next, nil)

@@ -20,28 +20,28 @@ func Analyzers() []*analysis.Analyzer {
 
 var pairAnalyzer = &analysis.Analyzer{
 	Name:     "pair",
-	Doc:      "reports Unlock and RUnlock calls that panic on the current lock state",
+	Doc:      "reports Unlock and RUnlock calls that panic on a mutex state this function sets with its own lock calls; a mutex passed to other code, and a lock taken or released out of sight, are not modelled",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runPair,
 }
 
 var upgradeAnalyzer = &analysis.Analyzer{
 	Name:     "upgrade",
-	Doc:      "reports Lock taken while the goroutine holds a read lock",
+	Doc:      "reports Lock taken in this function while a read lock this function took is held; a read lock taken or released out of sight, including by a called helper, is not seen",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUpgrade,
 }
 
 var leakAnalyzer = &analysis.Analyzer{
 	Name:     "leak",
-	Doc:      "reports returns that leave a mutex locked on one path but not another",
+	Doc:      "reports a return that leaves a mutex locked while another path of the same function unlocks it, including a lock handed to the caller; silent for a mutex with a deferred unlock, a local mutex never shared, or a mutex passed to other code",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runLeak,
 }
 
 var deferloopAnalyzer = &analysis.Analyzer{
 	Name:     "deferloop",
-	Doc:      "reports deferred unlocks inside loop bodies that hold the lock across iterations",
+	Doc:      "reports a deferred Unlock or RUnlock placed directly in a loop body after a direct Lock or RLock of the same mutex; nested blocks are not checked, and a body that unlocks the mutex itself is not reported",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runDeferloop,
 }
