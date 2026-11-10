@@ -400,3 +400,34 @@ func fanoutSemaphoreSilent(xs []int) int {
 	}
 	return out
 }
+
+func fanoutTokenRecvSendSilent(xs []int) int {
+	tok := make(chan struct{}, 1)
+	tok <- struct{}{}
+	total := 0
+	for _, x := range xs {
+		go func() {
+			<-tok
+			total += x
+			tok <- struct{}{}
+		}()
+	}
+	return 0
+}
+
+func fanoutCondSemReported(xs []int) int {
+	sem := make(chan struct{}, 1)
+	out := 0
+	for _, x := range xs {
+		go func() {
+			if x > 0 {
+				sem <- struct{}{}
+			}
+			out = x // want `out is written by every goroutine this loop starts, so the writes race when two of them overlap: collect results through a channel, or guard the write with a mutex`
+			if x > 0 {
+				<-sem
+			}
+		}()
+	}
+	return out
+}

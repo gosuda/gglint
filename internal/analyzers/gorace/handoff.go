@@ -383,25 +383,6 @@ func funcDeclFor(pass *analysis.Pass, fn *types.Func) *ast.FuncDecl {
 	return nil
 }
 
-func fanoutOrdered(pass *analysis.Pass, fn ast.Node, s flow.Spawn, accessPos token.Pos, buffered map[flow.Key]bool) bool {
-	if s.Body == nil {
-		return false
-	}
-	o := scanLitOrder(pass, s.Body, accessPos)
-	if o.loadBefore && o.storeAfter {
-		return true
-	}
-	if recvBeforeUnbuffered(o, buffered) && sendAfterUnbuffered(o, buffered) {
-		return true
-	}
-	for _, k := range o.sendBeforeKeys {
-		if slices.Contains(o.recvAfterKeys, k) && chanCapIsOne(pass, fn, k) {
-			return true
-		}
-	}
-	return false
-}
-
 func recvBeforeUnbuffered(o litOrder, buffered map[flow.Key]bool) bool {
 	if o.recvBeforeUnknown {
 		return true
@@ -621,9 +602,9 @@ func (m *sharedScope) handoff(s flow.Spawn, p varAccess, po pairOrder) bool {
 	if s.Body == nil {
 		return false
 	}
-	o := po.order
+	o := mappedOrder(m.pass, s, po.order)
 	return m.mutexHandoff(s, p.stmt, o) || m.chanHandoff(s, p.stmt, po.buffered, o) ||
-		m.helperHandoff(s, p.stmt, o) || m.closeHandoff(s, p.stmt, o)
+		m.helperHandoff(s, p.stmt, o) || m.closeHandoff(s, p.stmt, o) || m.callHandoff(s, p.stmt, o)
 }
 
 func (m *sharedScope) mutexHandoff(s flow.Spawn, at ast.Node, o litOrder) bool {
@@ -670,10 +651,94 @@ func (m *sharedScope) closeHandoff(s flow.Spawn, at ast.Node, o litOrder) bool {
 	return false
 }
 
+func (m *sharedScope) callHandoff(s flow.Spawn, at ast.Node, o litOrder) bool {
+	keys := append(slices.Clone(o.closeAfterKeys), o.sendAfterKeys...)
+	for _, k := range keys {
+		if m.callsBetween(s, at, k) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *sharedScope) sendsBetween(buffered map[flow.Key]bool, s flow.Spawn, at ast.Node, k flow.Key) bool {
 	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
+		if selectIgnores(m.fn, n, at) {
+			return false
+		}
 		return nodeSendsOn(m.pass, buffered, n, k)
 	})
+}
+
+func selectIgnores(fn, n, at ast.Node) bool {
+	if fn == nil || n == nil || at == nil {
+		return false
+	}
+	sel := enclosingSelect(fn, n)
+	if sel == nil {
+		return false
+	}
+	if !within(sel, at) {
+		return true
+	}
+	cn := clauseOf(sel, n)
+	ca := clauseOf(sel, at)
+	if cn == nil || ca == nil {
+		return true
+	}
+	return cn != ca
+}
+
+func enclosingSelect(fn, n ast.Node) *ast.SelectStmt {
+	var best *ast.SelectStmt
+	bestSpan := token.Pos(1 << 30)
+	ast.Inspect(fn, func(x ast.Node) bool {
+		if _, ok := x.(*ast.FuncLit); ok && x != fn {
+			return false
+		}
+		sel, ok := x.(*ast.SelectStmt)
+		if !ok {
+			return true
+		}
+		if sel.Pos() <= n.Pos() && n.End() <= sel.End() {
+			span := sel.End() - sel.Pos()
+			if span < bestSpan {
+				bestSpan = span
+				best = sel
+			}
+		}
+		return true
+	})
+	return best
+}
+
+func within(outer, inner ast.Node) bool {
+	return outer.Pos() <= inner.Pos() && inner.End() <= outer.End()
+}
+
+func clauseOf(sel *ast.SelectStmt, n ast.Node) *ast.CommClause {
+	for _, cc := range sel.Body.List {
+		c, ok := cc.(*ast.CommClause)
+		if !ok {
+			continue
+		}
+		if clauseHas(c, n) {
+			return c
+		}
+	}
+	return nil
+}
+
+func clauseHas(c *ast.CommClause, n ast.Node) bool {
+	if c.Comm != nil && within(c.Comm, n) {
+		return true
+	}
+	for _, st := range c.Body {
+		if within(st, n) {
+			return true
+		}
+	}
+	return within(c, n)
 }
 
 func nodeSendsOn(pass *analysis.Pass, buffered map[flow.Key]bool, n ast.Node, k flow.Key) bool {
@@ -704,6 +769,9 @@ func nodeSendsOn(pass *analysis.Pass, buffered map[flow.Key]bool, n ast.Node, k 
 
 func (m *sharedScope) recvsBetween(s flow.Spawn, at ast.Node, k flow.Key) bool {
 	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
+		if selectIgnores(m.fn, n, at) {
+			return false
+		}
 		return nodeRecvsOn(m.pass, n, k)
 	})
 }
@@ -733,6 +801,9 @@ func nodeRecvsOn(pass *analysis.Pass, n ast.Node, k flow.Key) bool {
 
 func (m *sharedScope) helperRecvsBetween(s flow.Spawn, at ast.Node, k flow.Key) bool {
 	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
+		if selectIgnores(m.fn, n, at) {
+			return false
+		}
 		return nodeHelperRecvsOn(m.pass, n, k)
 	})
 }
@@ -765,6 +836,9 @@ func nodeHelperRecvsOn(pass *analysis.Pass, n ast.Node, k flow.Key) bool {
 
 func (m *sharedScope) locksBetween(s flow.Spawn, at ast.Node, k flow.Key) bool {
 	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
+		if selectIgnores(m.fn, n, at) {
+			return false
+		}
 		return nodeLocksOn(m.pass, n, k)
 	})
 }

@@ -774,7 +774,8 @@ func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess, po pairOrder) bool 
 	if !m.graph.Reaches(s.Site, p.stmt, po.avoid) {
 		return true
 	}
-	if flow.Joined(m.pass, m.graph, s, p.stmt) {
+	mapped := mappedOrder(m.pass, s, po.order)
+	if m.joinedOrders(s, p.stmt, mapped) {
 		return true
 	}
 	if m.bubbleJoined(s, p.stmt) {
@@ -784,6 +785,13 @@ func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess, po pairOrder) bool 
 		return true
 	}
 	return commonKey(m.litHeld(s.Body, lockNodeFor(a)), m.parentHeld(lockNodeFor(p)))
+}
+
+func (m *sharedScope) joinedOrders(s flow.Spawn, at ast.Node, mapped litOrder) bool {
+	if !flow.Joined(m.pass, m.graph, s, at) {
+		return false
+	}
+	return !m.joinedBroken(s, at, mapped)
 }
 
 func (m *sharedScope) bubbleJoined(s flow.Spawn, at ast.Node) bool {

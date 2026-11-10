@@ -421,3 +421,63 @@ func sharedNestedCloseSilent(wg *sync.WaitGroup, done chan struct{}) int {
 	wg.Wait()
 	return gp
 }
+
+func sharedSelectEscapeReported(ready chan struct{}) (int, int) {
+	conn := 0
+	err := 0
+	done := make(chan struct{}, 1)
+	go func() { // want `conn is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		conn = 1
+		err = 1
+		close(done)
+	}()
+	select {
+	case <-ready:
+		err = 2
+	case <-done:
+	}
+	return conn, err
+}
+
+func sharedParamRendezvousSilent() int {
+	var count int
+	c := make(chan byte)
+	go func(c chan byte) {
+		<-c
+		count++
+		count++
+		<-c
+	}(c)
+	c <- 1
+	c <- 2
+	return count
+}
+
+type sharedGate2 struct{ done chan struct{} }
+
+func (g *sharedGate2) wait2() { <-g.done }
+
+func sharedGateCallSilent() int {
+	g := &sharedGate2{done: make(chan struct{})}
+	x := 0
+	go func() {
+		x = 1
+		close(g.done)
+	}()
+	g.wait2()
+	return x
+}
+
+type sharedWaiter2 interface{ wait2() }
+
+func sharedGateInterfaceSilent() int {
+	g := &sharedGate2{done: make(chan struct{})}
+	var w sharedWaiter2 = g
+	x := 0
+	go func() {
+		x = 1
+		close(g.done)
+	}()
+	w.wait2()
+	return x
+}
