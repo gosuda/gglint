@@ -208,9 +208,9 @@ Large files and deeply nested functions exceed what a reader or an agent can hol
 
 | Hazard | Rules |
 |---|---|
-| Unjoined, unstructured, or unbounded goroutines | `goroutine` (a join in `standard`; errgroup or `WaitGroup.Go` only, exit paths, and bounded fan-out in `strict`), `testinggoroutine`, `staticcheck:SA2002` |
+| Unjoined, unstructured, or unbounded goroutines | `goroutine` (`strict`: join, errgroup or `WaitGroup.Go` only, exit paths, and bounded fan-out), `testinggoroutine`, `staticcheck:SA2002` |
 | Goroutines blocked forever on channels | `chanstate`, `chanblock` (`strict`), and the exit-path and empty-select checks of `goroutine` |
-| Lost or misused contexts | `lostcancel`, `fatcontext`, `noctx`, and in `strict` `contextcheck` and `containedctx` |
+| Lost or misused contexts | `lostcancel`, `fatcontext`, `noctx`, and in `strict` `contextcheck` |
 | Data races | `gorace`, `checklocks` (guards, `+checkatomic`, inferred guards in `strict`), `copylocks`, `atomic`, `atomicalign`, `staticcheck:SA2000` to `SA2003` |
 | `sync.WaitGroup` misuse | `wgstate`, `waitgroup`, `modernize:waitgroupgo`, `staticcheck:SA2000` |
 | Deadlock by re-entry | `lockstate`, `reentrant_withlock_deadlock`, `checklocks` double-acquire check |
