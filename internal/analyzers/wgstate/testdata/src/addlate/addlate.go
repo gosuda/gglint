@@ -175,3 +175,53 @@ func addlateSilentRLockGoroutine() {
 	mu.Unlock()
 	wg.Wait()
 }
+
+func addlateSilentEarlyAndLate() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateSilentOtherKey() {
+	var wg1, wg2 sync.WaitGroup
+	go func() {
+		wg1.Add(1)
+		defer wg1.Done()
+		work()
+	}()
+	wg2.Add(1)
+	wg2.Done()
+	wg2.Wait()
+}
+
+func addlateSilentNestedDone() {
+	var wg sync.WaitGroup
+	go func() {
+		cleanup := func() { wg.Done() }
+		_ = cleanup
+		work()
+	}()
+	wg.Add(1)
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateReportedLitAddNoOrder() {
+	var wg sync.WaitGroup
+	setup := func() {
+		wg.Add(1)
+	}
+	_ = setup
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}

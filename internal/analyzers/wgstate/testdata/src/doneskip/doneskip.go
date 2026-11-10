@@ -149,3 +149,47 @@ func doneskipReportedWgGo() {
 	})
 	wg.Wait()
 }
+
+func doneskipSilentDeferredAndPlain() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if bad() {
+			return
+			wg.Done()
+		}
+		work()
+	}()
+	wg.Wait()
+}
+
+func doneskipSilentBranchDoneBefore() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		if true {
+			wg.Done()
+		}
+		if true {
+			return
+		}
+		work()
+	}()
+	wg.Wait()
+}
+
+func doneskipSilentNestedDone() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		if bad() {
+			done := wg.Done
+			done()
+			return
+		}
+		fn := func() { wg.Done() }
+		fn()
+	}()
+	wg.Wait()
+}

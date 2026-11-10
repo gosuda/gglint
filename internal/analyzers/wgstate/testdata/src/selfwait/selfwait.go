@@ -101,3 +101,55 @@ func selfwaitSilentHiddenAdd(c bool, n int) {
 	wg.Done()
 	wg.Wait()
 }
+
+func selfwaitSilentNonConstElsewhere(c bool, n int) {
+	var wg sync.WaitGroup
+	if c {
+		wg.Add(n)
+	}
+	wg.Add(1)
+	return
+	wg.Wait()
+}
+
+func selfwaitSilentDeferLit() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	defer func() { wg.Done() }()
+	return
+	wg.Wait()
+}
+
+func selfwaitSilentAcrossIf(c bool) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	if c {
+		println("x")
+	}
+	return
+	wg.Wait()
+}
+
+func selfwaitSilentParam(wg *sync.WaitGroup) {
+	wg.Add(1)
+	return
+	wg.Wait()
+}
+
+func selfwaitSilentBranchDoneBefore(c bool) {
+	var wg sync.WaitGroup
+	if false {
+		wg.Done()
+	}
+	wg.Add(1)
+	return
+	wg.Wait()
+}
+
+func selfwaitSilentGoField() {
+	var c selfwaitJob
+	c.wg.Add(1)
+	go c.wg.Add(1)
+	return
+	c.wg.Wait()
+}
