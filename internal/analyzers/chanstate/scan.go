@@ -98,9 +98,6 @@ func (s *nilSeen) visit(info *types.Info, n ast.Node, k flow.Key) {
 }
 
 func (s *nilSeen) assignStmt(info *types.Info, n *ast.AssignStmt, k flow.Key) {
-	if n.Tok != token.ASSIGN {
-		return
-	}
 	s.assigned = s.assigned || targets(info, n.Lhs, k)
 }
 
@@ -208,7 +205,31 @@ func makeDef(info *types.Info, fn ast.Node, k flow.Key) (*ast.CallExpr, bool) {
 	return calls[0], true
 }
 
+func reassigned(info *types.Info, fn ast.Node, k flow.Key) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if a, ok := n.(*ast.AssignStmt); ok && a.Tok == token.ASSIGN && targets(info, a.Lhs, k) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
 func madeCap(info *types.Info, fn ast.Node, k flow.Key) (int64, bool) {
+	if reassigned(info, fn, k) {
+		return 0, false
+	}
 	call, ok := makeDef(info, fn, k)
 	if !ok {
 		return 0, false
@@ -445,7 +466,10 @@ func exitsBranch(s *ast.BranchStmt, depth int) bool {
 	if s.Tok == token.GOTO {
 		return true
 	}
-	return s.Tok == token.BREAK && (s.Label != nil || depth == 0)
+	if s.Label != nil {
+		return true
+	}
+	return s.Tok == token.BREAK && depth == 0
 }
 
 func exitsIf(s *ast.IfStmt, depth int) bool {
@@ -917,7 +941,7 @@ func (w *handWalker) stores(lhs []ast.Expr) bool {
 
 func (w *handWalker) storesOne(l ast.Expr) bool {
 	switch l := ast.Unparen(l).(type) {
-	case *ast.SelectorExpr, *ast.IndexExpr:
+	case *ast.SelectorExpr, *ast.IndexExpr, *ast.StarExpr:
 		return true
 	case *ast.Ident:
 		return w.storesGlobal(l)

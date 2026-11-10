@@ -247,3 +247,43 @@ func firstresultSilentDrainParam(xs []int) {
 		<-done
 	}
 }
+
+func firstresultSilentNestedSend() int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() {
+			if i == 0 {
+				ch <- i
+			}
+		}()
+	}
+	return <-ch
+}
+
+func firstresultSilentLabeledLoop() int {
+	ch := make(chan int)
+	if false {
+		goto LFirst
+	}
+LFirst:
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }()
+	}
+	for j := 0; j < 3; j++ {
+		<-ch
+	}
+	return 0
+}
+
+func firstresultSilentIfInit() int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { ch <- i }()
+	}
+	<-ch
+	<-ch
+	if v := <-ch; v >= 0 {
+		_ = v
+	}
+	return 0
+}

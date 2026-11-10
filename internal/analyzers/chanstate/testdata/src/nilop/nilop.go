@@ -47,3 +47,19 @@ func nilopSilentAddress() {
 }
 
 func nilopNoBody(ch chan int)
+
+func nilopReportedVarInit() int {
+	var ch chan int
+	var v = <-ch // want `ch is declared and never made, so this operation blocks forever \(close panics\): make the channel first`
+	return v
+}
+
+func nilopSilentDefineReassign() int {
+	var ch chan int
+	n, ch := 1, make(chan int, 1)
+	ch <- n
+	for v := range ch {
+		return v
+	}
+	return 0
+}

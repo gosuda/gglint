@@ -132,3 +132,25 @@ func rangeunclosedSilentAlias() {
 		_ = v
 	}
 }
+
+func rangeunclosedSilentReassign(src chan int) {
+	ch := make(chan int)
+	ch = src
+	for v := range ch {
+		useRange(v)
+	}
+}
+
+func rangeunclosedSilentLabeledContinue() int {
+	ch := make(chan int)
+	go func() { ch <- 1; ch <- 1 }()
+OuterRange:
+	for i := 0; i < 2; i++ {
+		for v := range ch {
+			if v > 0 {
+				continue OuterRange
+			}
+		}
+	}
+	return 0
+}

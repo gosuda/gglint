@@ -25,7 +25,15 @@ func loneSend(info *types.Info, lit *ast.FuncLit) (chanOp, bool) {
 		}
 		send, found = op, true
 	}
-	return send, found
+	if !found {
+		return chanOp{}, false
+	}
+	for _, s := range lit.Body.List {
+		if s == send.Expr {
+			return send, true
+		}
+	}
+	return chanOp{}, false
 }
 
 func loneSends(info *types.Info, lit *ast.FuncLit) []chanOp {
@@ -88,11 +96,11 @@ func insideComm(cc *ast.CommClause, n ast.Node) bool {
 func straightRecvs(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) (int64, bool) {
 	list := enclosingList(fn, loop)
 	if list == nil {
-		return 0, true
+		return 0, false
 	}
 	start := sliceIndex(list, loop)
 	if start < 0 {
-		return 0, true
+		return 0, false
 	}
 	var count int64
 	for _, s := range list[start+1:] {
@@ -130,7 +138,7 @@ func stepAfterLoop(info *types.Info, fn ast.Node, loop, s ast.Stmt, k flow.Key, 
 }
 
 func drainLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
-	switch s.(type) {
+	switch s := s.(type) {
 	case *ast.ForStmt, *ast.RangeStmt:
 		straight := drainBodyStraight(info, s, k)
 		if countLoopRecvs(info, s, k) != straight {
@@ -144,8 +152,34 @@ func drainLoopRecvs(info *types.Info, s ast.Stmt, k flow.Key) (int64, bool) {
 			return 0, false
 		}
 		return trip * straight, true
+	case *ast.IfStmt:
+		return stmtRecvs(info, s.Init, k) + exprRecvs(info, s.Cond, k), true
+	case *ast.SwitchStmt:
+		return stmtRecvs(info, s.Init, k) + exprRecvs(info, s.Tag, k), true
 	}
 	return 0, true
+}
+
+func stmtRecvs(info *types.Info, s ast.Stmt, k flow.Key) int64 {
+	if s == nil {
+		return 0
+	}
+	return recvCount(info, s, k)
+}
+
+func exprRecvs(info *types.Info, x ast.Expr, k flow.Key) int64 {
+	if x == nil {
+		return 0
+	}
+	w := &opWalker{info: info, key: k}
+	w.expr(x)
+	var count int64
+	for _, op := range w.out {
+		if op.Kind == opRecv && !op.InSelect {
+			count++
+		}
+	}
+	return count
 }
 
 func drainBodyStraight(info *types.Info, s ast.Stmt, k flow.Key) int64 {

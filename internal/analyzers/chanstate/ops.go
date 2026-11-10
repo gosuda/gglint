@@ -44,6 +44,7 @@ func opsOf(info *types.Info, n ast.Node, k flow.Key) []chanOp {
 	case ast.Stmt:
 		w.stmt(n)
 	case *ast.ValueSpec:
+		w.exprs(n.Values)
 		w.valueSpec(n)
 	case ast.Expr:
 		w.expr(n)

@@ -59,3 +59,28 @@ func selfdeadlockSilentRich() {
 	ch <- 1
 	<-ch
 }
+
+func selfdeadlockSilentAlias() int {
+	ch := make(chan int)
+	r := ch
+	go func() { v := <-r; r <- v + 1 }()
+	ch <- 1
+	return <-ch
+}
+
+func selfdeadlockSilentReassign() int {
+	ch := make(chan int)
+	ch = make(chan int, 1)
+	ch <- 1
+	return <-ch
+}
+
+func selfdeadlockSilentPtrStore() int {
+	ch := make(chan int)
+	var slot chan int
+	p := &slot
+	*p = ch
+	go func() { v := <-slot; slot <- v + 1 }()
+	ch <- 1
+	return <-ch
+}

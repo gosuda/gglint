@@ -110,7 +110,7 @@ func runSelfdeadlock(pass *analysis.Pass) (any, error) {
 func selfdeadlockCheck(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
 	info := pass.TypesInfo
 	for _, k := range chanLocals(info, fn) {
-		if !unbuffered(info, fn, k) || literalMentions(info, fn, k) {
+		if !unbuffered(info, fn, k) || literalMentions(info, fn, k) || channelCopied(info, fn, k) {
 			continue
 		}
 		if first, ok := deadPair(g, chanOps(info, fn, k, opSend|opRecv)); ok {
@@ -157,7 +157,7 @@ func rangeKeyDecl(info *types.Info, fn ast.Node, r *ast.RangeStmt) (flow.Key, bo
 	if _, ok := makeDef(info, fn, k); !ok {
 		return flow.Key{}, false
 	}
-	if channelCopied(info, fn, k) {
+	if channelCopied(info, fn, k) || reassigned(info, fn, k) {
 		return flow.Key{}, false
 	}
 	return k, true
@@ -244,7 +244,7 @@ func firstresultReady(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) 
 	if hasRange(info, fn, k) {
 		return false
 	}
-	if handsOn(info, fn, k) {
+	if handsOn(info, fn, k) || channelCopied(info, fn, k) {
 		return false
 	}
 	if spawnDrains(info, fn, k) {
