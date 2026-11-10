@@ -38,7 +38,7 @@ var useafterputAnalyzer = &analysis.Analyzer{
 
 var useafterfreeAnalyzer = &analysis.Analyzer{
 	Name:     "useafterfree",
-	Doc:      "reports uses of values freed on every path to the use",
+	Doc:      "reports uses of values freed on every path to the use; a value held in a uintptr variable is not tracked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUseafterfree,
 }
@@ -308,10 +308,14 @@ func isFreeableVar(v *types.Var) bool {
 	if t == nil {
 		return false
 	}
-	if t.String() == unsafePointerType {
+	u := types.Unalias(t).Underlying()
+	if u == nil {
+		return false
+	}
+	if u.String() == unsafePointerType {
 		return true
 	}
-	switch types.Unalias(t).Underlying().(type) {
+	switch u.(type) {
 	case *types.Slice, *types.Pointer:
 		return true
 	default:

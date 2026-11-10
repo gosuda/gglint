@@ -6,6 +6,7 @@ import (
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/flow"
 )
@@ -293,10 +294,10 @@ func rangeHidesView(pass *analysis.Pass, fn ast.Node, sink ast.Expr, v *types.Va
 	if rng == nil || rng.X == nil {
 		return true
 	}
-	if exprUsesVar(pass, rng.X, v) {
+	if exprAliasesView(pass, rng.X, newAliasScope(pass, v, src, views)) {
 		return false
 	}
-	return !rangeUsesSameReceiver(pass, rng.X, views, src, v)
+	return true
 }
 
 func latestAssignBefore(pass *analysis.Pass, fn ast.Node, pos token.Pos, v *types.Var) (*ast.AssignStmt, bool, token.Pos) {
@@ -343,42 +344,116 @@ func isViewDefAssign(pass *analysis.Pass, as *ast.AssignStmt, v *types.Var) bool
 	return ok
 }
 
-func exprUsesVar(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
-	found := false
-	ast.Inspect(e, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		id, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if pass.TypesInfo.Uses[id] == v {
-			found = true
-		}
-		return !found
-	})
-	return found
+type aliasScope struct {
+	v      *types.Var
+	recv   flow.Key
+	recvOK bool
+	views  map[*types.Var]viewSrc
 }
 
-func rangeUsesSameReceiver(pass *analysis.Pass, e ast.Expr, views map[*types.Var]viewSrc, src viewSrc, self *types.Var) bool {
-	key, ok := flow.KeyOf(pass.TypesInfo, src.recv)
+func newAliasScope(pass *analysis.Pass, v *types.Var, src viewSrc, views map[*types.Var]viewSrc) aliasScope {
+	k, ok := flow.KeyOf(pass.TypesInfo, src.recv)
+	return aliasScope{v: v, recv: k, recvOK: ok, views: views}
+}
+
+func exprAliasesView(pass *analysis.Pass, e ast.Expr, s aliasScope) bool {
+	e = ast.Unparen(e)
+	if id, ok := e.(*ast.Ident); ok {
+		return aliasIdent(pass, id, s)
+	}
+	if se, ok := e.(*ast.SliceExpr); ok {
+		return aliasSlice(pass, se, s)
+	}
+	if lit, ok := e.(*ast.CompositeLit); ok {
+		return aliasLit(pass, lit, s)
+	}
+	if call, ok := e.(*ast.CallExpr); ok {
+		return aliasCall(pass, call, s)
+	}
+	return false
+}
+
+func aliasIdent(pass *analysis.Pass, id *ast.Ident, s aliasScope) bool {
+	if pass.TypesInfo.Uses[id] == s.v {
+		return true
+	}
+	w, ok := pass.TypesInfo.Uses[id].(*types.Var)
 	if !ok {
 		return false
 	}
-	for w, other := range views {
-		if w == self {
-			continue
-		}
-		okey, ok := flow.KeyOf(pass.TypesInfo, other.recv)
-		if !ok || okey != key {
-			continue
-		}
-		if exprUsesVar(pass, e, w) {
+	other, ok := s.views[w]
+	if !ok || !s.recvOK {
+		return false
+	}
+	k, ok := flow.KeyOf(pass.TypesInfo, other.recv)
+	if !ok {
+		return false
+	}
+	return k == s.recv
+}
+
+func aliasSlice(pass *analysis.Pass, se *ast.SliceExpr, s aliasScope) bool {
+	if se.X == nil {
+		return false
+	}
+	return exprAliasesView(pass, se.X, s)
+}
+
+func aliasLit(pass *analysis.Pass, lit *ast.CompositeLit, s aliasScope) bool {
+	for _, elt := range lit.Elts {
+		if exprAliasesView(pass, elt, s) {
 			return true
 		}
 	}
 	return false
+}
+
+func aliasCall(pass *analysis.Pass, call *ast.CallExpr, s aliasScope) bool {
+	if aliasViewCall(pass, call, s) {
+		return true
+	}
+	if !isBytesAliasingCall(pass, call) {
+		return false
+	}
+	return aliasAnyArg(pass, call.Args, s)
+}
+
+func aliasViewCall(pass *analysis.Pass, call *ast.CallExpr, s aliasScope) bool {
+	recv, _, ok := viewCallRecv(pass, call)
+	if !ok || !s.recvOK {
+		return false
+	}
+	k, ok := flow.KeyOf(pass.TypesInfo, recv)
+	if !ok {
+		return false
+	}
+	return k == s.recv
+}
+
+func aliasAnyArg(pass *analysis.Pass, args []ast.Expr, s aliasScope) bool {
+	for _, arg := range args {
+		if exprAliasesView(pass, arg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBytesAliasingCall(pass *analysis.Pass, call *ast.CallExpr) bool {
+	fn := typeutil.StaticCallee(pass.TypesInfo, call)
+	if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != viewBytesPath {
+		return false
+	}
+	return bytesAliasingFuncs[fn.Name()]
+}
+
+var bytesAliasingFuncs = map[string]bool{
+	"Split": true, "SplitN": true, "SplitAfter": true, "SplitAfterN": true,
+	"Fields": true, "FieldsFunc": true,
+	"Trim": true, "TrimLeft": true, "TrimRight": true, "TrimSpace": true,
+	"TrimFunc": true, "TrimLeftFunc": true, "TrimRightFunc": true,
+	"TrimPrefix": true, "TrimSuffix": true,
+	"Cut": true, "CutPrefix": true, "CutSuffix": true, "CutLast": true,
 }
 
 func inAssigningRange(pass *analysis.Pass, fn ast.Node, pos token.Pos, v *types.Var) bool {

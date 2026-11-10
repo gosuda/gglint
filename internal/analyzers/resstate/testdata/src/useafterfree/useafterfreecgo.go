@@ -38,9 +38,17 @@ func useafterfreeSilentCgoFreeLast() byte {
 }
 
 func useafterfreeSilentUintptrFree() {
-	var u uintptr = 123
-	C.free(unsafe.Pointer(u))
+	p := C.malloc(8)
+	u := uintptr(p)
+	C.free(p)
 	u++
 	_ = u
+}
+type freeHandle unsafe.Pointer
+func useafterfreeReportedDefinedHandle() {
+	p := C.malloc(16)
+	var h freeHandle = freeHandle(p)
+	C.free(unsafe.Pointer(h))
+	*(*byte)(unsafe.Pointer(h)) = 1 // want "is used after it was freed"
 }
 

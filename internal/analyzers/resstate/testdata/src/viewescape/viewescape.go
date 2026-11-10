@@ -476,3 +476,26 @@ func viewescapeReportedOuterRangeInnerView(chunks [][]byte, sc *bufio.Scanner, l
 	}
 	return lines
 }
+func cloneAll(v []byte) [][]byte { return [][]byte{bytes.Clone(v)} }
+
+func viewescapeSilentRangeCloneCall(sc *bufio.Scanner, out [][]byte) [][]byte {
+	var b []byte
+	for sc.Scan() {
+		b = sc.Bytes()
+		for _, b = range cloneAll(b) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func viewescapeReportedRangeDirectViewCall(sc *bufio.Scanner, sep []byte, lines [][]byte) [][]byte {
+	var b []byte
+	for sc.Scan() {
+		b = sc.Bytes()
+		for _, b = range bytes.Split(sc.Bytes(), sep) {
+			lines = append(lines, b) // want "points into the buffer of"
+		}
+	}
+	return lines
+}
