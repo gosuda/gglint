@@ -353,7 +353,7 @@ The catalog has 104 rules. `basic` runs 51 of them, `standard` runs 92, and `str
 | `tparallel` | third-party | Reports t.Parallel used in subtests but not the top-level test, or the reverse. |
 | `unparam` | third-party | Reports unexported function parameters and results that are unused or always the same value. |
 | `unusedwrite` | go/analysis | checks for unused writes |
-| `usetesting` | third-party | Reports os.MkdirTemp, os.CreateTemp, and os.Chdir in tests, which have testing package replacements. |
+| `usetesting` | third-party | Reports os.CreateTemp("", ...) in tests that name their test parameter, with a fix that passes its TempDir(). |
 | `wgstate` | gglint | Reports WaitGroup and errgroup use that hangs Wait or lets it return early. |
 
 ### Added in strict
