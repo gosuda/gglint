@@ -135,3 +135,10 @@ func useafterfreeSilentSelfSlice() {
 	b = b[:0]
 	_ = b
 }
+func useafterfreeReportedSelfSliceAppend() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	b = b[:0]
+	b = append(b, 0) // want "is used after it was freed"
+	_ = b
+}

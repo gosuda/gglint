@@ -435,3 +435,22 @@ func viewescapeSilentAssignDiscard(sc *bufio.Scanner) {
 		b = sc.Bytes()
 	}
 }
+func viewescapeSilentRangeReassignSlice(sc *bufio.Scanner, xs [][]byte, out [][]byte) [][]byte {
+	for sc.Scan() {
+		b := sc.Bytes()
+		for _, b = range xs {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func viewescapeSilentRangeReassignChannel(sc *bufio.Scanner, ch chan []byte, out [][]byte) [][]byte {
+	for sc.Scan() {
+		b := sc.Bytes()
+		for b = range ch {
+			out = append(out, b)
+		}
+	}
+	return out
+}

@@ -357,7 +357,7 @@ func putTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) os
 	if hasPutRelease(pass, n, v) {
 		return stReleased
 	}
-	if assignsVar(pass, fn, n, v) {
+	if redefinesVar(pass, fn, n, v) {
 		return stUnknown
 	}
 	if escapesVar(pass, fn, n, v) {
@@ -370,7 +370,7 @@ func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) o
 	if hasFreeRelease(pass, fn, n, v) {
 		return stReleased
 	}
-	if assignsVar(pass, fn, n, v) {
+	if redefinesVar(pass, fn, n, v) {
 		return stUnknown
 	}
 	if escapesVar(pass, fn, n, v) {

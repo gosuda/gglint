@@ -125,3 +125,10 @@ func useafterputSilentSelfSlice() {
 	b = b[:0]
 	_ = b
 }
+func useafterputReportedSelfSliceAppend() {
+	b := resPool.Get().([]byte)
+	resPool.Put(b)
+	b = b[:0]
+	b = append(b, 1) // want "was returned to the pool"
+	_ = b
+}

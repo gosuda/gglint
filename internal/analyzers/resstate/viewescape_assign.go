@@ -2,6 +2,7 @@ package resstate
 
 import (
 	"go/ast"
+	"go/token"
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
@@ -262,4 +263,45 @@ func resultNamesHold(pass *analysis.Pass, f *ast.Field, v *types.Var) bool {
 		}
 	}
 	return false
+}
+
+func shadowedByRange(pass *analysis.Pass, fn ast.Node, sink, view ast.Expr) bool {
+	id, ok := ast.Unparen(view).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	v, ok := pass.TypesInfo.Uses[id].(*types.Var)
+	if !ok {
+		return false
+	}
+	return inAssigningRange(pass, fn, sink.Pos(), v)
+}
+
+func inAssigningRange(pass *analysis.Pass, fn ast.Node, pos token.Pos, v *types.Var) bool {
+	shadowed := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if shadowed {
+			return false
+		}
+		r, ok := n.(*ast.RangeStmt)
+		if !ok {
+			return true
+		}
+		if !rangeAssigns(pass, r, v) {
+			return true
+		}
+		if r.Body != nil && pos >= r.Body.Pos() && pos < r.Body.End() {
+			shadowed = true
+			return false
+		}
+		return true
+	})
+	return shadowed
+}
+
+func rangeAssigns(pass *analysis.Pass, r *ast.RangeStmt, v *types.Var) bool {
+	if r.Key != nil && viewTargetIs(pass, r.Key, v) {
+		return true
+	}
+	return r.Value != nil && viewTargetIs(pass, r.Value, v)
 }
