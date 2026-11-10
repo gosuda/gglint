@@ -472,7 +472,7 @@ func TestEscapes(t *testing.T) {
 		"ret": true, "snd": true, "fld": true, "glob": true, "mp": true,
 		"sl": true, "arg": true, "capf": true, "addr": true, "addrfs": true,
 		"df": true, "gof": true, "sel2": true, "comp": true, "sl2": true,
-		"deref": true, "gen": true, "neg1": false, "neg2": false,
+		"deref": false, "gen": true, "neg1": false, "neg2": false,
 		"neg3": false, "neg4": false, "paren2": false, "bin2": false,
 		"notf": false, "sl3": false, "declv": false, "many": false,
 	}

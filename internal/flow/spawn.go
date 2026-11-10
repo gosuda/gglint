@@ -49,7 +49,7 @@ func (w *spawnWalker) stmt(s ast.Stmt, inLoop bool) {
 	case *ast.ForStmt:
 		w.optStmt(s.Init, inLoop)
 		w.scan(s.Cond, inLoop)
-		w.optStmt(s.Post, true)
+		w.optStmt(s.Post, inLoop)
 		w.stmt(s.Body, true)
 	case *ast.RangeStmt:
 		w.scan(s.X, inLoop)
@@ -209,7 +209,8 @@ func (w *spawnWalker) goGroup(s *ast.GoStmt, body *ast.FuncLit) Key {
 		}
 	} else {
 		ast.Inspect(body.Body, func(n ast.Node) bool {
-			if _, ok := n.(*ast.FuncLit); ok {
+			switch n.(type) {
+			case *ast.FuncLit, *ast.SelectorExpr:
 				return false
 			}
 			return w.literalCall(s, body, n, add)
@@ -291,7 +292,11 @@ func (w *spawnWalker) subst(body *ast.FuncLit, call *ast.CallExpr, k Key, ok boo
 		if _, isPtr := param.Type().Underlying().(*types.Pointer); !isPtr || i >= len(call.Args) {
 			return k, true
 		}
-		return KeyOf(w.info, call.Args[i])
+		argKey, argOK := KeyOf(w.info, call.Args[i])
+		if !argOK {
+			return Key{}, false
+		}
+		return Key{Root: argKey.Root, Path: argKey.Path + k.Path}, true
 	}
 	return k, true
 }
@@ -314,9 +319,6 @@ func isWaitGroup(info *types.Info, e ast.Expr) bool {
 // Joined reports whether every path from s.Site to at crosses a join of s.
 func Joined(pass *analysis.Pass, g *Graph, s Spawn, at ast.Node) bool {
 	if pass == nil || pass.TypesInfo == nil || g == nil || s.Site == nil || at == nil {
-		return false
-	}
-	if at.End() <= s.Site.Pos() {
 		return false
 	}
 	f, t, ok := g.endpoints(s.Site, at)
@@ -485,42 +487,85 @@ func closeChan(info *types.Info, call *ast.CallExpr) (Key, bool) {
 }
 
 func (g *Graph) receives(info *types.Info, fn ast.Node, k Key) []ast.Node {
-	skip := map[*ast.UnaryExpr]bool{}
-	var refined []ast.Node
+	s := recvScan{graph: g, info: info, key: k, called: calledLiterals(fn), skip: map[*ast.UnaryExpr]bool{}}
+	s.selects(fn)
+	s.walk(fn)
+	var out []ast.Node
+	for _, r := range s.refined {
+		if rn := g.at(r); rn != nil {
+			out = append(out, rn)
+		}
+	}
+	return append(out, s.out...)
+}
+
+type recvScan struct {
+	graph   *Graph
+	info    *types.Info
+	key     Key
+	called  map[*ast.FuncLit]bool
+	skip    map[*ast.UnaryExpr]bool
+	refined []ast.Node
+	out     []ast.Node
+}
+
+func (s *recvScan) selects(fn ast.Node) {
 	ast.Inspect(fn, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return n == fn
+		if lit, ok := n.(*ast.FuncLit); ok {
+			return n == fn || s.called[lit]
 		}
 		sel, ok := n.(*ast.SelectStmt)
 		if !ok {
 			return true
 		}
-		for _, cc := range sel.Body.List {
-			c, ok := cc.(*ast.CommClause)
-			if !ok {
-				continue
-			}
-			g.refineClause(info, c, k, skip, &refined)
-		}
+		s.clause(sel)
 		return true
 	})
-	var out []ast.Node
-	for _, r := range refined {
-		if rn := g.locate(r); rn != nil {
-			out = append(out, rn)
+}
+
+func (s *recvScan) clause(sel *ast.SelectStmt) {
+	for _, cc := range sel.Body.List {
+		if c, ok := cc.(*ast.CommClause); ok {
+			s.graph.refineClause(s.info, c, s.key, s.skip, &s.refined)
 		}
 	}
+}
+
+func (s *recvScan) walk(fn ast.Node) {
 	ast.Inspect(fn, func(n ast.Node) bool {
-		switch n.(type) {
+		switch n := n.(type) {
 		case *ast.FuncLit:
-			return n == fn
+			return n == fn || s.called[n]
 		case *ast.GoStmt, *ast.DeferStmt:
 			return false
 		}
-		g.markRecv(info, n, k, skip, &out)
+		s.graph.markRecv(s.info, n, s.key, s.skip, &s.out)
+		return true
+	})
+}
+
+func calledLiterals(fn ast.Node) map[*ast.FuncLit]bool {
+	out := map[*ast.FuncLit]bool{}
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch n.(type) {
+		case *ast.GoStmt, *ast.DeferStmt:
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			if lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit); ok {
+				out[lit] = true
+			}
+		}
 		return true
 	})
 	return out
+}
+
+func (g *Graph) at(n ast.Node) ast.Node {
+	if r := g.locate(n); r != nil {
+		return r
+	}
+	return g.container(n)
 }
 
 func (g *Graph) refineClause(info *types.Info, c *ast.CommClause, k Key, skip map[*ast.UnaryExpr]bool, refined *[]ast.Node) {
@@ -553,7 +598,7 @@ func (g *Graph) markUnary(info *types.Info, n ast.Node, k Key, skip map[*ast.Una
 	if !ok || ck != k {
 		return
 	}
-	if rn := g.locate(u); rn != nil {
+	if rn := g.at(u); rn != nil {
 		*out = append(*out, rn)
 	}
 }
@@ -567,7 +612,7 @@ func (g *Graph) markRange(info *types.Info, n ast.Node, k Key, out *[]ast.Node) 
 	if !ok || ck != k {
 		return
 	}
-	if rn := g.locate(rs.X); rn != nil {
+	if rn := g.at(rs.X); rn != nil {
 		*out = append(*out, rn)
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/cfg"
@@ -235,8 +237,8 @@ func TestSelectJoins(t *testing.T) {
 	if g == nil {
 		t.Fatalf("seljoin: nil graph")
 	}
-	if Joined(pass, g, spawns[0], sd.Body.List[1]) {
-		t.Fatalf("seljoin: joined before select")
+	if !Joined(pass, g, spawns[0], sd.Body.List[1]) {
+		t.Fatalf("seljoin: not joined at unreachable before-site node")
 	}
 	if !Joined(pass, g, spawns[0], sd.Body.List[5]) {
 		t.Fatalf("seljoin: not joined after selects")
@@ -305,7 +307,7 @@ func typelocal(v int) int {
 func TestEscapeExtra(t *testing.T) {
 	t.Parallel()
 	f, info := checkTypes(t, extraEscapeSource)
-	want := map[string]bool{"conv": false, "imm": true, "inc": true, "typelocal": true}
+	want := map[string]bool{"conv": false, "imm": false, "inc": true, "typelocal": true}
 	for name, w := range want {
 		decl := findDecl(f, name)
 		if decl == nil {
@@ -661,6 +663,83 @@ func TestEscapesAlias(t *testing.T) {
 	}
 }
 
+func TestEscapesDeleteArg(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\nfunc f(k string) int {\nm := map[string]int{\"a\": 1}\ndelete(m, k)\nreturn 0\n}")
+	decl := testFuncDeclAt(t, f.Decls, 0)
+	v := testLocalVar(t, info, decl)
+	if !Escapes(info, decl, v) {
+		t.Fatalf("delete argument does not escape")
+	}
+}
+
+func TestEscapeChainLinear(t *testing.T) {
+	t.Parallel()
+	chain := "b" + strings.Repeat(".Next()", 30)
+	src := "package p\ntype B struct{}\nfunc (b *B) Next() *B { return b }\nfunc f() {\nb := &B{}\n_ = " + chain + "\n}"
+	f, info := checkTypes(t, src)
+	decl := testFuncDeclAt(t, f.Decls, 2)
+	v := testLocalVar(t, info, decl)
+	done := make(chan bool, 1)
+	go func() { done <- Escapes(info, decl, v) }()
+	select {
+	case got := <-done:
+		if got {
+			t.Fatalf("chain receiver escapes")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("escape walk exceeded 10s: not linear")
+	}
+}
+
+func TestEscapesDeferredLiteral(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\nimport \"os\"\nfunc f(p string) error {\nfh, err := os.Open(p)\nif err != nil {\nreturn err\n}\ndefer func() { fh.Close() }()\nreturn nil\n}")
+	decl := testFuncDeclAt(t, f.Decls, 1)
+	v := testLocalVar(t, info, decl)
+	if Escapes(info, decl, v) {
+		t.Fatalf("deferred literal captures fh")
+	}
+}
+
+func TestEscapesInPlaceLiteral(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\nfunc f(v int) int {\nreturn func(x int) int { return x + v }(1)\n}")
+	decl := testFuncDeclAt(t, f.Decls, 0)
+	var v *types.Var
+	for _, field := range decl.Type.Params.List {
+		if obj, ok := info.Defs[field.Names[0]].(*types.Var); ok {
+			v = obj
+		}
+	}
+	if v == nil {
+		t.Fatalf("param missing")
+	}
+	if Escapes(info, decl, v) {
+		t.Fatalf("in-place literal captures v")
+	}
+}
+
+func TestEscapesFieldRead(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\ntype T struct{ n int }\nfunc f() int {\nt := &T{n: 1}\nn := t.n\nreturn n\n}")
+	decl := testFuncDeclAt(t, f.Decls, 1)
+	v := testLocalVar(t, info, decl)
+	if Escapes(info, decl, v) {
+		t.Fatalf("field read aliases t")
+	}
+}
+
+func TestEscapesNamedResult(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\ntype T struct{ n int }\nfunc f() (r *T) {\nt := &T{}\nr = t\nreturn\n}")
+	decl := testFuncDeclAt(t, f.Decls, 1)
+	v := testLocalVar(t, info, decl)
+	if !Escapes(info, decl, v) {
+		t.Fatalf("named-result alias does not escape")
+	}
+}
+
 func TestDefinedByRange(t *testing.T) {
 	t.Parallel()
 	f, info := checkTypes(t, "package p\nfunc f(xs []int) int {\nv := 1\nfor v = range xs {\n}\nreturn v\n}")
@@ -701,8 +780,14 @@ func TestKeyOfQualified(t *testing.T) {
 	}
 	rhs := asq.Rhs[0]
 	k, ok := KeyOf(pass.TypesInfo, rhs)
-	if !ok || k.Root == nil {
+	if !ok {
 		t.Fatalf("qualified key failed: %v %v", k, ok)
+	}
+	if k.Root == nil || k.Root.Name() != "Args" || k.Root.Pkg() == nil || k.Root.Pkg().Path() != "os" {
+		t.Fatalf("qualified root = %v, want os.Args", k.Root)
+	}
+	if k.Path != "" {
+		t.Fatalf("qualified path = %q, want empty", k.Path)
 	}
 }
 
@@ -769,6 +854,81 @@ func TestJoinedUnreachable(t *testing.T) {
 	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 0)
 	if !Joined(pass, NewGraph(pass, fd), Spawns(pass, fd)[0], fd.Body.List[2]) {
 		t.Fatalf("not joined at unreachable")
+	}
+}
+
+func TestGoGroupHelperPath(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\ntype S struct{ wg sync.WaitGroup }\nfunc f() {\nvar s S\ns.wg.Add(1)\ngo func(p *S) { defer p.wg.Done() }(&s)\ns.wg.Wait()\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 2)
+	s := Spawns(pass, fd)[0]
+	vd, ok := fd.Body.List[0].(*ast.DeclStmt)
+	if !ok {
+		t.Fatalf("first stmt not decl")
+	}
+	gen, ok := vd.Decl.(*ast.GenDecl)
+	if !ok {
+		t.Fatalf("decl not gen")
+	}
+	spec, ok := gen.Specs[0].(*ast.ValueSpec)
+	if !ok {
+		t.Fatalf("spec not value")
+	}
+	sobj := pass.TypesInfo.Defs[spec.Names[0]]
+	if s.Group.Root != sobj || s.Group.Path != ".wg" {
+		t.Fatalf("group key = (%v, %q), want (s, .wg)", s.Group.Root, s.Group.Path)
+	}
+	if !Joined(pass, NewGraph(pass, fd), s, fd.Body.List[3]) {
+		t.Fatalf("not joined at wait")
+	}
+}
+
+func TestSpawnPostNotInLoop(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc f() {\nvar wg sync.WaitGroup\nfor i := 0; i < 2; wg.Go(func() {}) {\n}\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 1)
+	sp := Spawns(pass, fd)
+	if len(sp) != 1 {
+		t.Fatalf("post spawn count = %d", len(sp))
+	}
+	if sp[0].InLoop {
+		t.Fatalf("post-statement spawn marked in loop")
+	}
+}
+
+func TestJoinedBeforeSite(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f() int {\nx := 1\ngo func() {}()\nreturn x\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 0)
+	if !Joined(pass, NewGraph(pass, fd), Spawns(pass, fd)[0], fd.Body.List[0]) {
+		t.Fatalf("not joined at unreachable before-site node")
+	}
+}
+
+func TestJoinedInPlaceRecv(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f() int {\ndone := make(chan struct{})\ngo func() { defer close(done) }()\nfunc() { <-done }()\nreturn 0\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 0)
+	g := NewGraph(pass, fd)
+	s := Spawns(pass, fd)[0]
+	if !Joined(pass, g, s, fd.Body.List[3]) {
+		t.Fatalf("not joined at in-place receive")
+	}
+}
+
+func TestHeldAfterTryLock(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nvar mu sync.Mutex\nfunc f() {\nmu.Lock()\n_ = mu.TryLock()\nmu.Unlock()\n}")
+	pass := ctrlPass(t, pkg)
+	fd := testFuncDeclAt(t, pkg.Syntax[0].Decls, 2)
+	held := HeldAt(pass, NewGraph(pass, fd))
+	got := held(fd.Body.List[2])
+	if len(got) != 1 || got[0].Root.Name() != "mu" || got[0].Path != "" {
+		t.Fatalf("held after TryLock = %v, want [mu]", got)
 	}
 }
 

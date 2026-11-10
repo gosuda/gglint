@@ -94,7 +94,12 @@ func lockTransfer(info *types.Info, n ast.Node, k Key, h bool) bool {
 		if !ok || ck != k {
 			return true
 		}
-		out = m == "Lock" || m == "RLock"
+		switch m {
+		case "Lock", "RLock":
+			out = true
+		case "Unlock", "RUnlock":
+			out = false
+		}
 		return true
 	})
 	return out

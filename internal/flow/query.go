@@ -373,7 +373,7 @@ func Escapes(info *types.Info, fn ast.Node, v *types.Var) bool {
 	if body == nil {
 		return false
 	}
-	e := escaper{info: info, target: v, fn: fn}
+	e := escaper{info: info, target: v, fn: fn, seen: map[exprKey]bool{}}
 	e.alias = collectAliases(info, body, v)
 	if hasBareEscape(info, fn, body, e.alias) {
 		return true
@@ -386,7 +386,18 @@ type escaper struct {
 	target   *types.Var
 	fn       ast.Node
 	captured bool
+	inlit    bool
+	addr     bool
 	alias    map[*types.Var]bool
+	seen     map[exprKey]bool
+}
+
+type exprKey struct {
+	x    ast.Expr
+	esc  bool
+	cap  bool
+	lit  bool
+	addr bool
 }
 
 func collectAliases(info *types.Info, body *ast.BlockStmt, v *types.Var) map[*types.Var]bool {
@@ -445,6 +456,10 @@ func aliasLHS(info *types.Info, lhs ast.Expr, out map[*types.Var]bool) bool {
 		out[vv] = true
 		return true
 	}
+	if vv, ok := info.Uses[id].(*types.Var); ok && !out[vv] {
+		out[vv] = true
+		return true
+	}
 	return false
 }
 
@@ -459,7 +474,7 @@ func resolvesTo(info *types.Info, e ast.Expr, out map[*types.Var]bool) bool {
 		}
 		return false
 	}
-	if sel, ok := e.(*ast.SelectorExpr); ok {
+	if sel, ok := e.(*ast.SelectorExpr); ok && info.Selections[sel] != nil && info.Selections[sel].Kind() == types.MethodVal {
 		return resolvesTo(info, sel.X, out)
 	}
 	return false
@@ -546,7 +561,7 @@ func (e *escaper) stmt(s ast.Stmt, esc bool) bool {
 	case *ast.BadStmt, *ast.EmptyStmt, *ast.BranchStmt:
 		return false
 	case *ast.ReturnStmt:
-		return e.exprs(s.Results, true)
+		return e.exprs(s.Results, !e.inlit)
 	case *ast.GoStmt:
 		return e.goCall(s.Call)
 	case *ast.DeferStmt:
@@ -684,22 +699,43 @@ func (e *escaper) expr(x ast.Expr, esc bool) bool {
 	if x == nil {
 		return false
 	}
+	k := exprKey{x: x, esc: esc, cap: e.captured, lit: e.inlit, addr: e.addr}
+	if v, ok := e.seen[k]; ok {
+		return v
+	}
+	r := e.compute(x, esc)
+	e.seen[k] = r
+	return r
+}
+
+func (e *escaper) compute(x ast.Expr, esc bool) bool {
 	if id, ok := x.(*ast.Ident); ok {
 		return esc && e.aliased(id)
 	}
-	if c := singleChild(x); c != nil {
-		return e.expr(c, esc)
+	if c, fwd := e.projection(x, esc); c != nil {
+		return e.expr(c, fwd)
 	}
 	switch x := x.(type) {
 	case *ast.FuncLit:
 		return e.capturedList(x.Body.List)
 	case *ast.CallExpr:
-		return e.call(x, esc)
+		return e.call(x)
 	case *ast.UnaryExpr:
 		return e.unary(x, esc)
 	default:
 		return e.compound(x, esc)
 	}
+}
+
+func (e *escaper) projection(x ast.Expr, esc bool) (ast.Expr, bool) {
+	c := singleChild(x)
+	if c == nil {
+		return nil, false
+	}
+	if _, ok := x.(*ast.ParenExpr); ok {
+		return c, esc
+	}
+	return c, esc && (e.captured || e.addr)
 }
 
 func (e *escaper) aliased(id *ast.Ident) bool {
@@ -719,7 +755,11 @@ func (e *escaper) capturedList(l []ast.Stmt) bool {
 
 func (e *escaper) unary(x *ast.UnaryExpr, esc bool) bool {
 	if x.Op == token.AND {
-		return e.expr(x.X, true)
+		prev := e.addr
+		e.addr = true
+		r := e.expr(x.X, true)
+		e.addr = prev
+		return r
 	}
 	return e.expr(x.X, esc)
 }
@@ -744,8 +784,6 @@ func (e *escaper) compound(x ast.Expr, esc bool) bool {
 		return e.expr(x.X, esc) || e.expr(x.Y, esc)
 	case *ast.CompositeLit:
 		return e.exprs(x.Elts, esc)
-	case *ast.IndexExpr:
-		return e.expr(x.X, esc) || e.expr(x.Index, esc)
 	case *ast.KeyValueExpr:
 		return e.expr(x.Key, esc) || e.expr(x.Value, esc)
 	default:
@@ -755,17 +793,24 @@ func (e *escaper) compound(x ast.Expr, esc bool) bool {
 
 func (e *escaper) indexRest(x ast.Expr, esc bool) bool {
 	switch x := x.(type) {
+	case *ast.IndexExpr:
+		fwd := esc && (e.captured || e.addr)
+		return e.expr(x.X, fwd) || e.expr(x.Index, fwd)
 	case *ast.IndexListExpr:
 		return e.expr(x.X, esc) || e.exprs(x.Indices, esc)
 	case *ast.SliceExpr:
-		return e.optExpr(x.X, esc) || e.optExpr(x.Low, esc) || e.optExpr(x.High, esc) || e.optExpr(x.Max, esc)
+		return e.slice(x, esc)
 	}
 	return false
 }
 
-func (e *escaper) call(c *ast.CallExpr, esc bool) bool {
+func (e *escaper) slice(s *ast.SliceExpr, esc bool) bool {
+	return e.optExpr(s.X, esc) || e.optExpr(s.Low, esc) || e.optExpr(s.High, esc) || e.optExpr(s.Max, esc)
+}
+
+func (e *escaper) call(c *ast.CallExpr) bool {
 	if lit, ok := ast.Unparen(c.Fun).(*ast.FuncLit); ok {
-		return e.litCall(lit, c, esc)
+		return e.litCall(lit, c)
 	}
 	if e.recv(c) {
 		return true
@@ -776,11 +821,12 @@ func (e *escaper) call(c *ast.CallExpr, esc bool) bool {
 	return e.exprs(c.Args, !e.plain(c))
 }
 
-func (e *escaper) litCall(lit *ast.FuncLit, c *ast.CallExpr, esc bool) bool {
-	if esc && e.capturedList(lit.Body.List) {
-		return true
-	}
-	if !esc && e.list(lit.Body.List, esc) {
+func (e *escaper) litCall(lit *ast.FuncLit, c *ast.CallExpr) bool {
+	prev := e.inlit
+	e.inlit = !e.captured
+	found := e.list(lit.Body.List, e.captured)
+	e.inlit = prev
+	if found {
 		return true
 	}
 	return e.exprs(c.Args, true)
@@ -807,7 +853,7 @@ func (e *escaper) plain(c *ast.CallExpr) bool {
 		return false
 	}
 	switch b.Name() {
-	case "len", "cap", closeFun, "delete", "copy", "clear":
+	case "len", "cap", closeFun:
 		return true
 	}
 	return false
