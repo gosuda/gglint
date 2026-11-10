@@ -52,3 +52,17 @@ func upgradeGoCallSilent() {
 	go mu.Lock()
 	mu.RUnlock()
 }
+
+func upgradeDeepReported() {
+	var mu sync.RWMutex
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.RLock()
+	mu.Lock() // want "is read-locked by this goroutine, so this Lock waits for itself"
+}

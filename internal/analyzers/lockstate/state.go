@@ -342,8 +342,11 @@ func stepRLock(cur state) state {
 		return unknownState
 	}
 	if cur.kind == readKind {
+		if cur.depth > maxReadDepth {
+			return cur
+		}
 		if cur.depth >= maxReadDepth {
-			return unknownState
+			return readState(maxReadDepth + 1)
 		}
 		return readState(cur.depth + 1)
 	}
@@ -358,6 +361,9 @@ func stepUnlock(cur state) state {
 }
 
 func stepRUnlock(cur state) state {
+	if cur.kind == readKind && cur.depth > maxReadDepth {
+		return unknownState
+	}
 	if cur.kind == readKind && cur.depth > 1 {
 		return readState(cur.depth - 1)
 	}
