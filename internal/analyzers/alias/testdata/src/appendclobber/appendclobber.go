@@ -152,7 +152,7 @@ func AppendclobberSilentInPlaceFilter() ([]int, int) {
 			out = append(out, xs[i])
 		}
 	}
-	return out, xs[2]
+	return out, len(xs)
 }
 
 func AppendclobberSilentInPlaceRange() ([]int, int) {
@@ -161,6 +161,17 @@ func AppendclobberSilentInPlaceRange() ([]int, int) {
 	for _, x := range xs {
 		if x%2 == 0 {
 			out = append(out, x)
+		}
+	}
+	return out, len(xs)
+}
+
+func AppendclobberReportedInPlaceReadAfter() ([]int, int) {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for _, x := range xs {
+		if x%2 == 0 {
+			out = append(out, x) // want `out shares its backing array with xs, so this append overwrites elements of xs that are read later`
 		}
 	}
 	return out, xs[2]
@@ -195,5 +206,23 @@ func AppendclobberSilentTwoExclusive() []int {
 		out = append(out, -a[i])
 	}
 	return out
+}
+
+func AppendclobberReportedCondCap(c bool) int {
+	a := make([]int, 3, 10)
+	if c {
+		a = a[0:3:3]
+	}
+	b := a[:2]
+	b = append(b, 9, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a[2]
+}
+
+func AppendclobberSilentUncondCap() int {
+	a := make([]int, 3, 10)
+	a = a[0:3:3]
+	b := a[:2]
+	b = append(b, 9, 9)
+	return a[2]
 }
 

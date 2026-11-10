@@ -145,19 +145,108 @@ func checkAppendAssign(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, def
 }
 
 func tryKnownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) bool {
-	capacity, capKnown := provenCap(pass.TypesInfo, fn, def.a, def.pos)
-	if !capKnown {
+	need := def.high + len(call.Args) - 1
+	caps := reachingCaps(pass, fn, def.a, def.pos)
+	if len(caps) == 0 {
 		return false
 	}
-	n := len(call.Args) - 1
-	if def.high+n > capacity {
-		return true
+	for _, c := range caps {
+		if c.known && c.cap >= need {
+			if !mentionedAfter(pass, fn, def.a, st, st.End()) {
+				return true
+			}
+			reportClobber(pass, call, b, def.a)
+			return true
+		}
 	}
-	if !mentionedAfter(pass, fn, def.a, st, st.End()) {
-		return true
+	for _, c := range caps {
+		if !c.known {
+			return false
+		}
 	}
-	reportClobber(pass, call, b, def.a)
 	return true
+}
+
+type capResult struct {
+	cap   int
+	known bool
+}
+
+func reachingCaps(pass *analysis.Pass, fn ast.Node, a *types.Var, slicePos token.Pos) []capResult {
+	g := flow.NewGraph(pass, fn)
+	if g == nil {
+		return nil
+	}
+	to := findAssignAt(fn, slicePos)
+	if to == nil {
+		return nil
+	}
+	var out []capResult
+	for _, from := range collectAssignsTo(pass.TypesInfo, fn, a) {
+		if !reachesForCap(g, pass.TypesInfo, a, from, to) {
+			continue
+		}
+		c, ok := capOfAssignment(pass.TypesInfo, from, a)
+		out = append(out, capResult{cap: c, known: ok})
+	}
+	return out
+}
+
+func findAssignAt(fn ast.Node, pos token.Pos) ast.Node {
+	var found ast.Node
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if st, ok := n.(*ast.AssignStmt); ok && st.Pos() == pos {
+			found = st
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func collectAssignsTo(info *types.Info, fn ast.Node, a *types.Var) []*ast.AssignStmt {
+	var out []*ast.AssignStmt
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if st, ok := n.(*ast.AssignStmt); ok && assignsVar(info, st, a) {
+			out = append(out, st)
+		}
+		return true
+	})
+	return out
+}
+
+func reachesForCap(g *flow.Graph, info *types.Info, a *types.Var, from, to ast.Node) bool {
+	avoid := func(n ast.Node) bool {
+		st, ok := n.(*ast.AssignStmt)
+		return ok && assignsVar(info, st, a)
+	}
+	return g.Reaches(from, to, avoid)
+}
+
+func capOfAssignment(info *types.Info, st *ast.AssignStmt, a *types.Var) (int, bool) {
+	if len(st.Lhs) != 1 || len(st.Rhs) != 1 {
+		return 0, false
+	}
+	if !isVarTarget(info, st.Lhs[0], a) {
+		return 0, false
+	}
+	rhs := ast.Unparen(st.Rhs[0])
+	if _, ok := rhs.(*ast.CompositeLit); ok {
+		return defLenCap(info, st.Rhs[0])
+	}
+	if call, ok := rhs.(*ast.CallExpr); ok && isMake(info, call) {
+		return defLenCap(info, st.Rhs[0])
+	}
+	return threeIndexCap(info, st, a)
 }
 
 func tryUnknownCap(pass *analysis.Pass, fn ast.Node, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) {
@@ -195,54 +284,6 @@ func appendDef(info *types.Info, st *ast.AssignStmt, defs map[*types.Var]sliceDe
 		return nil, sliceDef{}, nil, false
 	}
 	return b, def, call, true
-}
-
-type capTrack struct {
-	cur   int
-	known bool
-	seen  bool
-}
-
-func provenCap(info *types.Info, fn ast.Node, a *types.Var, before token.Pos) (int, bool) {
-	tr := &capTrack{}
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		return visitCapNode(info, n, a, before, tr)
-	})
-	if !tr.seen {
-		return 0, false
-	}
-	return tr.cur, tr.known
-}
-
-func visitCapNode(info *types.Info, n ast.Node, a *types.Var, before token.Pos, tr *capTrack) bool {
-	if _, ok := n.(*ast.FuncLit); ok {
-		return false
-	}
-	st, ok := n.(*ast.AssignStmt)
-	if !ok || st.Pos() >= before || !assignsVar(info, st, a) {
-		return true
-	}
-	applyCapStmt(info, st, a, tr)
-	return true
-}
-
-func applyCapStmt(info *types.Info, st *ast.AssignStmt, a *types.Var, tr *capTrack) {
-	if isDefOf(info, st, a) {
-		c, ck := defLenCap(info, st.Rhs[0])
-		tr.cur, tr.known, tr.seen = c, ck, true
-		return
-	}
-	if !tr.seen || !tr.known {
-		tr.known = false
-		tr.seen = true
-		return
-	}
-	c, ok := threeIndexCap(info, st, a)
-	if !ok {
-		tr.known = false
-		return
-	}
-	tr.cur = c
 }
 
 func threeIndexCap(info *types.Info, st *ast.AssignStmt, a *types.Var) (int, bool) {
@@ -456,7 +497,105 @@ func inPlaceSilent(pass *analysis.Pass, fn ast.Node, b *types.Var, def sliceDef)
 			return false
 		}
 	}
-	return atMostOnePerIteration(pass, fn, appends)
+	if !atMostOnePerIteration(pass, fn, appends) {
+		return false
+	}
+	return !hasElementReadAfterLoop(pass, fn, def.a, appends)
+}
+
+func hasElementReadAfterLoop(pass *analysis.Pass, fn ast.Node, a *types.Var, appends []*ast.AssignStmt) bool {
+	g := flow.NewGraph(pass, fn)
+	if g == nil {
+		return true
+	}
+	writes := lhsIdents(fn)
+	skip := lenCapIdents(pass.TypesInfo, fn, a)
+	for _, st := range appends {
+		loop := enclosingLoop(fn, st)
+		if loop == nil {
+			return true
+		}
+		scan := afterLoopScan{pass: pass, fn: fn, graph: g, writes: writes, skip: skip, target: a, from: st, loop: loop}
+		if scan.found() {
+			return true
+		}
+	}
+	return false
+}
+
+type afterLoopScan struct {
+	pass   *analysis.Pass
+	fn     ast.Node
+	graph  *flow.Graph
+	writes map[*ast.Ident]bool
+	skip   map[*ast.Ident]bool
+	target *types.Var
+	from   *ast.AssignStmt
+	loop   ast.Node
+}
+
+func (s afterLoopScan) found() bool {
+	hit := false
+	ast.Inspect(flow.Body(s.fn), func(n ast.Node) bool {
+		if hit {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok || !s.isRead(id) {
+			return true
+		}
+		if s.reaches(id) {
+			hit = true
+		}
+		return !hit
+	})
+	return hit
+}
+
+func (s afterLoopScan) isRead(id *ast.Ident) bool {
+	if id.Pos() <= s.loop.End() || s.skip[id] || s.writes[id] {
+		return false
+	}
+	return s.pass.TypesInfo.Uses[id] == s.target
+}
+
+func (s afterLoopScan) reaches(to ast.Node) bool {
+	return reachesForCap(s.graph, s.pass.TypesInfo, s.target, s.from, to)
+}
+
+func lenCapIdents(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
+	out := map[*ast.Ident]bool{}
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return true
+		}
+		if !isLenCapCall(info, call) {
+			return true
+		}
+		if id, ok := ast.Unparen(call.Args[0]).(*ast.Ident); ok {
+			if v, ok := varOf(info, id); ok && v == a {
+				out[id] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+func isLenCapCall(info *types.Info, call *ast.CallExpr) bool {
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	b, ok := info.Uses[id].(*types.Builtin)
+	return ok && (b.Name() == "len" || b.Name() == "cap")
 }
 
 func atMostOnePerIteration(pass *analysis.Pass, fn ast.Node, appends []*ast.AssignStmt) bool {

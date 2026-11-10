@@ -43,6 +43,7 @@ type rangeScan struct {
 	scope rangeScope
 	graph *flow.Graph
 	entry ast.Stmt
+	root  *ast.RangeStmt
 }
 
 func isSlice(info *types.Info, e ast.Expr) bool {
@@ -75,7 +76,7 @@ func checkRangemutate(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, seen 
 	if entry == nil {
 		return
 	}
-	scan := &rangeScan{pass: pass, scope: rangeScope{key: key, name: types.ExprString(rs.X), seen: seen}, graph: g, entry: entry}
+	scan := &rangeScan{pass: pass, scope: rangeScope{key: key, name: types.ExprString(rs.X), seen: seen}, graph: g, entry: entry, root: rs}
 	scan.scanList(rs.Body.List)
 }
 
@@ -102,7 +103,14 @@ func (s *rangeScan) checkAppend(st *ast.AssignStmt) {
 	if !ok {
 		return
 	}
-	if !s.graph.Reaches(st, s.entry, nil) {
+	rs := s.root
+	outside := func(n ast.Node) bool {
+		if n == rs.X || n == rs.Key || n == rs.Value {
+			return true
+		}
+		return n.Pos() < rs.Pos() || n.End() > rs.End()
+	}
+	if !s.graph.Reaches(st, s.entry, outside) {
 		return
 	}
 	if s.scope.seen[call.Pos()] {

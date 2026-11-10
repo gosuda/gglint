@@ -152,3 +152,14 @@ func RangemutateSilentReturnInside() []int {
 	}
 	return xs
 }
+
+func RangemutateSilentOuterBreak() []int {
+	s := []int{1, 2, 3}
+	for range 3 {
+		for _, y := range s {
+			s = append(s, y)
+			break
+		}
+	}
+	return s
+}
