@@ -2,10 +2,8 @@ package errdrop
 
 import (
 	"go/ast"
-	"go/constant"
 	"go/token"
 	"go/types"
-	"os"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -88,6 +86,9 @@ func durableHolds(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
 	if !isLocalPtrStruct(fn, x) {
 		return false
 	}
+	if isConnection(x.Type()) {
+		return false
+	}
 	if !writtenInFunc(pass, fn, x) {
 		return false
 	}
@@ -107,65 +108,7 @@ func isLocalPtrStruct(fn inspector.Cursor, x *types.Var) bool {
 }
 
 func writtenInFunc(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	return assignedFromCreate(pass, fn, x) || writtenByMethod(pass, fn, x) || writtenByFirstArg(pass, fn, x)
-}
-
-func assignedFromCreate(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		if createWritesFile(pass, inspection.As[*ast.AssignStmt](cur.Node()), x) {
-			return true
-		}
-	}
-	return false
-}
-
-func createWritesFile(pass *analysis.Pass, as *ast.AssignStmt, x *types.Var) bool {
-	if !assignTargetsVar(pass.TypesInfo, as, x) {
-		return false
-	}
-	if len(as.Rhs) != 1 {
-		return false
-	}
-	call := callOf(as.Rhs[0])
-	if call == nil {
-		return false
-	}
-	return createCallWritable(pass, call)
-}
-
-func assignTargetsVar(info *types.Info, as *ast.AssignStmt, x *types.Var) bool {
-	for _, lhs := range as.Lhs {
-		if resolvesTo(info, lhs, []*types.Var{x}) {
-			return true
-		}
-	}
-	return false
-}
-
-func createCallWritable(pass *analysis.Pass, call *ast.CallExpr) bool {
-	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
-	if !ok || fnobj == nil {
-		return false
-	}
-	switch fnobj.FullName() {
-	case "os.Create", "os.CreateTemp":
-		return true
-	case "os.OpenFile":
-		return len(call.Args) >= 2 && flagWritable(pass.TypesInfo, call.Args[1])
-	}
-	return false
-}
-
-func flagWritable(info *types.Info, e ast.Expr) bool {
-	v := info.Types[ast.Unparen(e)].Value
-	if v == nil {
-		return false
-	}
-	n, ok := constant.Int64Val(v)
-	return ok && n&int64(os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND) != 0
+	return writtenByMethod(pass, fn, x) || writtenByAnyArgWriter(pass, fn, x) || assignedToWriterInterface(pass, fn, x)
 }
 
 func writtenByMethod(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
@@ -197,37 +140,6 @@ func isWriteMethodName(name string) bool {
 		return true
 	}
 	return name != "WriteTo" && strings.HasPrefix(name, "Write")
-}
-
-func writtenByFirstArg(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
-	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
-		if owner(cur) != fn {
-			continue
-		}
-		if firstArgTakesWriter(pass, inspection.As[*ast.CallExpr](cur.Node()), x) {
-			return true
-		}
-	}
-	return false
-}
-
-func firstArgTakesWriter(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
-	if len(call.Args) == 0 {
-		return false
-	}
-	id, ok := ast.Unparen(call.Args[0]).(*ast.Ident)
-	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
-		return false
-	}
-	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
-	if !ok || fnobj == nil {
-		return false
-	}
-	sig, ok := fnobj.Type().(*types.Signature)
-	if !ok || sig.Params() == nil || sig.Params().Len() == 0 {
-		return false
-	}
-	return isWriterInterface(sig.Params().At(0).Type())
 }
 
 func isWriterInterface(t types.Type) bool {
@@ -298,4 +210,192 @@ func resultUsed(cur inspector.Cursor) bool {
 		return !allBlank(n.Lhs)
 	}
 	return true
+}
+
+func writtenByAnyArgWriter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	for cur := range fn.Preorder((*ast.CallExpr)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		if callWritesViaWriter(pass, inspection.As[*ast.CallExpr](cur.Node()), x) {
+			return true
+		}
+	}
+	return false
+}
+
+func callWritesViaWriter(pass *analysis.Pass, call *ast.CallExpr, x *types.Var) bool {
+	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fnobj == nil {
+		return false
+	}
+	sig, ok := fnobj.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	for idx, arg := range call.Args {
+		if argIsWriter(pass, sig, idx, call, arg, x) {
+			return true
+		}
+	}
+	return false
+}
+
+func argIsWriter(pass *analysis.Pass, sig *types.Signature, idx int, call *ast.CallExpr, arg ast.Expr, x *types.Var) bool {
+	id, ok := ast.Unparen(arg).(*ast.Ident)
+	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
+		return false
+	}
+	pt, ok := paramTypeAt(sig, idx, call)
+	return ok && isWriterInterface(pt)
+}
+
+func assignedToWriterInterface(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	return assignStmtWritesToWriter(pass, fn, x) || valueSpecWritesToWriter(pass, fn, x)
+}
+
+func assignStmtWritesToWriter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	for cur := range fn.Preorder((*ast.AssignStmt)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		as := inspection.As[*ast.AssignStmt](cur.Node())
+		if writesToWriter(pass, as, x) {
+			return true
+		}
+	}
+	return false
+}
+
+func writesToWriter(pass *analysis.Pass, as *ast.AssignStmt, x *types.Var) bool {
+	if len(as.Lhs) != len(as.Rhs) && len(as.Rhs) != 1 {
+		return false
+	}
+	for i, lhs := range as.Lhs {
+		if pairWritesToWriter(pass, as, i, lhs, x) {
+			return true
+		}
+	}
+	return false
+}
+
+func pairWritesToWriter(pass *analysis.Pass, as *ast.AssignStmt, i int, lhs ast.Expr, x *types.Var) bool {
+	rhs := as.Rhs[0]
+	if len(as.Rhs) == len(as.Lhs) {
+		rhs = as.Rhs[i]
+	}
+	if id, ok := ast.Unparen(rhs).(*ast.Ident); !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
+		return false
+	}
+	return pass.TypesInfo.TypeOf(lhs) != nil && isWriterInterface(pass.TypesInfo.TypeOf(lhs))
+}
+
+func valueSpecWritesToWriter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var) bool {
+	for cur := range fn.Preorder((*ast.ValueSpec)(nil)) {
+		if owner(cur) != fn {
+			continue
+		}
+		vs := inspection.As[*ast.ValueSpec](cur.Node())
+		if specWritesToWriter(pass, vs, x) {
+			return true
+		}
+	}
+	return false
+}
+
+func specWritesToWriter(pass *analysis.Pass, vs *ast.ValueSpec, x *types.Var) bool {
+	if len(vs.Values) == 0 {
+		return false
+	}
+	for i, name := range vs.Names {
+		v, ok := valueForName(vs, i)
+		if !ok {
+			continue
+		}
+		if specPairWrites(pass, v, name, x) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueForName(vs *ast.ValueSpec, i int) (ast.Expr, bool) {
+	switch {
+	case len(vs.Values) == len(vs.Names):
+		return vs.Values[i], true
+	case len(vs.Values) == 1:
+		return vs.Values[0], true
+	default:
+		return nil, false
+	}
+}
+
+func specPairWrites(pass *analysis.Pass, v ast.Expr, name *ast.Ident, x *types.Var) bool {
+	id, ok := ast.Unparen(v).(*ast.Ident)
+	if !ok || pass.TypesInfo.ObjectOf(id) != types.Object(x) {
+		return false
+	}
+	obj, ok := pass.TypesInfo.Defs[name].(*types.Var)
+	return ok && isWriterInterface(obj.Type())
+}
+
+func isConnection(t types.Type) bool {
+	if !hasSetDeadline(t) {
+		return false
+	}
+	return hasRemoteAddr(t)
+}
+
+func hasSetDeadline(t types.Type) bool {
+	obj, _, _ := types.LookupFieldOrMethod(t, true, nil, "SetDeadline")
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Params() == nil || sig.Params().Len() != 1 || sig.Results() == nil || sig.Results().Len() != 1 {
+		return false
+	}
+	if !isError(sig.Results().At(0).Type()) {
+		return false
+	}
+	return isTimeType(sig.Params().At(0).Type())
+}
+
+func hasRemoteAddr(t types.Type) bool {
+	obj, _, _ := types.LookupFieldOrMethod(t, true, nil, "RemoteAddr")
+	fn, ok := obj.(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	if sig.Params() != nil && sig.Params().Len() != 0 {
+		return false
+	}
+	if sig.Results() == nil || sig.Results().Len() != 1 {
+		return false
+	}
+	return isNetAddrType(sig.Results().At(0).Type())
+}
+
+func isTimeType(t types.Type) bool {
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Pkg().Path() == "time" && named.Obj().Name() == "Time"
+}
+
+func isNetAddrType(t types.Type) bool {
+	if _, ok := types.Unalias(t).Underlying().(*types.Interface); !ok {
+		return false
+	}
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Pkg().Path() == "net" && named.Obj().Name() == "Addr"
 }

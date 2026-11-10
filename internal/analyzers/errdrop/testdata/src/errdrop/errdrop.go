@@ -3,9 +3,15 @@ package errdrop
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/format"
+	"go/printer"
+	"go/token"
 	"hash"
 	"io"
 	"log"
@@ -60,9 +66,9 @@ func outReported(b []byte) Config {
 	return c
 }
 
-func outReported2(tmpl *template.Template, d string) string {
+func outSilentTemplate(tmpl *template.Template, d string) string {
 	var buf bytes.Buffer
-	tmpl.Execute(&buf, d) // want "is read after the error of tmpl.Execute is dropped"
+	tmpl.Execute(&buf, d)
 	return buf.String()
 }
 
@@ -666,4 +672,99 @@ func durableSilentGetter() bool {
 	j := &errdropJournal{}
 	defer j.Close()
 	return j.WriteEnabled()
+}
+type errdropWriter interface {
+	WriteString(string) (int, error)
+}
+
+func errdropPut(w errdropWriter, s string) error {
+	_, err := w.WriteString(s)
+	return err
+}
+
+func outSilentPutWriter(s string) string {
+	var buf bytes.Buffer
+	errdropPut(&buf, s)
+	return buf.String()
+}
+
+func outSilentEscapeText(s string) string {
+	var buf bytes.Buffer
+	xml.EscapeText(&buf, []byte(s))
+	return buf.String()
+}
+
+func outSilentWriteTo(src *bytes.Buffer) []byte {
+	var out bytes.Buffer
+	src.WriteTo(&out)
+	return out.Bytes()
+}
+
+func outSilentFormatNode(fset *token.FileSet, d ast.Decl) string {
+	var buf bytes.Buffer
+	format.Node(&buf, fset, &printer.CommentedNode{Node: d})
+	return buf.String()
+}
+
+func outSilentStar(fset *token.FileSet, arg ast.Expr) string {
+	var buf bytes.Buffer
+	format.Node(&buf, fset, &ast.StarExpr{X: arg})
+	return buf.String()
+}
+
+func outSilentPrinterFprint(fset *token.FileSet, n ast.Node) string {
+	var buf strings.Builder
+	printer.Fprint(&buf, fset, n)
+	return buf.String()
+}
+
+var errdropReplacer = strings.NewReplacer("\n", "\\n")
+
+func outSilentReplacer(s string) string {
+	var buf strings.Builder
+	errdropReplacer.WriteString(&buf, s)
+	return buf.String()
+}
+
+func outSilentDup(src *bytes.Buffer) string {
+	var tmp bytes.Buffer
+	io.Copy(&tmp, src)
+	return tmp.String()
+}
+
+func durableSilentCreateNoWrite() (string, error) {
+	f, err := os.CreateTemp("", "scratch")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	f.Close()
+	_ = os.Remove(path)
+	return path, nil
+}
+
+func durableSilentTLS(addr string, cfg *tls.Config) error {
+	c, err := tls.Dial("tcp", addr, cfg)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	_, err = io.WriteString(c, "hello")
+	return err
+}
+
+type errdropPromotedPrinter struct {
+	*bufio.Writer
+}
+
+func verdictSilentPromoted(w *bufio.Writer) error {
+	p := &errdropPromotedPrinter{w}
+	p.WriteByte('<')
+	return nil
+}
+
+func verdictSilentPromotedFlush(w *bufio.Writer) error {
+	p := &errdropPromotedPrinter{w}
+	p.WriteByte('<')
+	return p.Flush()
 }

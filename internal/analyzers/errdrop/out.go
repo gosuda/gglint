@@ -18,28 +18,35 @@ func checkOutSites(pass *analysis.Pass, fn inspector.Cursor, f facts, hash *type
 		if owner(cur) != fn {
 			continue
 		}
-		es := inspection.As[*ast.ExprStmt](cur.Node())
-		call := callOf(es.X)
-		if call == nil || !isRealCall(pass.TypesInfo, call) {
-			continue
-		}
-		if reported[call.Pos()] {
-			continue
-		}
-		if !dropsError(pass.TypesInfo, call) {
-			continue
-		}
-		if isExempt(pass, call, f.never, hash) {
-			continue
-		}
-		xobj, xname := outCandidate(pass, fn, call)
-		if xobj == nil {
-			continue
-		}
-		callee := types.ExprString(call.Fun)
-		pass.Reportf(call.Pos(), "%s is read after the error of %s is dropped, and it keeps its zero value when the call fails: check the error, or write _ = %s(...) to state that the zero value is intended", xname, callee, callee)
-		reported[call.Pos()] = true
+		checkOneOutSite(pass, fn, cur, f, hash, reported)
 	}
+}
+
+func checkOneOutSite(pass *analysis.Pass, fn, cur inspector.Cursor, f facts, hash *types.Interface, reported map[token.Pos]bool) {
+	es := inspection.As[*ast.ExprStmt](cur.Node())
+	call := callOf(es.X)
+	if call == nil || !isRealCall(pass.TypesInfo, call) {
+		return
+	}
+	if reported[call.Pos()] {
+		return
+	}
+	if !dropsError(pass.TypesInfo, call) {
+		return
+	}
+	if isExempt(pass, call, f.never, hash) {
+		return
+	}
+	xobj, xname := outCandidate(pass, fn, call)
+	if xobj == nil {
+		return
+	}
+	if outSinkExempt(pass, call, xobj, f.never) {
+		return
+	}
+	callee := types.ExprString(call.Fun)
+	pass.Reportf(call.Pos(), "%s is read after the error of %s is dropped, and it keeps its zero value when the call fails: check the error, or write _ = %s(...) to state that the zero value is intended", xname, callee, callee)
+	reported[call.Pos()] = true
 }
 
 func dropsError(info *types.Info, call *ast.CallExpr) bool {
@@ -238,4 +245,58 @@ func mentionedAfter(pass *analysis.Pass, fn inspector.Cursor, x *types.Var, afte
 		}
 	}
 	return false
+}
+
+func outSinkExempt(pass *analysis.Pass, call *ast.CallExpr, x *types.Var, set map[*types.Func]bool) bool {
+	for idx, arg := range call.Args {
+		if sinkArgExempt(pass, idx, call, arg, x, set) {
+			return true
+		}
+	}
+	return false
+}
+
+func sinkArgExempt(pass *analysis.Pass, idx int, call *ast.CallExpr, arg ast.Expr, x *types.Var, set map[*types.Func]bool) bool {
+	if !isAddrOf(pass, arg, x) {
+		return false
+	}
+	sig, ok := sinkSignatureFor(pass, call)
+	if !ok {
+		return false
+	}
+	pt, ok := paramTypeAt(sig, idx, call)
+	if !ok || !isInterfaceType(pt) {
+		return false
+	}
+	return writeHasFact(pass, sinkDestType(pass, arg, x), set)
+}
+
+func sinkSignatureFor(pass *analysis.Pass, call *ast.CallExpr) (*types.Signature, bool) {
+	fnobj, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fnobj == nil {
+		return nil, false
+	}
+	sig, ok := fnobj.Type().(*types.Signature)
+	return sig, ok
+}
+
+func isAddrOf(pass *analysis.Pass, arg ast.Expr, x *types.Var) bool {
+	u, ok := ast.Unparen(arg).(*ast.UnaryExpr)
+	if !ok || u.Op != token.AND {
+		return false
+	}
+	id, ok := ast.Unparen(u.X).(*ast.Ident)
+	return ok && pass.TypesInfo.ObjectOf(id) == types.Object(x)
+}
+
+func isInterfaceType(t types.Type) bool {
+	_, ok := types.Unalias(t).Underlying().(*types.Interface)
+	return ok
+}
+
+func sinkDestType(pass *analysis.Pass, arg ast.Expr, x *types.Var) types.Type {
+	if dst := pass.TypesInfo.TypeOf(arg); dst != nil {
+		return dst
+	}
+	return x.Type()
 }

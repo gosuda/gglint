@@ -35,7 +35,7 @@ var Analyzer = &analysis.Analyzer{
 	Name: "errdrop",
 	Doc: `reports a dropped error only when later code depends on the call having succeeded
 
-The neverFails fact is derived from the file set of the current build, so a function with build-tagged variants has the fact of the variant that is built.`,
+A write into an in-memory buffer bound to a writer interface keeps partial output rather than a zero value, so it stays silent when the buffer Write never fails. A Close stays silent without write evidence through the handle in this function, or when the handle is a connection whose Close reports no lost data. The neverFails fact is derived from the file set of the current build, so a function with build-tagged variants has the fact of the variant that is built.`,
 	Requires:  []*analysis.Analyzer{inspect.Analyzer},
 	Run:       run,
 	FactTypes: []analysis.Fact{(*neverFails)(nil), (*nilSafe)(nil), (*sticky)(nil)},
