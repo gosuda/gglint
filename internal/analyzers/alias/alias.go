@@ -34,14 +34,14 @@ var mapcopy = &analysis.Analyzer{
 var rangemutate = &analysis.Analyzer{
 	Name:     "rangemutate",
 	Doc:      "reports appends to a slice while ranging over it; covers only appendclobber, mapcopy, rangemutate, rangeref",
-	Requires: []*analysis.Analyzer{inspect.Analyzer},
+	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runRangemutate,
 }
 
 var rangeref = &analysis.Analyzer{
 	Name:     "rangeref",
 	Doc:      "reports addresses of a range copy that escape; covers only appendclobber, mapcopy, rangemutate, rangeref",
-	Requires: []*analysis.Analyzer{inspect.Analyzer},
+	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runRangeref,
 }
 

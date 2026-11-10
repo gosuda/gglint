@@ -38,6 +38,22 @@ type rangeScope struct {
 	seen map[token.Pos]bool
 }
 
+type rangeScan struct {
+	pass  *analysis.Pass
+	scope rangeScope
+	graph *flow.Graph
+	entry ast.Stmt
+}
+
+func isSlice(info *types.Info, e ast.Expr) bool {
+	t := info.TypeOf(e)
+	if t == nil {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Slice)
+	return ok
+}
+
 func checkRangemutate(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, seen map[token.Pos]bool) {
 	info := pass.TypesInfo
 	key, ok := flow.KeyOf(info, rs.X)
@@ -51,54 +67,49 @@ func checkRangemutate(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, seen 
 	if !isSlice(info, rs.X) {
 		return
 	}
-	scanRangeList(pass, rs.Body.List, nil, rangeScope{key: key, name: types.ExprString(rs.X), seen: seen})
-}
-
-func isSlice(info *types.Info, e ast.Expr) bool {
-	t := info.TypeOf(e)
-	if t == nil {
-		return false
+	g := flow.NewGraph(pass, fn)
+	if g == nil {
+		return
 	}
-	_, ok := t.Underlying().(*types.Slice)
-	return ok
+	entry := loopEntry(rs)
+	if entry == nil {
+		return
+	}
+	scan := &rangeScan{pass: pass, scope: rangeScope{key: key, name: types.ExprString(rs.X), seen: seen}, graph: g, entry: entry}
+	scan.scanList(rs.Body.List)
 }
 
-func scanRangeList(pass *analysis.Pass, list []ast.Stmt, after ast.Stmt, scope rangeScope) {
-	for i, st := range list {
-		next := after
-		if i+1 < len(list) {
-			next = list[i+1]
-		}
+func loopEntry(rs *ast.RangeStmt) ast.Stmt {
+	if rs.Body == nil || len(rs.Body.List) == 0 {
+		return nil
+	}
+	return rs.Body.List[0]
+}
+
+func (s *rangeScan) scanList(list []ast.Stmt) {
+	for _, st := range list {
 		if as, ok := st.(*ast.AssignStmt); ok {
-			checkRangeAppend(pass, as, next, scope)
+			s.checkAppend(as)
 		}
 		for _, child := range childLists(st) {
-			scanRangeList(pass, child, childAfter(st, next), scope)
+			s.scanList(child)
 		}
 	}
 }
 
-func childAfter(st, next ast.Stmt) ast.Stmt {
-	switch st.(type) {
-	case *ast.BlockStmt, *ast.LabeledStmt:
-		return next
-	}
-	return nil
-}
-
-func checkRangeAppend(pass *analysis.Pass, st *ast.AssignStmt, next ast.Stmt, scope rangeScope) {
-	call, ok := rangeAppendCall(pass.TypesInfo, st, scope.key)
+func (s *rangeScan) checkAppend(st *ast.AssignStmt) {
+	call, ok := rangeAppendCall(s.pass.TypesInfo, st, s.scope.key)
 	if !ok {
 		return
 	}
-	if next != nil && exitsLoop(next) {
+	if !s.graph.Reaches(st, s.entry, nil) {
 		return
 	}
-	if scope.seen[call.Pos()] {
+	if s.scope.seen[call.Pos()] {
 		return
 	}
-	scope.seen[call.Pos()] = true
-	pass.Reportf(call.Pos(), "appending to %s while ranging over it leaves the loop on the old length and can reallocate: collect into another slice", scope.name)
+	s.scope.seen[call.Pos()] = true
+	s.pass.Reportf(call.Pos(), "appending to %s while ranging over it leaves the loop on the old length and can reallocate: collect into another slice", s.scope.name)
 }
 
 func rangeAppendCall(info *types.Info, st *ast.AssignStmt, key flow.Key) (*ast.CallExpr, bool) {
@@ -122,14 +133,6 @@ func rangeAppendTargets(info *types.Info, st *ast.AssignStmt, call *ast.CallExpr
 	}
 	lhs, ok := flow.KeyOf(info, st.Lhs[0])
 	return ok && lhs == key
-}
-
-func exitsLoop(st ast.Stmt) bool {
-	if b, ok := st.(*ast.BranchStmt); ok {
-		return b.Tok == token.BREAK
-	}
-	_, ok := st.(*ast.ReturnStmt)
-	return ok
 }
 
 func childLists(st ast.Stmt) [][]ast.Stmt {

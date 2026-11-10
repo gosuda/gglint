@@ -140,3 +140,15 @@ func RangemutateReportedNestedSame() []int {
 	}
 	return s
 }
+
+func RangemutateSilentReturnInside() []int {
+	xs := []int{1, 2, 3}
+	for i, x := range xs {
+		if x == 2 {
+			xs = append(xs, i)
+			_ = len(xs)
+			return xs
+		}
+	}
+	return xs
+}

@@ -128,11 +128,11 @@ func escapesRange(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, u *ast.Un
 	if storedMapAddr(info, rs, u) {
 		return true
 	}
-	tk, ok := singleStoreTarget(info, rs, u)
+	tk, store, ok := singleStoreTarget(info, rs, u)
 	if !ok {
 		return false
 	}
-	return writeThrough(info, fn, tk, u)
+	return writeThrough(pass, fn, store, tk, u)
 }
 
 func appendElemArg(info *types.Info, body *ast.BlockStmt, u *ast.UnaryExpr) bool {
@@ -234,8 +234,9 @@ func isMapStore(info *types.Info, l ast.Expr) bool {
 	return false
 }
 
-func singleStoreTarget(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) (flow.Key, bool) {
+func singleStoreTarget(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) (flow.Key, *ast.AssignStmt, bool) {
 	var tk flow.Key
+	var store *ast.AssignStmt
 	found := false
 	ast.Inspect(rs.Body, func(n ast.Node) bool {
 		if found {
@@ -251,11 +252,12 @@ func singleStoreTarget(info *types.Info, rs *ast.RangeStmt, u *ast.UnaryExpr) (f
 		k, ok := singleStore(info, rs, st, u)
 		if ok {
 			tk = k
+			store = st
 			found = true
 		}
 		return !found
 	})
-	return tk, found
+	return tk, store, found
 }
 
 func singleStore(info *types.Info, rs *ast.RangeStmt, st *ast.AssignStmt, u *ast.UnaryExpr) (flow.Key, bool) {
@@ -288,68 +290,62 @@ func singleTarget(info *types.Info, rs *ast.RangeStmt, l ast.Expr) (flow.Key, bo
 	return flow.Key{}, false
 }
 
-func writeThrough(info *types.Info, fn ast.Node, tk flow.Key, u *ast.UnaryExpr) bool {
+func writeThrough(pass *analysis.Pass, fn ast.Node, store *ast.AssignStmt, tk flow.Key, u *ast.UnaryExpr) bool {
+	g := flow.NewGraph(pass, fn)
+	if g == nil || store == nil {
+		return false
+	}
+	info := pass.TypesInfo
 	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}
-	scan := throughScan{info: info, target: tk, stop: u, top: topAssigns(body)}
-	ast.Inspect(body, scan.visit)
-	return scan.found
-}
-
-func topAssigns(body *ast.BlockStmt) map[*ast.AssignStmt]bool {
-	out := map[*ast.AssignStmt]bool{}
-	for _, st := range body.List {
-		if assign, ok := st.(*ast.AssignStmt); ok {
-			out[assign] = true
+	whole := map[ast.Node]bool{}
+	var writes []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
 		}
-	}
-	return out
-}
-
-type throughScan struct {
-	info   *types.Info
-	target flow.Key
-	stop   *ast.UnaryExpr
-	top    map[*ast.AssignStmt]bool
-	killed bool
-	found  bool
-}
-
-func (s *throughScan) visit(n ast.Node) bool {
-	if s.found {
-		return false
-	}
-	if _, ok := n.(*ast.FuncLit); ok {
-		return false
-	}
-	st, ok := n.(*ast.AssignStmt)
-	if !ok {
+		st, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		collectWholeWrite(info, st, tk, u, whole, &writes)
 		return true
+	})
+	if len(writes) == 0 {
+		return false
 	}
-	s.statement(st)
-	return !s.found
-}
-
-func (s *throughScan) statement(st *ast.AssignStmt) {
-	for _, lhs := range st.Lhs {
-		s.assign(st, lhs)
+	avoid := func(n ast.Node) bool {
+		return whole[n]
 	}
-}
-
-func (s *throughScan) assign(st *ast.AssignStmt, lhs ast.Expr) {
-	if lhs.Pos() <= s.stop.End() {
-		return
-	}
-	if isWholeTarget(s.info, lhs, s.target) {
-		if s.top[st] {
-			s.killed = true
+	for _, w := range writes {
+		if g.Reaches(store, w, avoid) {
+			return true
 		}
-		return
 	}
-	if !s.killed && matchesWrite(s.info, lhs, s.target, s.stop) {
-		s.found = true
+	return false
+}
+
+func collectWholeWrite(info *types.Info, st *ast.AssignStmt, tk flow.Key, u *ast.UnaryExpr, whole map[ast.Node]bool, writes *[]ast.Node) {
+	hasWhole := false
+	hasWrite := false
+	for _, lhs := range st.Lhs {
+		if lhs.Pos() <= u.End() {
+			continue
+		}
+		if !hasWhole && isWholeTarget(info, lhs, tk) {
+			hasWhole = true
+		}
+		if !hasWrite && matchesWrite(info, lhs, tk, u) {
+			hasWrite = true
+		}
+	}
+	if hasWhole {
+		whole[st] = true
+	}
+	if hasWrite {
+		*writes = append(*writes, st)
 	}
 }
 

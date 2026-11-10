@@ -94,17 +94,24 @@ func AppendclobberSilentUnreachable(cond bool) int {
 	return a[2]
 }
 
-func AppendclobberReportedSpread(src []int) int {
+func AppendclobberSilentSpread(src []int) int {
 	a := []int{1, 2, 3}
 	b := a[:2]
-	b = append(b, src...) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	b = append(b, src...)
 	return a[2]
 }
 
-func AppendclobberReportedMakeNonConst(n int) int {
+func AppendclobberSilentMakeNonConstTwo(n int) int {
 	a := make([]int, 3, n)
 	b := a[:2]
-	b = append(b, 9, 10) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	b = append(b, 9, 10)
+	return a[2]
+}
+
+func AppendclobberReportedMakeNonConstOne(n int) int {
+	a := make([]int, 3, n)
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
 	return a[2]
 }
 
@@ -135,5 +142,58 @@ func AppendclobberReportedGrown() int {
 	b := a[:2]
 	b = append(b, 9, 10, 11) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
 	return a[2]
+}
+
+func AppendclobberSilentInPlaceFilter() ([]int, int) {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for i := 0; i < len(xs); i++ {
+		if xs[i]%2 == 0 {
+			out = append(out, xs[i])
+		}
+	}
+	return out, xs[2]
+}
+
+func AppendclobberSilentInPlaceRange() ([]int, int) {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for _, x := range xs {
+		if x%2 == 0 {
+			out = append(out, x)
+		}
+	}
+	return out, xs[2]
+}
+
+func AppendclobberReportedZeroOutside() int {
+	a := []int{1, 2, 3}
+	b := a[:0]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a[0]
+}
+
+func AppendclobberReportedZeroMulti() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:0]
+	for i := 0; i < len(a); i++ {
+		if a[i]%2 == 0 {
+			b = append(b, a[i], 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+		}
+	}
+	return a[1]
+}
+
+func AppendclobberSilentTwoExclusive() []int {
+	a := make([]int, 8)
+	out := a[:0]
+	for i := 0; i < len(a); i++ {
+		if a[i]%2 == 0 {
+			out = append(out, a[i])
+			continue
+		}
+		out = append(out, -a[i])
+	}
+	return out
 }
 

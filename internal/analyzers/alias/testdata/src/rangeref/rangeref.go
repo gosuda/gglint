@@ -211,3 +211,15 @@ func RangerefReportedConditionalKill(items []item, keep bool, other *item) *item
 	out.n = 0
 	return out
 }
+
+func RangerefSilentBranchKill(items []item, keep bool, other *item) *item {
+	var out *item
+	for _, v := range items {
+		out = &v
+		if keep {
+			out = other
+			out.n = 0
+		}
+	}
+	return out
+}
