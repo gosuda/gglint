@@ -171,3 +171,9 @@ func cancelreturnedReportedDeadlineCause(ctx context.Context) context.Context {
 	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
 	return c
 }
+
+func cancelreturnedReportedCancel(ctx context.Context) context.Context {
+	c, cancel := context.WithCancel(ctx)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	return c
+}

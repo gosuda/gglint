@@ -1,6 +1,9 @@
 package root
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
 
 func use(...any) {}
 
@@ -93,6 +96,7 @@ func rootSilentReversed(ctx context.Context) {
 	}
 	use(ctx)
 }
+
 type ctxAlias = context.Context
 
 func rootReportedAlias(ctx ctxAlias) {
@@ -110,4 +114,8 @@ func rootReportedNestedArg(ctx context.Context, k, v any) context.Context {
 		ctx = context.WithValue(context.Background(), k, v) // want "a context is in scope, and this root context drops its cancellation and deadline"
 	}
 	return ctx
+}
+
+func rootReportedRequest(r *http.Request) {
+	use(r, context.Background()) // want "a context is in scope, and this root context drops its cancellation and deadline"
 }

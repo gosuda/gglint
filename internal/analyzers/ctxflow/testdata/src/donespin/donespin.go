@@ -119,6 +119,7 @@ func donespinSilentCustomDone(ctx context.Context, t doneT, ch chan int) {
 		}
 	}
 }
+
 type ctxAlias = context.Context
 
 func donespinReportedAlias(ctx ctxAlias) {
