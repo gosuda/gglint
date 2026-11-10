@@ -577,7 +577,10 @@ func aliasCall(pass *analysis.Pass, call *ast.CallExpr, s aliasScope) bool {
 	if !isBytesAliasingCall(pass, call) {
 		return false
 	}
-	return aliasAnyArg(pass, call.Args, s)
+	if len(call.Args) == 0 {
+		return false
+	}
+	return exprAliasesView(pass, call.Args[0], s)
 }
 
 func aliasViewCall(pass *analysis.Pass, call *ast.CallExpr, s aliasScope) bool {

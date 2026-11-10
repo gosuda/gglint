@@ -521,3 +521,14 @@ func viewescapeReportedRangeSplitSeq(sc *bufio.Scanner, sep []byte, out [][]byte
 	}
 	return out
 }
+
+func viewescapeSilentRangeSplitSeqSeparator(sc *bufio.Scanner, data []byte, out [][]byte) [][]byte {
+	var b []byte
+	for sc.Scan() {
+		b = sc.Bytes()
+		for b = range bytes.SplitSeq(data, b) {
+			out = append(out, b)
+		}
+	}
+	return out
+}

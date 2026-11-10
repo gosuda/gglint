@@ -158,7 +158,7 @@ func invalidAfter(pass *analysis.Pass, ctx loopCtx, from ast.Node, recvKey flow.
 	if g == nil {
 		return false
 	}
-	for _, k := range viewCachedInvalid(pass, ctx, recvKey, viewMethod) {
+	for _, k := range nearestCalls(viewCachedInvalid(pass, ctx, recvKey, viewMethod), from.Pos()) {
 		if g.Reaches(from, k, nil) {
 			return true
 		}
