@@ -136,3 +136,16 @@ func doneskipSilentLogFatal() {
 	}()
 	wg.Wait()
 }
+
+func doneskipReportedWgGo() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	wg.Go(func() {
+		if bad() {
+			return // want "any Wait on it blocks forever"
+		}
+		work()
+		wg.Done()
+	})
+	wg.Wait()
+}

@@ -30,7 +30,9 @@ func runSelfwait(pass *analysis.Pass) (any, error) {
 func checkSelfwait(pass *analysis.Pass, fn ast.Node) {
 	cached := map[*types.Var]bool{}
 	local := map[*types.Var]bool{}
+	past := pastWaits(pass, fn)
 	eachList(fn, func(list []ast.Stmt) {
+		entries := buildEntries(pass, list)
 		for i, s := range list {
 			call, ok := directCall(s)
 			if !ok {
@@ -40,7 +42,7 @@ func checkSelfwait(pass *analysis.Pass, fn ast.Node) {
 			if !ok {
 				continue
 			}
-			checkWait(pass, waitSite{fn, list, i, call, k, text}, cached, local)
+			checkWait(pass, waitSite{fn, list, i, call, k, text}, cached, local, past, entries)
 		}
 	})
 }
@@ -54,7 +56,18 @@ type waitSite struct {
 	text string
 }
 
-func checkWait(pass *analysis.Pass, w waitSite, cached, local map[*types.Var]bool) {
+func isControlStmt(s ast.Stmt) bool {
+	if _, ok := s.(*ast.LabeledStmt); ok {
+		return true
+	}
+	switch unwrap(s).(type) {
+	case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+		return true
+	}
+	return false
+}
+
+func checkWait(pass *analysis.Pass, w waitSite, cached, local map[*types.Var]bool, past *waitHistory, entries []listEntry) {
 	v, ok := w.key.Root.(*types.Var)
 	if !ok || !isLocalCached(pass, w.fn, v, local) {
 		return
@@ -65,11 +78,11 @@ func checkWait(pass *analysis.Pass, w waitSite, cached, local map[*types.Var]boo
 	if w.key.Path != "" && sharesRoot(pass.TypesInfo, w.fn, v) {
 		return
 	}
-	adds, done, ok := straightCounts(pass, w.list, w.at, w.key)
+	adds, done, ok := straightEntries(entries, w.at, w.key)
 	if !ok {
 		return
 	}
-	if shouldReport(pass.TypesInfo, w.fn, w.key, w.call.Pos(), adds, done) {
+	if shouldReport(adds, done, past.doneBefore(w.key, w.call.Pos()), past.hasNonConstBefore(w.key, w.call.Pos())) {
 		pass.Reportf(w.call.Pos(), "no goroutine can call Done on %s, so this Wait blocks forever: call Done for every Add, or start the goroutines before Wait", w.text)
 	}
 }
@@ -106,14 +119,14 @@ func isReachable(pass *analysis.Pass, fn ast.Node, v *types.Var) bool {
 	return hasGoDeferMention(info, fn, v)
 }
 
-func shouldReport(info *types.Info, fn ast.Node, k flow.Key, waitPos token.Pos, adds, done int64) bool {
+func shouldReport(adds, done, doneBefore int64, hasNonConst bool) bool {
 	if adds <= done {
 		return false
 	}
-	if countDonesBefore(info, fn, k, waitPos) > done {
+	if doneBefore > done {
 		return false
 	}
-	return !hasNonConstAddBefore(info, fn, k, waitPos)
+	return !hasNonConst
 }
 
 func mentionedInLit(pass *analysis.Pass, fn ast.Node, v *types.Var) bool {
@@ -156,49 +169,62 @@ func usesVar(info *types.Info, lit *ast.FuncLit, v *types.Var) bool {
 	return found
 }
 
-func straightCounts(pass *analysis.Pass, list []ast.Stmt, at int, k flow.Key) (adds, done int64, ok bool) {
-	info := pass.TypesInfo
-	for i := at - 1; i >= 0; i-- {
-		if isControlStmt(list[i]) {
-			break
+type listEntry struct {
+	ctrl    bool
+	addK    flow.Key
+	addN    int64
+	addBad  bool
+	hasAdd  bool
+	doneK   flow.Key
+	hasDone bool
+}
+
+func buildEntries(pass *analysis.Pass, list []ast.Stmt) []listEntry {
+	out := make([]listEntry, len(list))
+	for i, s := range list {
+		if isControlStmt(s) {
+			out[i].ctrl = true
+			continue
 		}
-		call, ok := directCall(list[i])
+		call, ok := directCall(s)
 		if !ok {
 			continue
 		}
-		a, d, ok := countDelta(info, call, k)
-		if !ok {
-			return 0, 0, false
+		if k, _, ok := wgKey(pass.TypesInfo, call, "Add"); ok {
+			out[i].hasAdd = true
+			out[i].addK = k
+			if n, ok := constInt(pass.TypesInfo, call); ok {
+				out[i].addN = n
+			} else {
+				out[i].addBad = true
+			}
+			continue
 		}
-		adds += a
-		done += d
+		if k, _, ok := wgKey(pass.TypesInfo, call, "Done"); ok {
+			out[i].hasDone = true
+			out[i].doneK = k
+		}
+	}
+	return out
+}
+
+func straightEntries(entries []listEntry, at int, k flow.Key) (adds, done int64, ok bool) {
+	for i := at - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.ctrl {
+			break
+		}
+		if e.hasAdd && e.addK == k {
+			if e.addBad {
+				return 0, 0, false
+			}
+			adds += e.addN
+		}
+		if e.hasDone && e.doneK == k {
+			done++
+		}
 	}
 	return adds, done, true
-}
-
-func isControlStmt(s ast.Stmt) bool {
-	if _, ok := s.(*ast.LabeledStmt); ok {
-		return true
-	}
-	switch unwrap(s).(type) {
-	case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-		return true
-	}
-	return false
-}
-
-func countDelta(info *types.Info, call *ast.CallExpr, k flow.Key) (add, done int64, ok bool) {
-	if ak, _, ok := wgKey(info, call, "Add"); ok && ak == k {
-		n, ok := constInt(info, call)
-		if !ok {
-			return 0, 0, false
-		}
-		return n, 0, true
-	}
-	if dk, _, ok := wgKey(info, call, "Done"); ok && dk == k {
-		return 0, 1, true
-	}
-	return 0, 0, true
 }
 
 func constInt(info *types.Info, call *ast.CallExpr) (int64, bool) {
@@ -357,12 +383,17 @@ func sharesRoot(info *types.Info, fn ast.Node, v *types.Var) bool {
 	return shared
 }
 
-func countDonesBefore(info *types.Info, fn ast.Node, k flow.Key, waitPos token.Pos) int64 {
+type waitHistory struct {
+	donePos  map[flow.Key][]token.Pos
+	nonConst map[flow.Key]token.Pos
+}
+
+func pastWaits(pass *analysis.Pass, fn ast.Node) *waitHistory {
+	past := &waitHistory{donePos: map[flow.Key][]token.Pos{}, nonConst: map[flow.Key]token.Pos{}}
 	body := funcBody(fn)
 	if body == nil {
-		return 0
+		return past
 	}
-	var total int64
 	ast.Inspect(body, func(n ast.Node) bool {
 		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit) != fn {
 			return false
@@ -370,48 +401,53 @@ func countDonesBefore(info *types.Info, fn ast.Node, k flow.Key, waitPos token.P
 		if _, ok := n.(*ast.DeferStmt); ok {
 			return false
 		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok || call.Pos() >= waitPos {
-			return true
-		}
-		if dk, _, ok := wgKey(info, call, "Done"); ok && dk == k {
-			total++
+		if call, ok := n.(*ast.CallExpr); ok {
+			past.noteDone(pass.TypesInfo, call)
 		}
 		return true
 	})
-	return total
-}
-
-func isNonConstAdd(info *types.Info, call *ast.CallExpr, k flow.Key) bool {
-	ak, _, ok := wgKey(info, call, "Add")
-	if !ok || ak != k {
-		return false
-	}
-	_, ok = constInt(info, call)
-	return !ok
-}
-
-func hasNonConstAddBefore(info *types.Info, fn ast.Node, k flow.Key, waitPos token.Pos) bool {
-	body := funcBody(fn)
-	if body == nil {
-		return false
-	}
-	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
 		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit) != fn {
 			return false
 		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok || call.Pos() >= waitPos {
-			return true
+		if call, ok := n.(*ast.CallExpr); ok {
+			past.noteNonConst(pass.TypesInfo, call)
 		}
-		if isNonConstAdd(info, call, k) {
-			found = true
-		}
-		return !found
+		return true
 	})
-	return found
+	return past
+}
+
+func (p *waitHistory) noteDone(info *types.Info, call *ast.CallExpr) {
+	if k, _, ok := wgKey(info, call, "Done"); ok {
+		p.donePos[k] = append(p.donePos[k], call.Pos())
+	}
+}
+
+func (p *waitHistory) noteNonConst(info *types.Info, call *ast.CallExpr) {
+	k, _, ok := wgKey(info, call, "Add")
+	if !ok {
+		return
+	}
+	if _, ok := constInt(info, call); ok {
+		return
+	}
+	if q, dup := p.nonConst[k]; !dup || call.Pos() < q {
+		p.nonConst[k] = call.Pos()
+	}
+}
+
+func (p *waitHistory) doneBefore(k flow.Key, waitPos token.Pos) int64 {
+	var total int64
+	for _, q := range p.donePos[k] {
+		if q < waitPos {
+			total++
+		}
+	}
+	return total
+}
+
+func (p *waitHistory) hasNonConstBefore(k flow.Key, waitPos token.Pos) bool {
+	q, ok := p.nonConst[k]
+	return ok && q < waitPos
 }

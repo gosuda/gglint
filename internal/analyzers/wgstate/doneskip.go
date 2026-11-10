@@ -14,7 +14,7 @@ import (
 
 var doneskipAnalyzer = &analysis.Analyzer{
 	Name:     "doneskip",
-	Doc:      "report a return in a function literal started by go or errgroup Go that skips its direct WaitGroup Done call; a call that passes the group silences it, as does panic or testing FailNow, Fatal, or Skip, though testing calls still hang in a spawned goroutine; named functions are not checked",
+	Doc:      "report a return in a function literal started by go, errgroup Go, or WaitGroup Go that skips its direct WaitGroup Done call; a call that passes the group silences it, as does panic or testing FailNow, Fatal, or Skip, though testing calls still hang in a spawned goroutine; named functions are not checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runDoneskip,
 }
@@ -25,22 +25,10 @@ func runDoneskip(pass *analysis.Pass) (any, error) {
 			if s.Body == nil || s.Body.Body == nil {
 				continue
 			}
-			if isWgGo(pass.TypesInfo, s.Site) {
-				continue
-			}
 			checkDoneskip(pass, s.Body)
 		}
 	})
 	return nil, nil
-}
-
-func isWgGo(info *types.Info, site ast.Node) bool {
-	call, ok := site.(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	fn := typeutil.StaticCallee(info, call)
-	return fn != nil && fn.FullName() == "(*sync.WaitGroup).Go"
 }
 
 type doneCall struct {
@@ -51,7 +39,8 @@ type doneCall struct {
 
 func checkDoneskip(pass *analysis.Pass, lit *ast.FuncLit) {
 	deferred, dones := collectDones(pass, lit)
-	reportReturns(pass, lit, dones, deferred)
+	ctx := newSkipCtx(pass, lit, dones, deferred)
+	reportReturns(ctx)
 }
 
 func collectDones(pass *analysis.Pass, lit *ast.FuncLit) (map[flow.Key]bool, []doneCall) {
@@ -89,47 +78,73 @@ func noteDoneExpr(info *types.Info, dones *[]doneCall, n *ast.ExprStmt) {
 	}
 }
 
-func reportReturns(pass *analysis.Pass, lit *ast.FuncLit, dones []doneCall, deferred map[flow.Key]bool) {
-	eachList(lit, func(list []ast.Stmt) {
+type skipCtx struct {
+	pass       *analysis.Pass
+	info       *types.Info
+	lit        *ast.FuncLit
+	dones      []doneCall
+	deferred   map[flow.Key]bool
+	topDone    []map[flow.Key]bool
+	topRelease []map[flow.Key]bool
+}
+
+func newSkipCtx(pass *analysis.Pass, lit *ast.FuncLit, dones []doneCall, deferred map[flow.Key]bool) *skipCtx {
+	info := pass.TypesInfo
+	ctx := &skipCtx{pass: pass, info: info, lit: lit, dones: dones, deferred: deferred}
+	if lit.Body == nil {
+		return ctx
+	}
+	top := lit.Body.List
+	ctx.topDone = make([]map[flow.Key]bool, len(top)+1)
+	ctx.topRelease = make([]map[flow.Key]bool, len(top)+1)
+	ctx.topDone[0] = map[flow.Key]bool{}
+	ctx.topRelease[0] = map[flow.Key]bool{}
+	for i, s := range top {
+		ctx.topDone[i+1] = copyKeys(ctx.topDone[i], stmtDoneKeys(info, s))
+		ctx.topRelease[i+1] = copyKeys(ctx.topRelease[i], stmtReleaseKeys(info, s))
+	}
+	return ctx
+}
+
+func copyKeys(into map[flow.Key]bool, keys []flow.Key) map[flow.Key]bool {
+	out := make(map[flow.Key]bool, len(into)+len(keys))
+	for k := range into {
+		out[k] = true
+	}
+	for _, k := range keys {
+		out[k] = true
+	}
+	return out
+}
+
+func reportReturns(ctx *skipCtx) {
+	eachList(ctx.lit, func(list []ast.Stmt) {
 		for i, s := range list {
 			ret, ok := unwrap(s).(*ast.ReturnStmt)
 			if !ok {
 				continue
 			}
-			reportSkipped(pass, lit, list[:i], dones, deferred, ret)
+			reportSkipped(ctx, list[:i], ret)
 		}
 	})
 }
 
-func reportSkipped(pass *analysis.Pass, lit *ast.FuncLit, before []ast.Stmt, dones []doneCall, deferred map[flow.Key]bool, ret *ast.ReturnStmt) {
-	if failsBefore(pass.TypesInfo, before) {
+func reportSkipped(ctx *skipCtx, before []ast.Stmt, ret *ast.ReturnStmt) {
+	if failsBefore(ctx.info, before) {
 		return
 	}
-	doneSet, releaseSet := skippedSets(pass.TypesInfo, lit, ret, before)
+	doneSet, releaseSet := skippedSets(ctx, ret, before)
 	seen := map[flow.Key]bool{}
-	for _, d := range dones {
-		if d.pos < ret.End() || deferred[d.key] || seen[d.key] {
+	for _, d := range ctx.dones {
+		if d.pos < ret.End() || ctx.deferred[d.key] || seen[d.key] {
 			continue
 		}
 		seen[d.key] = true
 		if doneSet[d.key] || releaseSet[d.key] {
 			continue
 		}
-		pass.Reportf(ret.Pos(), "this return skips %s.Done(), so any Wait on it blocks forever: defer the Done call", d.text)
+		ctx.pass.Reportf(ret.Pos(), "this return skips %s.Done(), so any Wait on it blocks forever: defer the Done call", d.text)
 	}
-}
-
-func skippedSets(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt, before []ast.Stmt) (done, release map[flow.Key]bool) {
-	done = directDoneSet(info, before)
-	release = directReleaseSet(info, before)
-	encDone, encRelease := enclosingSets(info, lit, ret)
-	for k := range encDone {
-		done[k] = true
-	}
-	for k := range encRelease {
-		release[k] = true
-	}
-	return done, release
 }
 
 func failsBefore(info *types.Info, before []ast.Stmt) bool {
@@ -253,24 +268,76 @@ func callArgKeys(info *types.Info, call *ast.CallExpr) []flow.Key {
 	return out
 }
 
-func enclosingSets(info *types.Info, lit *ast.FuncLit, ret *ast.ReturnStmt) (done, release map[flow.Key]bool) {
+func skippedSets(ctx *skipCtx, ret *ast.ReturnStmt, before []ast.Stmt) (done, release map[flow.Key]bool) {
+	done = directDoneSet(ctx.info, before)
+	release = directReleaseSet(ctx.info, before)
+	encDone, encRelease := enclosingSets(ctx, ret)
+	for k := range encDone {
+		done[k] = true
+	}
+	for k := range encRelease {
+		release[k] = true
+	}
+	return done, release
+}
+
+func enclosingSets(ctx *skipCtx, ret *ast.ReturnStmt) (done, release map[flow.Key]bool) {
 	done = map[flow.Key]bool{}
 	release = map[flow.Key]bool{}
+	lit := ctx.lit
 	if lit.Body == nil {
 		return done, release
 	}
 	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
+		if !descendEnclosing(lit, n, ret) {
 			return false
 		}
-		list, ok := stmtList(n)
-		if !ok {
-			return true
-		}
-		collectEnclosingPrefix(info, list, ret, done, release)
+		handleEnclosing(ctx, n, ret, done, release)
 		return true
 	})
 	return done, release
+}
+
+func descendEnclosing(lit *ast.FuncLit, n ast.Node, ret *ast.ReturnStmt) bool {
+	if n == nil {
+		return true
+	}
+	if n != ast.Node(lit.Body) && (n.End() <= ret.Pos() || n.Pos() >= ret.End()) {
+		return false
+	}
+	if _, ok := n.(*ast.FuncLit); ok {
+		return false
+	}
+	return true
+}
+
+func handleEnclosing(ctx *skipCtx, n ast.Node, ret *ast.ReturnStmt, done, release map[flow.Key]bool) {
+	list, ok := stmtList(n)
+	if !ok {
+		return
+	}
+	if b, ok := n.(*ast.BlockStmt); ok && b == ctx.lit.Body {
+		collectTopPrefix(ctx, list, ret, done, release)
+		return
+	}
+	collectEnclosingPrefix(ctx.info, list, ret, done, release)
+}
+
+func collectTopPrefix(ctx *skipCtx, list []ast.Stmt, ret *ast.ReturnStmt, done, release map[flow.Key]bool) {
+	for i, s := range list {
+		if unwrap(s) == ast.Stmt(ret) {
+			return
+		}
+		if !containsRet(s, ret) {
+			continue
+		}
+		for k := range ctx.topDone[i] {
+			done[k] = true
+		}
+		for k := range ctx.topRelease[i] {
+			release[k] = true
+		}
+	}
 }
 
 func collectEnclosingPrefix(info *types.Info, list []ast.Stmt, ret *ast.ReturnStmt, done, release map[flow.Key]bool) {
