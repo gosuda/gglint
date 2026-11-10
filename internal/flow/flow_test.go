@@ -15,6 +15,7 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/cfg"
 	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/types/typeutil"
 )
 
 func checkTypes(t *testing.T, src string) (*ast.File, *types.Info) {
@@ -775,5 +776,83 @@ func TestNewGraph(t *testing.T) {
 	}
 	if newGraph(nil, nil) != nil {
 		t.Fatalf("nil cfg has graph")
+	}
+}
+
+func TestMethodValueHasNoKey(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\nimport \"sync\"\nfunc f(wg sync.WaitGroup) { _ = wg.Done }\n")
+	decl := findDecl(f, "f")
+	var sel *ast.SelectorExpr
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		if s, ok := n.(*ast.SelectorExpr); ok && s.Sel.Name == "Done" {
+			sel = s
+		}
+		return true
+	})
+	if sel == nil {
+		t.Fatalf("Done selector missing")
+	}
+	if _, ok := KeyOf(info, sel); ok {
+		t.Fatalf("method value has key")
+	}
+}
+
+func TestRLockIsClassedAsRLock(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc f(mu *sync.RWMutex) { mu.RLock(); _ = mu }\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	var call *ast.CallExpr
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if s, ok := ast.Unparen(c.Fun).(*ast.SelectorExpr); ok && s.Sel.Name == "RLock" {
+				call = c
+			}
+		}
+		return true
+	})
+	if call == nil {
+		t.Fatalf("RLock call missing")
+	}
+	if got := mutexMethod(typeutil.StaticCallee(pass.TypesInfo, call)); got != "RLock" {
+		t.Fatalf("mutexMethod = %q, want RLock", got)
+	}
+}
+
+func TestGoLockDoesNotHold(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc f(mu *sync.Mutex) {\nmu.Lock()\nmu.Unlock()\nfunc() {\ngo mu.Lock()\n}()\n_ = 1\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	held := HeldAt(pass, NewGraph(pass, fd))
+	if got := held(fd.Body.List[3]); len(got) != 0 {
+		t.Fatalf("go lock held: %v", got)
+	}
+}
+
+func TestSpawnedUnlockDoesNotRelease(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc f(mu *sync.Mutex) {\nfunc() {\nmu.Lock()\ngo mu.Unlock()\n}()\n_ = 1\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	held := HeldAt(pass, NewGraph(pass, fd))
+	if got := held(fd.Body.List[1]); len(got) != 1 {
+		t.Fatalf("spawn unlock released: %v", got)
 	}
 }

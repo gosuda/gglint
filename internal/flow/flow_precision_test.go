@@ -773,3 +773,135 @@ func TestDeferredSelectDoesNotJoin(t *testing.T) {
 		t.Fatalf("deferred select receive joins at registration")
 	}
 }
+
+func TestConversionIsNoJoin(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc work() {}\nfunc use(any) {}\nfunc f() string {\nvar wg sync.WaitGroup\ns := \"a\"\nwg.Add(1)\ngo func() { defer wg.Done(); println(s) }()\nsink := any(wg)\n_ = sink\ns = \"b\"\nreturn s\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	var target ast.Node
+	for _, s := range fd.Body.List {
+		if a, ok := s.(*ast.AssignStmt); ok && len(a.Lhs) == 1 {
+			if id, ok := a.Lhs[0].(*ast.Ident); ok && id.Name == "s" {
+				target = s
+			}
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if Joined(pass, g, sp, target) {
+		t.Fatalf("conversion joins")
+	}
+}
+
+func TestCallResultIsNoAlias(t *testing.T) {
+	t.Parallel()
+	f, info := checkTypes(t, "package p\nfunc id(v *int) *int { return v }\nfunc f(v *int) { w := id(v); _ = w }\n")
+	decl := findDecl(f, "f")
+	var v *types.Var
+	for _, field := range decl.Type.Params.List {
+		for _, id := range field.Names {
+			if id.Name == "v" {
+				if vv, ok := info.Defs[id].(*types.Var); ok {
+					v = vv
+				}
+			}
+		}
+	}
+	if v == nil {
+		t.Fatalf("param v missing")
+	}
+	out := collectAliases(info, decl.Body, v)
+	w := localNamed(info, decl, "w")
+	if w == nil {
+		t.Fatalf("local w missing")
+	}
+	if out[w] {
+		t.Fatalf("plain call result aliases")
+	}
+}
+
+func TestTwoGroupsGiveZeroGroup(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc work() {}\nfunc f(wg1, wg2 *sync.WaitGroup) {\ngo func() {\ndefer wg1.Done()\ndefer wg2.Done()\nwork()\n}()\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)
+	if len(sp) != 1 {
+		t.Fatalf("spawns = %d, want 1", len(sp))
+	}
+	if !sp[0].Group.zero() {
+		t.Fatalf("two groups give %v", sp[0].Group)
+	}
+}
+
+func TestNonGroupBareWaitIsNoJoin(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nfunc work() {}\nfunc use() {}\nfunc f() {\nvar wg, other sync.WaitGroup\nwg.Add(1)\ngo func() { defer wg.Done(); work() }()\nwait := func() { _ = other.Wait }\nwait()\nuse()\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if Joined(pass, g, sp, fd.Body.List[5]) {
+		t.Fatalf("non-group bare Wait joins")
+	}
+}
+
+func TestUnrelatedSelectCaseDoesNotRefine(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc f(done, other chan int) {\nselect {\ncase <-done:\n_ = 1\ncase v := <-other:\n_ = v\n}\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sel, ok := fd.Body.List[0].(*ast.SelectStmt)
+	if !ok {
+		t.Fatalf("first stmt not select")
+	}
+	if len(sel.Body.List) != 2 {
+		t.Fatalf("cases = %d, want 2", len(sel.Body.List))
+	}
+	var done *types.Var
+	for _, field := range fd.Type.Params.List {
+		for _, id := range field.Names {
+			if id.Name == "done" {
+				if vv, ok2 := pass.TypesInfo.Defs[id].(*types.Var); ok2 {
+					done = vv
+				}
+			}
+		}
+	}
+	if done == nil {
+		t.Fatalf("param done missing")
+	}
+	g := NewGraph(pass, fd)
+	k := Key{Root: done}
+	other, ok := sel.Body.List[1].(*ast.CommClause)
+	if !ok {
+		t.Fatalf("second case not comm")
+	}
+	skip := map[*ast.UnaryExpr]bool{}
+	var refined []ast.Node
+	g.refineClause(pass.TypesInfo, other, k, skip, &refined)
+	if len(refined) != 0 {
+		t.Fatalf("unrelated case refines")
+	}
+}
