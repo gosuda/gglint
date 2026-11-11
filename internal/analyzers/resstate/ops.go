@@ -117,8 +117,9 @@ func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var, cache 
 	if fn == nil {
 		return false
 	}
+	q := freeQuery{pass: pass, fn: fnode, release: n, v: v, cache: cache}
 	if fn.Name() == cFreeFunc {
-		return freeArgsMention(pass, fnode, call, v, cache)
+		return freeArgsMention(q, call)
 	}
 	pkg := fn.Pkg()
 	if pkg == nil {
@@ -127,14 +128,22 @@ func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var, cache 
 	if fn.Name() != "Munmap" {
 		return false
 	}
-	return freeMunmapByPkg(pass, fnode, pkg, call, v, cache)
+	return freeMunmapByPkg(q, pkg, call)
 }
 
-func freeMunmapByPkg(pass *analysis.Pass, fnode ast.Node, pkg *types.Package, call *ast.CallExpr, v *types.Var, cache *freeTempCache) bool {
+type freeQuery struct {
+	pass    *analysis.Pass
+	fn      ast.Node
+	release ast.Node
+	v       *types.Var
+	cache   *freeTempCache
+}
+
+func freeMunmapByPkg(q freeQuery, pkg *types.Package, call *ast.CallExpr) bool {
 	if pkg.Path() != "syscall" && pkg.Path() != "golang.org/x/sys/unix" {
 		return false
 	}
-	return freeArgsMention(pass, fnode, call, v, cache)
+	return freeArgsMention(q, call)
 }
 
 func inPlaceLit(n ast.Node) (*ast.FuncLit, bool) {
@@ -324,28 +333,28 @@ func addrWritesVar(pass *analysis.Pass, x *ast.UnaryExpr, v *types.Var) bool {
 	return ok && k.Root == v
 }
 
-func freeArgsMention(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, v *types.Var, cache *freeTempCache) bool {
+func freeArgsMention(q freeQuery, call *ast.CallExpr) bool {
 	if len(call.Args) == 0 {
 		return false
 	}
-	return freeTargets(pass, fn, call.Args[0], v, cache)
+	return freeTargets(q, call.Args[0])
 }
 
-func freeTargets(pass *analysis.Pass, fn ast.Node, e ast.Expr, v *types.Var, cache *freeTempCache) bool {
+func freeTargets(q freeQuery, e ast.Expr) bool {
 	e = ast.Unparen(e)
-	if exactVar(pass, e, v) {
+	if exactVar(q.pass, e, q.v) {
 		return true
 	}
 	switch x := e.(type) {
 	case *ast.SliceExpr:
-		if !wholeSlice(pass, x, v) {
+		if !wholeSlice(q.pass, x, q.v) {
 			return false
 		}
-		return freeTargets(pass, fn, x.X, v, cache)
+		return freeTargets(q, x.X)
 	case *ast.CallExpr:
-		return freeConvTarget(pass, fn, e, x, v, cache)
+		return freeConvTarget(q, e, x)
 	case *ast.Ident:
-		return freeTempTarget(pass, fn, x, v, cache)
+		return freeTempTarget(q, x)
 	}
 	return false
 }
@@ -389,59 +398,42 @@ func isLenOf(pass *analysis.Pass, e ast.Expr, v *types.Var) bool {
 	return exactVar(pass, call.Args[0], v)
 }
 
-func freeConvTarget(pass *analysis.Pass, fn ast.Node, e ast.Expr, call *ast.CallExpr, v *types.Var, cache *freeTempCache) bool {
-	if len(call.Args) != 1 || !pass.TypesInfo.Types[call.Fun].IsType() {
+func freeConvTarget(q freeQuery, e ast.Expr, call *ast.CallExpr) bool {
+	if len(call.Args) != 1 || !q.pass.TypesInfo.Types[call.Fun].IsType() {
 		return false
 	}
-	if t := pass.TypesInfo.Types[e].Type; t == nil || t.String() != unsafePointerType {
+	if t := q.pass.TypesInfo.Types[e].Type; t == nil || t.String() != unsafePointerType {
 		return false
 	}
-	return freeTargets(pass, fn, call.Args[0], v, cache)
+	return freeTargets(q, call.Args[0])
 }
 
-func freeTempTarget(pass *analysis.Pass, scope ast.Node, id *ast.Ident, v *types.Var, cache *freeTempCache) bool {
-	tv, ok := pass.TypesInfo.Uses[id].(*types.Var)
-	if !ok || tv == v {
+func freeTempTarget(q freeQuery, id *ast.Ident) bool {
+	tv, ok := q.pass.TypesInfo.Uses[id].(*types.Var)
+	if !ok || tv == q.v {
 		return false
 	}
-	def, ok := cache.forScope(scope)[tv]
+	def, ok := q.cache.forScope(q.fn)[tv]
 	if !ok {
 		return false
 	}
-	if !freeConvOf(pass, def, v) && !exactVar(pass, def, v) {
+	if !freeConvOf(q.pass, def, q.v) && !exactVar(q.pass, def, q.v) {
 		return false
 	}
-	return !tempSourceReassigned(pass, scope, def, v)
+	return !tempSourceReassigned(q.pass, q.fn, q.release, def, q.v)
 }
 
-func tempSourceReassigned(pass *analysis.Pass, scope ast.Node, def ast.Expr, v *types.Var) bool {
-	s := &tempReassignScan{pass: pass, scope: scope, def: def, v: v}
-	ast.Inspect(scope, s.visit)
-	return s.reassigned
-}
-
-type tempReassignScan struct {
-	pass       *analysis.Pass
-	scope      ast.Node
-	def        ast.Expr
-	v          *types.Var
-	reassigned bool
-}
-
-func (s *tempReassignScan) visit(n ast.Node) bool {
-	if s.reassigned || freeTempSkip(n, s.scope) {
-		return false
+func tempSourceReassigned(pass *analysis.Pass, scope, release ast.Node, def ast.Expr, v *types.Var) bool {
+	if sourceLitWrites(pass, scope, v) {
+		return true
 	}
-	if tempWritesAfter(s.pass, n, s.def, s.v) {
-		s.reassigned = true
+	if g := flow.NewGraph(pass, scope); g != nil {
+		return sourceReachesRelease(pass, scope, release, g, def, v)
 	}
-	return !s.reassigned
+	return sourceBetweenPositions(pass, scope, release, def, v)
 }
 
-func tempWritesAfter(pass *analysis.Pass, n ast.Node, def ast.Expr, v *types.Var) bool {
-	if n == nil || n.Pos() <= def.Pos() {
-		return false
-	}
+func writesSource(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 	if as, ok := n.(*ast.AssignStmt); ok {
 		return lhsAssigns(pass, as.Lhs, v)
 	}
@@ -449,6 +441,133 @@ func tempWritesAfter(pass *analysis.Pass, n ast.Node, def ast.Expr, v *types.Var
 		return rangeWritesVar(pass, r, v)
 	}
 	return false
+}
+
+func sourceLitWrites(pass *analysis.Pass, scope ast.Node, v *types.Var) bool {
+	found := false
+	ast.Inspect(scope, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		lit, ok := n.(*ast.FuncLit)
+		if !ok || lit == scope {
+			return true
+		}
+		if litWritesSource(pass, lit, v) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func litWritesSource(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
+	writes := false
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if writes {
+			return false
+		}
+		if writesSource(pass, n, v) {
+			writes = true
+		}
+		return !writes
+	})
+	return writes
+}
+
+type graphScan struct {
+	pass       *analysis.Pass
+	scope      ast.Node
+	release    ast.Node
+	g          *flow.Graph
+	def        ast.Expr
+	v          *types.Var
+	reassigned bool
+}
+
+func sourceReachesRelease(pass *analysis.Pass, scope, release ast.Node, g *flow.Graph, def ast.Expr, v *types.Var) bool {
+	s := &graphScan{pass: pass, scope: scope, release: release, g: g, def: def, v: v}
+	ast.Inspect(scope, s.visit)
+	return s.reassigned
+}
+
+func (s *graphScan) visit(n ast.Node) bool {
+	if s.reassigned || freeTempSkip(n, s.scope) {
+		return false
+	}
+	if writesSource(s.pass, n, s.v) && betweenOnGraph(s.g, s.def, n, s.release) {
+		s.reassigned = true
+	}
+	return !s.reassigned
+}
+
+func betweenOnGraph(g *flow.Graph, def, w, release ast.Node) bool {
+	return g.Reaches(def, w, nil) && g.Reaches(w, release, nil)
+}
+
+type loopSpan struct {
+	pos token.Pos
+	end token.Pos
+}
+
+func collectLoopSpans(scope ast.Node) []loopSpan {
+	var out []loopSpan
+	ast.Inspect(scope, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.ForStmt:
+			out = append(out, loopSpan{pos: x.Pos(), end: x.End()})
+		case *ast.RangeStmt:
+			out = append(out, loopSpan{pos: x.Pos(), end: x.End()})
+		}
+		return true
+	})
+	return out
+}
+
+func spanEncloses(spans []loopSpan, w, release ast.Node) bool {
+	for _, s := range spans {
+		if s.pos <= w.Pos() && w.Pos() <= s.end && s.pos <= release.Pos() && release.Pos() <= s.end {
+			return true
+		}
+	}
+	return false
+}
+
+func betweenPositions(def ast.Expr, w, release ast.Node) bool {
+	return def.Pos() < w.Pos() && w.Pos() < release.Pos()
+}
+
+type posScan struct {
+	pass       *analysis.Pass
+	scope      ast.Node
+	release    ast.Node
+	def        ast.Expr
+	v          *types.Var
+	spans      []loopSpan
+	reassigned bool
+}
+
+func sourceBetweenPositions(pass *analysis.Pass, scope, release ast.Node, def ast.Expr, v *types.Var) bool {
+	s := &posScan{pass: pass, scope: scope, release: release, def: def, v: v, spans: collectLoopSpans(scope)}
+	ast.Inspect(scope, s.visit)
+	return s.reassigned
+}
+
+func (s *posScan) visit(n ast.Node) bool {
+	if s.reassigned || freeTempSkip(n, s.scope) {
+		return false
+	}
+	if !writesSource(s.pass, n, s.v) {
+		return true
+	}
+	if betweenPositions(s.def, n, s.release) {
+		s.reassigned = true
+		return false
+	}
+	if spanEncloses(s.spans, n, s.release) {
+		s.reassigned = true
+	}
+	return !s.reassigned
 }
 
 type freeTempCache struct {

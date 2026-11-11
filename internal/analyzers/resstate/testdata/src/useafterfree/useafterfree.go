@@ -236,3 +236,53 @@ func useafterfreeReportedInPlaceUse() (byte, error) {
 	func() { b[0] = 1 }() // want "is used after it was freed"
 	return 0, nil
 }
+
+func useafterfreeReportedAliasUseBeforeRebind() (byte, error) {
+	a, err := syscall.Mmap(-1, 0, 4096, syscall.PROT_READ, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return 0, err
+	}
+	old := a
+	syscall.Munmap(old)
+	v := a[0] // want "is used after it was freed"
+	a, err = syscall.Mmap(-1, 0, 4096, syscall.PROT_READ, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return 0, err
+	}
+	return v + a[0], nil
+}
+
+func useafterfreeReportedAliasUseBeforeSlice() byte {
+	a := make([]byte, 4096)
+	old := a
+	syscall.Munmap(old)
+	b := a[0] // want "is used after it was freed"
+	a = a[1:]
+	_ = a
+	return b
+}
+
+func useafterfreeSilentLoopRebindAfterRelease() byte {
+	a := make([]byte, 4096)
+	old := a
+	for range 1 {
+		syscall.Munmap(old)
+		a = make([]byte, 4096)
+		_ = a[0]
+	}
+	return a[0]
+}
+
+func useafterfreeSilentLitRemapAlias() (byte, error) {
+	a, err := syscall.Mmap(-1, 0, 4096, syscall.PROT_READ, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return 0, err
+	}
+	old := a
+	func() { a, err = syscall.Mmap(-1, 0, 4096, syscall.PROT_READ, syscall.MAP_ANON|syscall.MAP_PRIVATE) }()
+	if err != nil {
+		return 0, err
+	}
+	syscall.Munmap(old)
+	return a[0], nil
+}
