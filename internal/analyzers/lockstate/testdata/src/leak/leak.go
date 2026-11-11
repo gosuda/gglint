@@ -194,3 +194,44 @@ func leakRelockSilent(s *S, n int) error {
 	}
 	return errBad
 }
+
+func (s *S) unlock() {
+	s.mu.Unlock()
+}
+
+func (s *S) validate() bool {
+	return true
+}
+
+func leakDeferredHelperSilent(s *S, n int) (int, error) {
+	s.mu.Lock()
+	if n == 0 {
+		s.mu.Unlock()
+		return 0, errBad
+	}
+	defer s.unlock()
+	if n < 0 {
+		return 0, errBad
+	}
+	return n, nil
+}
+
+func leakDirectHelperSilent(s *S, bad bool) error {
+	s.mu.Lock()
+	if bad {
+		s.unlock()
+		return errBad
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func leakPureHelperReported(s *S, bad bool) error {
+	s.mu.Lock()
+	s.validate()
+	if bad {
+		return errBad // want "this return leaves s.mu locked while another path unlocks it: unlock before returning"
+	}
+	s.mu.Unlock()
+	return nil
+}

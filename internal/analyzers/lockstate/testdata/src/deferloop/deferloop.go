@@ -61,3 +61,19 @@ func deferloopNoLockSilent(mu *sync.Mutex) {
 		defer mu.Unlock()
 	}
 }
+
+func nextItem() (int, bool) {
+	return 0, false
+}
+
+func deferloopLeavesSilent() {
+	var mu sync.Mutex
+	for {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, ok := nextItem(); !ok {
+			break
+		}
+		panic("unexpected item")
+	}
+}

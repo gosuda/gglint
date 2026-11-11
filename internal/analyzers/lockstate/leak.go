@@ -21,16 +21,18 @@ type leakCtx struct {
 	recv        string
 	info        *types.Info
 	key         flow.Key
+	hc          *helperCache
 }
 
 func runLeak(pass *analysis.Pass) (any, error) {
+	hc := newHelperCache(pass)
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
-		checkLeak(pass, cur.Node())
+		checkLeak(pass, cur.Node(), hc)
 	}
 	return nil, nil
 }
 
-func checkLeak(pass *analysis.Pass, fn ast.Node) {
+func checkLeak(pass *analysis.Pass, fn ast.Node, hc *helperCache) {
 	keys := collectKeys(pass.TypesInfo, fn)
 	if len(keys) == 0 {
 		return
@@ -42,16 +44,19 @@ func checkLeak(pass *analysis.Pass, fn ast.Node) {
 	facts := collectFacts(pass.TypesInfo, fn)
 	deferred := deferredKeys(pass.TypesInfo, fn)
 	for _, key := range keys {
-		checkLeakKey(pass, g, fn, key, facts, deferred)
+		checkLeakKey(pass, g, fn, key, facts, deferred, hc)
 	}
 }
 
-func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key, facts *fnFacts, deferred map[flow.Key]bool) {
+func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key, facts *fnFacts, deferred map[flow.Key]bool, hc *helperCache) {
 	info := pass.TypesInfo
 	if facts.storedAddress(key) {
 		return
 	}
 	if deferred[key] {
+		return
+	}
+	if hc.hasDeferredRelease(fn, key) {
 		return
 	}
 	if localNeverShared(info, fn, key) {
@@ -62,7 +67,7 @@ func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key,
 		if !facts.mentions(n, key.Root) {
 			return s
 		}
-		return applyNode(info, key, n, s)
+		return applyNode(info, key, n, s, hc)
 	}
 	pre, order := collectPre(g, entry, tr)
 	rets := returnsIn(fn)
@@ -84,6 +89,7 @@ func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key,
 		recv:        lockRecv(info, fn, key),
 		info:        info,
 		key:         key,
+		hc:          hc,
 	}
 	c.report()
 }
@@ -110,7 +116,7 @@ func (c *leakCtx) reportOne(r *ast.ReturnStmt) {
 	if s.kind != writeKind && s.kind != readKind {
 		return
 	}
-	if applyNode(c.info, c.key, r, s).kind == unknownKind {
+	if applyNode(c.info, c.key, r, s, c.hc).kind == unknownKind {
 		return
 	}
 	if !c.good(r) && !c.endFree {

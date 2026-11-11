@@ -271,3 +271,21 @@ func pairJoinReported(c bool) {
 	mu.Unlock()
 	mu.Unlock() // want "is not write-locked here, so this Unlock panics"
 }
+
+type handoffInner struct {
+	mu sync.Mutex
+}
+
+type handoffOuter struct {
+	p *handoffInner
+}
+
+func pairHandoffSilent(a, b *handoffInner) {
+	var o handoffOuter
+	o.p = a
+	o.p.mu.Lock()
+	o.p.mu.Unlock()
+	o.p = b
+	b.mu.Lock()
+	o.p.mu.Unlock()
+}

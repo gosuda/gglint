@@ -41,7 +41,7 @@ func checkUpgradeKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.K
 		if !facts.mentions(n, key.Root) {
 			return s
 		}
-		return applyNode(info, key, n, s)
+		return applyNode(info, key, n, s, nil)
 	}
 	pre, order := collectPre(g, entry, tr)
 	for _, n := range order {

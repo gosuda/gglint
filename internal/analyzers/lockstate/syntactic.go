@@ -2,7 +2,6 @@ package lockstate
 
 import (
 	"go/ast"
-	"go/token"
 	"go/types"
 	"strings"
 
@@ -20,7 +19,11 @@ func runDeferloop(pass *analysis.Pass) (any, error) {
 }
 
 func checkDeferloop(pass *analysis.Pass, fn ast.Node) {
-	checkLoopList(pass, loopBodies(fn))
+	g := flow.NewGraph(pass, fn)
+	if g == nil {
+		return
+	}
+	checkLoopList(pass, g, loopBodies(fn))
 }
 
 type loopScope struct {
@@ -49,27 +52,16 @@ func loopBodies(fn ast.Node) []loopScope {
 	return out
 }
 
-func checkLoopList(pass *analysis.Pass, scopes []loopScope) {
+func checkLoopList(pass *analysis.Pass, g *flow.Graph, scopes []loopScope) {
 	for _, sc := range scopes {
-		if len(sc.list) == 0 || lastIsExit(sc.list) {
+		if len(sc.list) == 0 {
 			continue
 		}
 		memo := map[flow.Key]loopFacts{}
 		for i, st := range sc.list {
-			checkLoopDefer(pass, sc, i, st, memo)
+			checkLoopDefer(pass, g, sc, i, st, memo)
 		}
 	}
-}
-
-func lastIsExit(list []ast.Stmt) bool {
-	last := list[len(list)-1]
-	if _, ok := last.(*ast.ReturnStmt); ok {
-		return true
-	}
-	if b, ok := last.(*ast.BranchStmt); ok && b.Tok == token.BREAK {
-		return true
-	}
-	return false
 }
 
 type loopFacts struct {
@@ -78,7 +70,7 @@ type loopFacts struct {
 	unlocks    bool
 }
 
-func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt, memo map[flow.Key]loopFacts) {
+func checkLoopDefer(pass *analysis.Pass, g *flow.Graph, sc loopScope, i int, st ast.Stmt, memo map[flow.Key]loopFacts) {
 	ds, ok := st.(*ast.DeferStmt)
 	if !ok {
 		return
@@ -91,9 +83,21 @@ func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt, memo 
 	if want == "" {
 		return
 	}
-	if !loopHasLock(pass, sc.list, i, dk, want) {
+	lockStmt, ok := loopLockStmt(pass, sc.list, i, dk, want)
+	if !ok {
 		return
 	}
+	if !g.Reaches(ds, lockStmt, nil) {
+		return
+	}
+	if loopSuppressed(pass, dk, sc, memo) {
+		return
+	}
+	recv := recvText(pass.TypesInfo, ds.Call)
+	pass.Reportf(ds.Call.Pos(), "the deferred unlock runs at function exit, so the second iteration locks %s while it is held: unlock at the end of each iteration", recv)
+}
+
+func loopSuppressed(pass *analysis.Pass, dk flow.Key, sc loopScope, memo map[flow.Key]loopFacts) bool {
 	f, ok := memo[dk]
 	if !ok {
 		f = loopFacts{
@@ -103,17 +107,7 @@ func checkLoopDefer(pass *analysis.Pass, sc loopScope, i int, st ast.Stmt, memo 
 		}
 		memo[dk] = f
 	}
-	if f.inLoop {
-		return
-	}
-	if f.reassigned {
-		return
-	}
-	if f.unlocks {
-		return
-	}
-	recv := recvText(pass.TypesInfo, ds.Call)
-	pass.Reportf(ds.Call.Pos(), "the deferred unlock runs at function exit, so the second iteration locks %s while it is held: unlock at the end of each iteration", recv)
+	return f.inLoop || f.reassigned || f.unlocks
 }
 
 func rootInLoop(info *types.Info, key flow.Key, sc loopScope) bool {
@@ -261,13 +255,13 @@ func matchLock(deferMethod string) string {
 	return ""
 }
 
-func loopHasLock(pass *analysis.Pass, list []ast.Stmt, upto int, key flow.Key, want string) bool {
+func loopLockStmt(pass *analysis.Pass, list []ast.Stmt, upto int, key flow.Key, want string) (ast.Stmt, bool) {
 	for _, st := range list[:upto] {
 		if stmtIsLock(pass, st, key, want) {
-			return true
+			return st, true
 		}
 	}
-	return false
+	return nil, false
 }
 
 func stmtIsLock(pass *analysis.Pass, st ast.Stmt, key flow.Key, want string) bool {
@@ -313,6 +307,10 @@ func checkTrylock(pass *analysis.Pass, fn ast.Node) {
 			checkTryExpr(pass, n)
 		case *ast.AssignStmt:
 			checkTryAssign(pass, n)
+		case *ast.DeferStmt:
+			checkTryDefer(pass, n)
+		case *ast.GoStmt:
+			checkTryGo(pass, n)
 		}
 		return true
 	})
@@ -331,6 +329,22 @@ func checkTryAssign(pass *analysis.Pass, as *ast.AssignStmt) {
 		return
 	}
 	call, m, recv, ok := tryCall(pass.TypesInfo, as.Rhs[0])
+	if !ok {
+		return
+	}
+	pass.Reportf(call.Pos(), "the result of %s.%s is dropped, so the code below runs whether or not the lock was taken: branch on the result, or call %s.%s", recv, m, recv, lockForTry(m))
+}
+
+func checkTryDefer(pass *analysis.Pass, ds *ast.DeferStmt) {
+	call, m, recv, ok := tryCall(pass.TypesInfo, ds.Call)
+	if !ok {
+		return
+	}
+	pass.Reportf(call.Pos(), "the result of %s.%s is dropped, so the code below runs whether or not the lock was taken: branch on the result, or call %s.%s", recv, m, recv, lockForTry(m))
+}
+
+func checkTryGo(pass *analysis.Pass, gs *ast.GoStmt) {
+	call, m, recv, ok := tryCall(pass.TypesInfo, gs.Call)
 	if !ok {
 		return
 	}

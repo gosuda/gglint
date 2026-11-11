@@ -20,21 +20,21 @@ func Analyzers() []*analysis.Analyzer {
 
 var pairAnalyzer = &analysis.Analyzer{
 	Name:     "pair",
-	Doc:      "reports Unlock and RUnlock calls that panic on a mutex state this function sets with its own lock calls; a mutex passed to other code, and a lock taken or released out of sight, are not modelled",
+	Doc:      "reports Unlock and RUnlock calls that panic on a mutex state this function sets with its own lock calls; a mutex passed to other code, a lock taken or released out of sight, and deferred calls are not checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runPair,
 }
 
 var upgradeAnalyzer = &analysis.Analyzer{
 	Name:     "upgrade",
-	Doc:      "reports Lock taken in this function while a read lock this function took is held; a read lock taken or released out of sight, including by a called helper, is not seen",
+	Doc:      "reports Lock taken in this function while a read lock this function took is held; a read lock taken or released out of sight, including by a called helper, is not seen, and deferred calls are not checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUpgrade,
 }
 
 var leakAnalyzer = &analysis.Analyzer{
 	Name:     "leak",
-	Doc:      "reports a return that leaves a mutex locked while another path of the same function unlocks it, including a lock handed to the caller; silent for a mutex with a deferred unlock, a local mutex never shared, or a mutex passed to other code",
+	Doc:      "reports a return that leaves a mutex locked while another path of the same function unlocks it, including a lock handed to the caller; silent for a mutex with a deferred unlock, a local mutex never shared, or a mutex passed to other code; a helper of this package that unlocks counts as an unlock",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runLeak,
 }

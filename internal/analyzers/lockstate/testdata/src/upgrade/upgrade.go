@@ -109,3 +109,15 @@ func upgradeAddrStoredSilent() {
 	mu.Lock()
 	mu.Unlock()
 }
+
+type resetS struct {
+	mu sync.RWMutex
+}
+
+func upgradeResetSilent() {
+	var s resetS
+	s.mu.RLock()
+	s.mu = sync.RWMutex{}
+	s.mu.Lock()
+	s.mu.Unlock()
+}

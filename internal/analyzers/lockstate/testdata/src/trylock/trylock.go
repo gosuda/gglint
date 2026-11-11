@@ -37,3 +37,14 @@ func trylockNestedReported(mu *sync.Mutex) {
 		mu.TryLock() // want "the result of mu.TryLock is dropped"
 	}()
 }
+
+func trylockDeferReported() {
+	var mu sync.Mutex
+	defer mu.TryLock() // want "the result of mu.TryLock is dropped"
+	_ = mu
+}
+
+func trylockGoReported() {
+	var mu sync.Mutex
+	go mu.TryLock() // want "the result of mu.TryLock is dropped"
+}
