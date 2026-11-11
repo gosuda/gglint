@@ -18,6 +18,8 @@ func collectAliases(info *types.Info, body *ast.BlockStmt, v *types.Var) map[*ty
 				changed = aliasAssign(info, n, out) || changed
 			case *ast.ValueSpec:
 				changed = aliasSpec(info, n, out) || changed
+			case *ast.RangeStmt:
+				changed = aliasRange(info, n, out) || changed
 			}
 			return true
 		})
@@ -26,27 +28,69 @@ func collectAliases(info *types.Info, body *ast.BlockStmt, v *types.Var) map[*ty
 }
 
 func aliasAssign(info *types.Info, s *ast.AssignStmt, out map[*types.Var]bool) bool {
-	if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
-		return false
+	if len(s.Lhs) == 1 && len(s.Rhs) == 1 {
+		if !resolvesTo(info, s.Rhs[0], out) {
+			return false
+		}
+		return aliasLHS(info, s.Lhs[0], out)
 	}
-	if !resolvesTo(info, s.Rhs[0], out) {
-		return false
+	if len(s.Lhs) == len(s.Rhs) {
+		return aliasEach(info, s.Lhs, s.Rhs, out)
 	}
-	return aliasLHS(info, s.Lhs[0], out)
+	return false
 }
 
 func aliasSpec(info *types.Info, s *ast.ValueSpec, out map[*types.Var]bool) bool {
-	if len(s.Names) != 1 || len(s.Values) != 1 {
+	if len(s.Names) == 1 && len(s.Values) == 1 {
+		if !resolvesTo(info, s.Values[0], out) {
+			return false
+		}
+		if vv, ok := info.Defs[s.Names[0]].(*types.Var); ok && !out[vv] {
+			out[vv] = true
+			return true
+		}
 		return false
 	}
-	if !resolvesTo(info, s.Values[0], out) {
-		return false
-	}
-	if vv, ok := info.Defs[s.Names[0]].(*types.Var); ok && !out[vv] {
-		out[vv] = true
-		return true
+	if len(s.Names) == len(s.Values) {
+		lhs := make([]ast.Expr, len(s.Names))
+		for i, id := range s.Names {
+			lhs[i] = id
+		}
+		return aliasEach(info, lhs, s.Values, out)
 	}
 	return false
+}
+
+func aliasEach(info *types.Info, lhs, rhs []ast.Expr, out map[*types.Var]bool) bool {
+	changed := false
+	for i := range lhs {
+		if !resolvesTo(info, rhs[i], out) {
+			continue
+		}
+		if !carriesLHS(info, lhs[i]) {
+			continue
+		}
+		if aliasLHS(info, lhs[i], out) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+func carriesLHS(info *types.Info, e ast.Expr) bool {
+	return canCarry(info.TypeOf(e))
+}
+
+func aliasRange(info *types.Info, s *ast.RangeStmt, out map[*types.Var]bool) bool {
+	if s.X == nil {
+		return false
+	}
+	if !resolvesTo(info, s.X, out) {
+		return false
+	}
+	keyChanged := s.Key != nil && carriesLHS(info, s.Key) && aliasLHS(info, s.Key, out)
+	valueChanged := s.Value != nil && carriesLHS(info, s.Value) && aliasLHS(info, s.Value, out)
+	return keyChanged || valueChanged
 }
 
 func aliasLHS(info *types.Info, lhs ast.Expr, out map[*types.Var]bool) bool {
@@ -70,8 +114,8 @@ func resolvesTo(info *types.Info, e ast.Expr, out map[*types.Var]bool) bool {
 	if id, ok := e.(*ast.Ident); ok {
 		return resolvesIdent(info, id, out)
 	}
-	if sel, ok := e.(*ast.SelectorExpr); ok && info.Selections[sel] != nil && info.Selections[sel].Kind() == types.MethodVal {
-		return resolvesTo(info, sel.X, out)
+	if sel, ok := e.(*ast.SelectorExpr); ok {
+		return resolvesSelector(info, sel, out)
 	}
 	if s, ok := e.(*ast.SliceExpr); ok {
 		return resolvesTo(info, s.X, out)
@@ -85,7 +129,37 @@ func resolvesTo(info *types.Info, e ast.Expr, out map[*types.Var]bool) bool {
 	if c, ok := e.(*ast.CompositeLit); ok {
 		return resolvesComposite(info, c, out)
 	}
+	if idx, ok := e.(*ast.IndexExpr); ok {
+		return resolvesIndexed(info, idx.X, e, out)
+	}
+	if idx, ok := e.(*ast.IndexListExpr); ok {
+		return resolvesIndexed(info, idx.X, e, out)
+	}
 	return false
+}
+
+func resolvesSelector(info *types.Info, sel *ast.SelectorExpr, out map[*types.Var]bool) bool {
+	got := info.Selections[sel]
+	if got == nil {
+		return false
+	}
+	if got.Kind() == types.MethodVal {
+		return resolvesTo(info, sel.X, out)
+	}
+	if got.Kind() != types.FieldVal {
+		return false
+	}
+	if !canCarry(info.TypeOf(sel)) {
+		return false
+	}
+	return resolvesTo(info, sel.X, out)
+}
+
+func resolvesIndexed(info *types.Info, base, e ast.Expr, out map[*types.Var]bool) bool {
+	if !canCarry(info.TypeOf(e)) {
+		return false
+	}
+	return resolvesTo(info, base, out)
 }
 
 func resolvesIdent(info *types.Info, id *ast.Ident, out map[*types.Var]bool) bool {

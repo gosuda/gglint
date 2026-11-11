@@ -905,3 +905,142 @@ func TestUnrelatedSelectCaseDoesNotRefine(t *testing.T) {
 		t.Fatalf("unrelated case refines")
 	}
 }
+
+func TestEscapesValueReceiverHolder(t *testing.T) {
+	t.Parallel()
+	src := `package p
+type Job struct{ Out chan int }
+func (j Job) Finish() { close(j.Out) }
+func closeJob(ch chan int) { j := Job{Out: ch}; j.Finish() }
+`
+	if !escapeOf(t, src, "closeJob", "ch") {
+		t.Fatalf("value receiver on alias holder does not escape")
+	}
+}
+
+func TestEscapesRangeValueAlias(t *testing.T) {
+	t.Parallel()
+	src := `package p
+func closeOne(c chan int) { close(c) }
+func rangeHolder(ch chan int) { for _, c := range []chan int{ch} { closeOne(c) } }
+`
+	if !escapeOf(t, src, "rangeHolder", "ch") {
+		t.Fatalf("range value over composite holder does not escape")
+	}
+}
+
+func TestEscapesMultiValueAlias(t *testing.T) {
+	t.Parallel()
+	src := `package p
+func closeOne(c chan int) { close(c) }
+func multiHolder(ch chan int) { a, b := ch, 0; closeOne(a); _ = b }
+`
+	if !escapeOf(t, src, "multiHolder", "ch") {
+		t.Fatalf("multi-value left side does not escape")
+	}
+}
+
+func TestEscapesFieldReadAlias(t *testing.T) {
+	t.Parallel()
+	src := `package p
+type Job struct{ Out chan int }
+var keep chan int
+func fieldHolder(ch chan int) { j := Job{Out: ch}; keep = j.Out }
+`
+	if !escapeOf(t, src, "fieldHolder", "ch") {
+		t.Fatalf("field read of alias holder does not escape")
+	}
+}
+
+func TestEscapesIndexReadAlias(t *testing.T) {
+	t.Parallel()
+	src := `package p
+var keep chan int
+func indexHolder(ch chan int) { arr := []chan int{ch}; keep = arr[0] }
+`
+	if !escapeOf(t, src, "indexHolder", "ch") {
+		t.Fatalf("index read of alias holder does not escape")
+	}
+}
+
+func TestEscapesNonRefCopyStaysLocal(t *testing.T) {
+	t.Parallel()
+	src := `package p
+import "sync"
+func useSync(m sync.Mutex) { _ = m }
+func mutexCopy(mu sync.Mutex) { s := struct{ M sync.Mutex }{M: mu}; useSync(s.M) }
+`
+	if escapeOf(t, src, "mutexCopy", "mu") {
+		t.Fatalf("mutex value copy escapes")
+	}
+}
+
+func TestJoinedDeferredHelperSignal(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc finish(c chan struct{}) { close(c) }\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { defer finish(done); println(s) }()\n<-done\ns = \"b\"\nreturn s\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if !Joined(pass, g, sp, fd.Body.List[4]) {
+		t.Fatalf("deferred helper signal does not join")
+	}
+}
+
+func TestJoinedLastHelperSignal(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nfunc finish(c chan struct{}) { close(c) }\nfunc f() string {\ndone := make(chan struct{})\ns := \"a\"\ngo func() { println(s); finish(done) }()\n<-done\ns = \"b\"\nreturn s\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	g := NewGraph(pass, fd)
+	if !Joined(pass, g, sp, fd.Body.List[4]) {
+		t.Fatalf("last helper signal does not join")
+	}
+}
+
+func TestSpawnGroupHelperNoArg(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nvar wg sync.WaitGroup\nvar n int\nfunc worker() { defer wg.Done() }\nfunc f() {\nwg.Add(1)\ngo func() { worker(); n = 1 }()\nwg.Wait()\n_ = n\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	if sp.Group.Root == nil || sp.Group.Root.Name() != "wg" {
+		t.Fatalf("helper group missing, got %v", sp.Group.Root)
+	}
+	g := NewGraph(pass, fd)
+	if !Joined(pass, g, sp, fd.Body.List[3]) {
+		t.Fatalf("helper group does not join")
+	}
+}
+
+func TestSpawnGroupHelperTwoGroups(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nvar wa sync.WaitGroup\nvar wb sync.WaitGroup\nfunc waWorker() { defer wa.Done() }\nfunc wbWorker() { defer wb.Done() }\nfunc f() {\nwa.Add(1)\nwb.Add(1)\ngo func() { waWorker(); wbWorker() }()\nwa.Wait()\nwb.Wait()\n}\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	if !sp.Group.zero() {
+		t.Fatalf("two helper groups gave %v, want zero", sp.Group.Root)
+	}
+}

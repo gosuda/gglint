@@ -139,7 +139,6 @@ func newGraph(fn ast.Node, c *cfg.CFG) *Graph {
 		}
 	}
 	g.buildNested()
-	g.buildOwner()
 	g.mapEntries(fn)
 	return g
 }
@@ -158,9 +157,6 @@ func (g *Graph) buildNested() {
 		})
 		return false
 	})
-}
-
-func (g *Graph) buildOwner() {
 }
 
 func (g *Graph) mapEntries(fn ast.Node) {

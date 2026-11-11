@@ -73,13 +73,15 @@ func anyBreak(list []ast.Stmt) bool {
 }
 
 func breaksLine(s ast.Stmt) bool {
-	switch s.(type) {
+	switch s := s.(type) {
 	case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt:
 		return true
 	case *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
 		return true
 	case *ast.GoStmt, *ast.DeferStmt, *ast.LabeledStmt:
 		return true
+	case *ast.BlockStmt:
+		return anyBreak(s.List)
 	}
 	return false
 }
@@ -640,7 +642,17 @@ func (e *escaper) projection(x ast.Expr, esc bool) (ast.Expr, bool) {
 	if _, ok := x.(*ast.TypeAssertExpr); ok {
 		return c, esc
 	}
+	if sel, ok := x.(*ast.SelectorExpr); ok && esc && e.holderForward(sel.X, x) {
+		return c, true
+	}
 	return c, esc && (e.captured || e.addr)
+}
+
+func (e *escaper) holderForward(base, result ast.Expr) bool {
+	if !canCarry(e.info.TypeOf(result)) {
+		return false
+	}
+	return resolvesTo(e.info, base, e.alias)
 }
 
 func (e *escaper) aliased(id *ast.Ident) bool {
@@ -699,14 +711,43 @@ func (e *escaper) compound(x ast.Expr, esc bool) bool {
 func (e *escaper) indexRest(x ast.Expr, esc bool) bool {
 	switch x := x.(type) {
 	case *ast.IndexExpr:
-		fwd := esc && (e.captured || e.addr)
-		return e.expr(x.X, fwd) || e.expr(x.Index, fwd)
+		return e.indexSingle(x, esc)
 	case *ast.IndexListExpr:
 		return e.expr(x.X, esc) || e.exprs(x.Indices, esc)
 	case *ast.SliceExpr:
 		return e.slice(x, esc)
 	}
 	return false
+}
+
+func (e *escaper) indexSingle(x *ast.IndexExpr, esc bool) bool {
+	if e.heldBase(x, esc) {
+		return e.heldIndex(x, esc)
+	}
+	return e.sharedIndex(x, esc)
+}
+
+func (e *escaper) heldBase(x *ast.IndexExpr, esc bool) bool {
+	return esc && e.holderForward(x.X, x)
+}
+
+func (e *escaper) heldIndex(x *ast.IndexExpr, esc bool) bool {
+	if e.expr(x.X, true) {
+		return true
+	}
+	return e.expr(x.Index, e.indexFwd(esc))
+}
+
+func (e *escaper) sharedIndex(x *ast.IndexExpr, esc bool) bool {
+	fwd := e.indexFwd(esc)
+	if e.expr(x.X, fwd) {
+		return true
+	}
+	return e.expr(x.Index, fwd)
+}
+
+func (e *escaper) indexFwd(esc bool) bool {
+	return esc && (e.captured || e.addr)
 }
 
 func (e *escaper) slice(s *ast.SliceExpr, esc bool) bool {
@@ -811,7 +852,54 @@ func (e *escaper) recv(c *ast.CallExpr) bool {
 		e.addr = prev
 		return r
 	}
+	if e.valueCopyHolds(sel) {
+		return true
+	}
 	return e.expr(sel.X, e.captured)
+}
+
+func (e *escaper) valueCopyHolds(sel *ast.SelectorExpr) bool {
+	if !hasValueRecv(e.info, sel) {
+		return false
+	}
+	if !canCarry(e.info.TypeOf(sel.X)) {
+		return false
+	}
+	if !resolvesTo(e.info, sel.X, e.alias) {
+		return false
+	}
+	return !isTargetIdent(e.info, sel.X, e.target)
+}
+
+func hasValueRecv(info *types.Info, sel *ast.SelectorExpr) bool {
+	got := info.Selections[sel]
+	if got == nil {
+		return false
+	}
+	fn, ok := got.Obj().(*types.Func)
+	if !ok {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	_, isPtr := types.Unalias(sig.Recv().Type()).(*types.Pointer)
+	return !isPtr
+}
+
+func isTargetIdent(info *types.Info, e ast.Expr, target *types.Var) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	if vv, ok := info.Uses[id].(*types.Var); ok && vv == target {
+		return true
+	}
+	if vv, ok := info.Defs[id].(*types.Var); ok && vv == target {
+		return true
+	}
+	return false
 }
 
 func (e *escaper) implicitAddr(sel *ast.SelectorExpr) bool {

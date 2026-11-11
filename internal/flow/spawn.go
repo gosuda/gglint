@@ -24,7 +24,7 @@ func Spawns(pass *analysis.Pass, fn ast.Node) []Spawn {
 	if pass == nil || pass.TypesInfo == nil || body == nil {
 		return nil
 	}
-	w := spawnWalker{info: pass.TypesInfo}
+	w := spawnWalker{info: pass.TypesInfo, files: pass.Files}
 	for _, s := range body.List {
 		w.stmt(s, false)
 	}
@@ -32,8 +32,9 @@ func Spawns(pass *analysis.Pass, fn ast.Node) []Spawn {
 }
 
 type spawnWalker struct {
-	info *types.Info
-	out  []Spawn
+	info  *types.Info
+	files []*ast.File
+	out   []Spawn
 }
 
 func (w *spawnWalker) stmt(s ast.Stmt, inLoop bool) {
@@ -205,7 +206,102 @@ func (w *spawnWalker) goGroup(s *ast.GoStmt, body *ast.FuncLit) Key {
 	if len(cands) == 1 {
 		return cands[0]
 	}
+	if len(cands) != 0 {
+		return Key{}
+	}
+	if body == nil || body.Body == nil {
+		return Key{}
+	}
+	return w.helperGroup(body)
+}
+
+func (w *spawnWalker) helperGroup(body *ast.FuncLit) Key {
+	seen := map[Key]bool{}
+	var cands []Key
+	add := func(k Key, ok bool) {
+		if !ok || seen[k] {
+			return
+		}
+		seen[k] = true
+		cands = append(cands, k)
+	}
+	w.collectHelperGroups(body, add)
+	if len(cands) == 1 {
+		return cands[0]
+	}
 	return Key{}
+}
+
+func (w *spawnWalker) collectHelperGroups(body *ast.FuncLit, add func(Key, bool)) {
+	ast.Inspect(body.Body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.GoStmt); ok {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			w.helperCallDone(call, add)
+		}
+		return true
+	})
+}
+
+func (w *spawnWalker) helperCallDone(call *ast.CallExpr, add func(Key, bool)) {
+	fn := typeutil.StaticCallee(w.info, call)
+	if fn == nil {
+		return
+	}
+	decl := w.findDecl(fn)
+	if decl == nil || decl.Body == nil {
+		return
+	}
+	w.packageDoneKeys(decl.Body, add)
+}
+
+func (w *spawnWalker) findDecl(fn *types.Func) *ast.FuncDecl {
+	for _, f := range w.files {
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && w.info.Defs[fd.Name] == fn {
+				return fd
+			}
+		}
+	}
+	return nil
+}
+
+func (w *spawnWalker) packageDoneKeys(body *ast.BlockStmt, add func(Key, bool)) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.GoStmt); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		w.packageDoneCall(call, add)
+		return true
+	})
+}
+
+func (w *spawnWalker) packageDoneCall(call *ast.CallExpr, add func(Key, bool)) {
+	fn := typeutil.StaticCallee(w.info, call)
+	if fn == nil || fn.FullName() != "(*sync.WaitGroup).Done" {
+		return
+	}
+	k, ok := MethodKey(w.info, call)
+	if !ok || !w.isPackageVar(k.Root) {
+		return
+	}
+	add(k, true)
+}
+
+func (w *spawnWalker) isPackageVar(v types.Object) bool {
+	vv, ok := v.(*types.Var)
+	if !ok || vv.Pkg() == nil {
+		return false
+	}
+	return vv.Parent() == vv.Pkg().Scope()
 }
 
 func (w *spawnWalker) groupAdder(body *ast.FuncLit, seen map[Key]bool, cands *[]Key) func(Key, bool) {

@@ -535,6 +535,16 @@ func f(c bool) int {
 	}
 }
 
+func TestStraightLineNestedBlock(t *testing.T) {
+	t.Parallel()
+	f, _ := checkTypes(t, "package p\nfunc work() {}\nfunc f() int {\nx := 1\n{\ngo work()\n}\ny := x\n_ = y\nreturn y\n}\n")
+	decl := findDecl(f, "f")
+	list := decl.Body.List
+	if StraightLine(decl, list[0], list[2]) {
+		t.Fatalf("straight across nested go block")
+	}
+}
+
 func TestHeldAtLoop(t *testing.T) {
 	t.Parallel()
 	pkg := loadPackage(t, "package p\nimport \"sync\"\nvar mu sync.Mutex\nfunc f(xs []int) {\nmu.Lock()\nfor range xs {\ng()\n}\nmu.Unlock()\n}\nfunc g() {}\n")

@@ -29,12 +29,34 @@ func deferredCloses(info *types.Info, body *ast.FuncLit, add func(Key, bool)) {
 			continue
 		}
 		add(closeChan(info, d.Call))
+		addChanArgs(info, d.Call, add)
 		lit, ok := ast.Unparen(d.Call.Fun).(*ast.FuncLit)
 		if !ok || lit.Body == nil {
 			continue
 		}
 		deferredLitSignals(info, lit.Body, add)
 	}
+}
+
+func addChanArgs(info *types.Info, call *ast.CallExpr, add func(Key, bool)) {
+	if call == nil {
+		return
+	}
+	for _, a := range call.Args {
+		if !isChanArg(info, a) {
+			continue
+		}
+		add(KeyOf(info, a))
+	}
+}
+
+func isChanArg(info *types.Info, e ast.Expr) bool {
+	t := info.TypeOf(e)
+	if t == nil {
+		return false
+	}
+	_, ok := types.Unalias(t).Underlying().(*types.Chan)
+	return ok
 }
 
 func deferredLitSignals(info *types.Info, body *ast.BlockStmt, add func(Key, bool)) {
@@ -70,6 +92,7 @@ func lastClose(info *types.Info, body *ast.FuncLit, add func(Key, bool)) {
 	case *ast.ExprStmt:
 		if call, ok := ast.Unparen(s.X).(*ast.CallExpr); ok {
 			add(closeChan(info, call))
+			addChanArgs(info, call, add)
 		}
 	case *ast.SendStmt:
 		add(KeyOf(info, s.Chan))
