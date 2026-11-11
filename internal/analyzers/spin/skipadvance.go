@@ -216,8 +216,7 @@ func outerAdvanced(info *types.Info, site continueSite, k int) bool {
 	}
 	uses := failingStepUses(info, site)
 	branch := branchWrittenVars(info, site, k)
-	read := prefixReadVars(site)
-	maps.DeleteFunc(written, dropWritten(uses, branch, read))
+	maps.DeleteFunc(written, dropWritten(uses, branch, info, site))
 	if len(written) == 0 {
 		return false
 	}
@@ -230,12 +229,21 @@ func outerAdvanced(info *types.Info, site continueSite, k int) bool {
 	return condReadsWritten(info, site.check.Cond, written)
 }
 
-func dropWritten(uses, branch, read map[*types.Var]bool) func(*types.Var, bool) bool {
+func dropWritten(uses, branch map[*types.Var]bool, info *types.Info, site continueSite) func(*types.Var, bool) bool {
 	return func(v *types.Var, _ bool) bool {
 		if uses[v] {
 			return false
 		}
-		return !branch[v] || !read[v]
+		if !branch[v] {
+			return true
+		}
+		if prefixLeavesOnVar(info, site, v) {
+			return false
+		}
+		if prefixHandsOnVar(info, site, v) {
+			return false
+		}
+		return true
 	}
 }
 
@@ -247,14 +255,266 @@ func branchWrittenVars(info *types.Info, site continueSite, k int) map[*types.Va
 	return out
 }
 
-func prefixReadVars(site continueSite) map[*types.Var]bool {
-	out := map[*types.Var]bool{}
-	for i := range site.at {
-		for v := range site.pre.reads[i] {
-			out[v] = true
+func prefixLeavesOnVar(info *types.Info, site continueSite, v *types.Var) bool {
+	for _, s := range site.list[:site.at] {
+		if ifLeavesOnVar(info, s, v) || switchLeavesOnVar(info, s, v) || typeSwitchLeavesOnVar(info, s, v) || forLeavesOnVar(info, s, v) || rangeLeavesOnVar(info, s, v) {
+			return true
 		}
 	}
-	return out
+	return false
+}
+
+func ifLeavesOnVar(info *types.Info, s ast.Stmt, v *types.Var) bool {
+	check, ok := s.(*ast.IfStmt)
+	if !ok {
+		return false
+	}
+	if !condVars(info, check.Cond)[v] {
+		return false
+	}
+	return ifBodyCanLeave(info, check.Body)
+}
+
+func switchLeavesOnVar(info *types.Info, s ast.Stmt, v *types.Var) bool {
+	check, ok := s.(*ast.SwitchStmt)
+	if !ok {
+		return false
+	}
+	if check.Tag == nil || !condVars(info, check.Tag)[v] {
+		return false
+	}
+	return switchBodyCanLeave(info, check.Body)
+}
+
+func typeSwitchLeavesOnVar(info *types.Info, s ast.Stmt, v *types.Var) bool {
+	check, ok := s.(*ast.TypeSwitchStmt)
+	if !ok {
+		return false
+	}
+	if as, ok := check.Assign.(*ast.AssignStmt); ok {
+		if !rhsUsesVar(info, as.Rhs, v) {
+			return false
+		}
+		return typeSwitchBodyCanLeave(info, check.Body)
+	}
+	if es, ok := check.Assign.(*ast.ExprStmt); ok {
+		if !condVars(info, es.X)[v] {
+			return false
+		}
+		return typeSwitchBodyCanLeave(info, check.Body)
+	}
+	return false
+}
+
+func forLeavesOnVar(info *types.Info, s ast.Stmt, v *types.Var) bool {
+	check, ok := s.(*ast.ForStmt)
+	if !ok {
+		return false
+	}
+	if check.Cond == nil || !condVars(info, check.Cond)[v] {
+		return false
+	}
+	return forBodyCanLeave(info, check.Body)
+}
+
+func rangeLeavesOnVar(info *types.Info, s ast.Stmt, v *types.Var) bool {
+	check, ok := s.(*ast.RangeStmt)
+	if !ok {
+		return false
+	}
+	if check.X == nil || !condVars(info, check.X)[v] {
+		return false
+	}
+	return forBodyCanLeave(info, check.Body)
+}
+
+func ifBodyCanLeave(info *types.Info, body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
+	return blockHasLoopBreak(body.List) || listHasReturnPanicGoto(info, body.List)
+}
+
+func switchBodyCanLeave(info *types.Info, body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
+	for _, stmt := range body.List {
+		clause, ok := stmt.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		if listHasReturnPanicGoto(info, clause.Body) {
+			return true
+		}
+	}
+	return false
+}
+
+func typeSwitchBodyCanLeave(info *types.Info, body *ast.BlockStmt) bool {
+	return switchBodyCanLeave(info, body)
+}
+
+func forBodyCanLeave(info *types.Info, body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
+	return listHasReturnPanicGoto(info, body.List)
+}
+
+func blockHasLoopBreak(list []ast.Stmt) bool {
+	for _, s := range list {
+		if stmtHasLoopBreak(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtHasLoopBreak(n ast.Node) bool {
+	switch t := n.(type) {
+	case *ast.BranchStmt:
+		return t.Tok == token.BREAK
+	case *ast.BlockStmt:
+		return blockHasLoopBreak(t.List)
+	case *ast.IfStmt:
+		return ifHasLoopBreak(t)
+	case *ast.LabeledStmt:
+		return stmtHasLoopBreak(t.Stmt)
+	default:
+		return false
+	}
+}
+
+func ifHasLoopBreak(check *ast.IfStmt) bool {
+	if blockHasLoopBreak(check.Body.List) {
+		return true
+	}
+	if check.Else == nil {
+		return false
+	}
+	return elseHasLoopBreak(check.Else)
+}
+
+func elseHasLoopBreak(e ast.Stmt) bool {
+	if blk, ok := e.(*ast.BlockStmt); ok {
+		return blockHasLoopBreak(blk.List)
+	}
+	if ifStmt, ok := e.(*ast.IfStmt); ok {
+		return ifHasLoopBreak(ifStmt)
+	}
+	return false
+}
+
+func listHasReturnPanicGoto(info *types.Info, list []ast.Stmt) bool {
+	return listHasStmt(list, isReturnStmt) || listHasStmt(list, isGotoStmt) || listHasStmt(list, isPanicStmt(info))
+}
+
+func listHasStmt(list []ast.Stmt, pred func(ast.Stmt) bool) bool {
+	for _, s := range list {
+		found := false
+		walkNoLit(s, func(n ast.Node) bool {
+			if found {
+				return false
+			}
+			if st, ok := n.(ast.Stmt); ok && pred(st) {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func isReturnStmt(s ast.Stmt) bool {
+	_, ok := s.(*ast.ReturnStmt)
+	return ok
+}
+
+func isGotoStmt(s ast.Stmt) bool {
+	b, ok := s.(*ast.BranchStmt)
+	return ok && b.Tok == token.GOTO
+}
+
+func isPanicStmt(info *types.Info) func(ast.Stmt) bool {
+	return func(s ast.Stmt) bool {
+		e, ok := s.(*ast.ExprStmt)
+		if !ok {
+			return false
+		}
+		return isPanicCall(info, e.X)
+	}
+}
+
+func prefixHandsOnVar(info *types.Info, site continueSite, v *types.Var) bool {
+	for _, s := range site.list[:site.at] {
+		if assignHandsOn(info, s, v) || callHandsOn(info, s, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func assignHandsOn(info *types.Info, s ast.Stmt, v *types.Var) bool {
+	as, ok := s.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	if !rhsUsesVar(info, as.Rhs, v) {
+		return false
+	}
+	for _, lhs := range as.Lhs {
+		if !isPlainLocalVar(info, lhs) {
+			return true
+		}
+	}
+	return false
+}
+
+func rhsUsesVar(info *types.Info, rhs []ast.Expr, v *types.Var) bool {
+	for _, e := range rhs {
+		if condVars(info, e)[v] {
+			return true
+		}
+	}
+	return false
+}
+
+func isPlainLocalVar(info *types.Info, e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	vv, ok := info.ObjectOf(id).(*types.Var)
+	if !ok {
+		return false
+	}
+	return vv.Kind() == types.LocalVar
+}
+
+func callHandsOn(info *types.Info, s ast.Stmt, v *types.Var) bool {
+	found := false
+	walkNoLit(s, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		for _, arg := range call.Args {
+			if condVars(info, arg)[v] {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 func collectPrefixWritten(site continueSite, out map[*types.Var]bool) {

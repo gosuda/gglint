@@ -274,3 +274,31 @@ func skipadvanceSilentGateFromCounter(n int) {
 		i++
 	}
 }
+
+func skipadvanceReportedCounterOnlyLogged(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		if attempts > 3 {
+			fmt.Println("many")
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
+		}
+		i++
+	}
+}
+
+func skipadvanceSilentBoundedRetry(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		if attempts > 3 {
+			break
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue
+		}
+		i++
+	}
+}
