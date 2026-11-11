@@ -77,3 +77,15 @@ func busywaitSilentCallRecv() {
 	for !newMu().TryLock() {
 	}
 }
+
+func busywaitSilentSleepInPost(mu *sync.Mutex, d time.Duration) {
+	for ; !mu.TryLock(); time.Sleep(d) {
+	}
+	mu.Unlock()
+}
+
+func busywaitReportedGoschedInPost(mu *sync.Mutex) {
+	for ; !mu.TryLock(); runtime.Gosched() { // want `this loop spins until mu is free: call mu.Lock`
+	}
+	mu.Unlock()
+}

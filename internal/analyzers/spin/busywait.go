@@ -12,7 +12,7 @@ import (
 
 var busywaitAnalyzer = &analysis.Analyzer{
 	Name:     "busywait",
-	Doc:      "report for TryLock loops with empty or Gosched-only body when the lock is an identifier or field chain; other bodies are not reported; spin covers five shapes only",
+	Doc:      "report for TryLock loops with empty or Gosched-only body when the lock is an identifier or field chain; other bodies are not reported, and a loop whose post statement waits (a channel operation, or a call other than Gosched and outside sync/atomic) is not reported; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runBusywait,
 }
@@ -101,13 +101,17 @@ func tryMate(sel *ast.SelectorExpr) (string, bool) {
 }
 
 func busywaitSpins(pass *analysis.Pass, loop *ast.ForStmt) bool {
-	if loop.Body == nil || len(loop.Body.List) > 1 {
+	if loop.Body == nil || len(loop.Body.List) > 1 || postWaits(pass, loop.Post) {
 		return false
 	}
 	if len(loop.Body.List) == 1 && !isGosched(pass.TypesInfo, loop.Body.List[0]) {
 		return false
 	}
 	return true
+}
+
+func postWaits(pass *analysis.Pass, post ast.Stmt) bool {
+	return post != nil && !isGosched(pass.TypesInfo, post) && headerPartWaits(pass, post)
 }
 
 func isGosched(info *types.Info, stmt ast.Stmt) bool {
