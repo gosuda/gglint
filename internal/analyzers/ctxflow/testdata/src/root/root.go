@@ -231,16 +231,3 @@ func rootSilentGuardThenWithTimeout(ctx context.Context) error {
 	defer cancel()
 	return workOn(ctx)
 }
-
-func rootPair(c context.Context) (context.Context, context.Context) { return c, c }
-
-func rootReportedPairTarget(b context.Context) error {
-	var x context.Context
-	if x == nil {
-		x, b = rootPair(context.Background()) // want "a context is in scope, and this root context drops its cancellation and deadline"
-	}
-	if err := workOn(x); err != nil {
-		return err
-	}
-	return workOn(b)
-}

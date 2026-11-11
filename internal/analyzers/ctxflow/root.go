@@ -353,16 +353,10 @@ func contextVarAt(pass *analysis.Pass, e ast.Expr) *types.Var {
 }
 
 func firstContextVar(pass *analysis.Pass, as *ast.AssignStmt) *types.Var {
-	var found *types.Var
-	count := 0
 	for _, lhs := range as.Lhs {
 		if v := contextVarAt(pass, lhs); v != nil {
-			found = v
-			count++
+			return v
 		}
-	}
-	if count == 1 {
-		return found
 	}
 	return nil
 }
