@@ -146,9 +146,6 @@ func resolvesSelector(info *types.Info, sel *ast.SelectorExpr, out map[*types.Va
 	if got.Kind() == types.MethodVal {
 		return resolvesTo(info, sel.X, out)
 	}
-	if got.Kind() != types.FieldVal {
-		return false
-	}
 	if !canCarry(info.TypeOf(sel)) {
 		return false
 	}

@@ -1044,3 +1044,75 @@ func TestSpawnGroupHelperTwoGroups(t *testing.T) {
 		t.Fatalf("two helper groups gave %v, want zero", sp.Group.Root)
 	}
 }
+
+func TestEscapesFieldIntNoForward(t *testing.T) {
+	t.Parallel()
+	src := "package p\ntype Rec struct{ n int }\nfunc fieldInt(r *Rec) int { return r.n }\n"
+	if escapeOf(t, src, "fieldInt", "r") {
+		t.Fatalf("int field read forwards holder")
+	}
+}
+
+func TestEscapesIndexIntNoForward(t *testing.T) {
+	t.Parallel()
+	src := "package p\nfunc idxInt(a []int) int { if len(a) == 0 { return 0 }; return a[0] }\n"
+	if escapeOf(t, src, "idxInt", "a") {
+		t.Fatalf("int index read forwards holder")
+	}
+}
+
+func TestEscapesPointerReceiverAliasNoCopy(t *testing.T) {
+	t.Parallel()
+	src := "package p\ntype Job struct{ Out chan int }\nfunc (j *Job) Touch() {}\nfunc ptrAlias(j *Job) { u := j; u.Touch() }\n"
+	if escapeOf(t, src, "ptrAlias", "j") {
+		t.Fatalf("pointer receiver call counts as value copy")
+	}
+}
+
+func TestEscapesValueReceiverSelfNoCopy(t *testing.T) {
+	t.Parallel()
+	src := "package p\ntype Job struct{ Out chan int }\nfunc (j Job) Use() {}\nfunc direct(j Job) { j.Use() }\n"
+	if escapeOf(t, src, "direct", "j") {
+		t.Fatalf("value receiver call on target counts as copy")
+	}
+}
+
+func TestEscapesIndexIntNoAlias(t *testing.T) {
+	t.Parallel()
+	src := "package p\nfunc idxRet(a []int) int { if len(a) == 0 { return -1 }; x := a[0]; return x }\n"
+	if escapeOf(t, src, "idxRet", "a") {
+		t.Fatalf("int index read aliases holder")
+	}
+}
+
+func TestSpawnGroupNestedLiteralStored(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\nvar wg sync.WaitGroup\nfunc helper() { wg.Done() }\nfunc f() { go func() { g := func() { helper() }; _ = g }() }\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	if !sp.Group.zero() {
+		t.Fatalf("nested literal helper gives group %v", sp.Group.Root)
+	}
+}
+
+func TestSpawnGroupValueReceiverField(t *testing.T) {
+	t.Parallel()
+	pkg := loadPackage(t, "package p\nimport \"sync\"\ntype H struct{ wg sync.WaitGroup }\nfunc (h H) Finish() { h.wg.Done() }\nfunc f(h H) { go func() { h.Finish() }() }\n")
+	pass := ctrlPass(t, pkg)
+	var fd *ast.FuncDecl
+	for _, d := range pkg.Syntax[0].Decls {
+		if f, ok := d.(*ast.FuncDecl); ok && f.Name.Name == "f" {
+			fd = f
+		}
+	}
+	sp := Spawns(pass, fd)[0]
+	if !sp.Group.zero() {
+		t.Fatalf("value field Done gives group %v", sp.Group.Root)
+	}
+}
