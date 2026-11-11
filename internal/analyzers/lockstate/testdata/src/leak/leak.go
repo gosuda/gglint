@@ -263,3 +263,17 @@ func leakLockerSilent(s *S, bad bool) error {
 	s.mu.Unlock()
 	return nil
 }
+
+func bappend(s *S, b []byte) []byte {
+	return append(b, 1)
+}
+
+func leakAppendPureReported(s *S, bad bool) error {
+	s.mu.Lock()
+	_ = bappend(s, nil)
+	if bad {
+		return errBad // want "this return leaves s.mu locked while another path unlocks it: unlock before returning"
+	}
+	s.mu.Unlock()
+	return nil
+}

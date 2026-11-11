@@ -483,13 +483,11 @@ func reassignsRoot(info *types.Info, n ast.Node, key flow.Key) bool {
 }
 
 func invalidatesKey(info *types.Info, x ast.Node, key flow.Key, v *types.Var) bool {
-	switch n := x.(type) {
-	case *ast.AssignStmt:
-		return assignInvalidates(info, n, key, v)
-	case *ast.IncDecStmt:
-		return targetInvalidates(info, n.X, key, v)
+	as, ok := x.(*ast.AssignStmt)
+	if !ok {
+		return false
 	}
-	return false
+	return assignInvalidates(info, as, key, v)
 }
 
 func assignInvalidates(info *types.Info, as *ast.AssignStmt, key flow.Key, v *types.Var) bool {
@@ -514,9 +512,6 @@ func targetInvalidates(info *types.Info, e ast.Expr, key flow.Key, v *types.Var)
 	}
 	if k.Path == "" {
 		return true
-	}
-	if key.Path == "" {
-		return false
 	}
 	return prefixPath(key.Path, k.Path)
 }
@@ -681,10 +676,6 @@ func (c *helperCache) pureBody(fn *types.Func) bool {
 	pure := true
 	ast.Inspect(body, func(n ast.Node) bool {
 		if !pure {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			pure = false
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)

@@ -289,3 +289,12 @@ func pairHandoffSilent(a, b *handoffInner) {
 	b.mu.Lock()
 	o.p.mu.Unlock()
 }
+
+func pairWholeDerefSilent(po *handoffOuter, a, b *handoffInner) {
+	po.p = a
+	po.p.mu.Lock()
+	po.p.mu.Unlock()
+	*po = handoffOuter{p: b}
+	b.mu.Lock()
+	po.p.mu.Unlock()
+}
