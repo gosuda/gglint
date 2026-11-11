@@ -5,6 +5,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -148,26 +149,76 @@ func sendAfterUnbuffered(o litOrder, buffered map[flow.Key]bool) bool {
 func chanCapIsOne(pass *analysis.Pass, fn ast.Node, k flow.Key) bool {
 	body := flow.Body(fn)
 	if body == nil {
-		return false
+		return true
 	}
-	found := false
+	seen, one := scanMakeCap(pass, body, fn, k)
+	return !seen || one
+}
+
+func scanMakeCap(pass *analysis.Pass, body, fn ast.Node, k flow.Key) (seen, one bool) {
 	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
+		if one {
 			return false
 		}
-		if lit, ok := n.(*ast.FuncLit); ok && ast.Node(lit.Body) != ast.Node(body) {
-			if fnLit, ok := fn.(*ast.FuncLit); !ok || lit != fnLit {
-				return false
-			}
+		if foreignLit(n, fn) {
+			return false
 		}
-		v, ok := capOfMake(pass.TypesInfo, n, k)
-		if ok && v == 1 {
-			found = true
+		if !makesKey(pass.TypesInfo, n, k) {
+			return true
+		}
+		seen = true
+		if v, ok := capOfMake(pass.TypesInfo, n, k); ok && v == 1 {
+			one = true
 			return false
 		}
 		return true
 	})
-	return found
+	return seen, one
+}
+
+func foreignLit(n, fn ast.Node) bool {
+	lit, ok := n.(*ast.FuncLit)
+	if !ok {
+		return false
+	}
+	fnLit, isLit := fn.(*ast.FuncLit)
+	if ast.Node(lit.Body) == flow.Body(fn) {
+		return false
+	}
+	return !isLit || lit != fnLit
+}
+
+func makesKey(info *types.Info, n ast.Node, k flow.Key) bool {
+	lhs, rhs, ok := capOperands(n)
+	if !ok {
+		return false
+	}
+	call, ok := ast.Unparen(rhs).(*ast.CallExpr)
+	if !ok || !isMakeBuiltin(info, call) {
+		return false
+	}
+	if _, isChan := ast.Unparen(call.Args[0]).(*ast.ChanType); !isChan {
+		return false
+	}
+	id, ok := identVar(info, lhs)
+	if !ok {
+		return false
+	}
+	return flow.Key{Root: id} == k
+}
+
+func semaphoreKeys(pass *analysis.Pass, fn ast.Node, s flow.Spawn, pos token.Pos) []flow.Key {
+	if s.Body == nil {
+		return nil
+	}
+	o := mappedOrder(pass, s, scanLitOrder(pass, s.Body, pos))
+	var keys []flow.Key
+	for _, k := range o.sendBeforeKeys {
+		if slices.Contains(o.recvAfterKeys, k) && chanCapIsOne(pass, fn, k) && straightSendAcquire(pass, s.Body, k, pos) {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 func capOfMake(info *types.Info, n ast.Node, k flow.Key) (int64, bool) {

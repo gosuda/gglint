@@ -114,7 +114,7 @@ func appendDeleteWrite(info *types.Info, n *ast.CallExpr, stmt ast.Stmt, out []v
 		return out
 	}
 	if k, ok := flow.KeyOf(info, n.Args[0]); ok {
-		out = append(out, varAccess{key: k, stmt: stmt, write: true, del: !clr, clr: clr, isMap: true})
+		out = append(out, varAccess{key: k, stmt: stmt, write: true, del: !clr, clr: clr, isMap: isMapType(info.TypeOf(n.Args[0]))})
 	}
 	return out
 }
@@ -542,8 +542,14 @@ func (m *mapScope) reportableMapWrite(s flow.Spawn, a varAccess, spawns []flow.S
 	if !outside && !m.parentMapOp(a) {
 		return false
 	}
-	litOpen := len(m.litHeld(s.Body, a.stmt)) == 0
-	return (outside && s.InLoop && litOpen) || m.hasOther(s, a, spawns)
+	return (outside && s.InLoop && m.litUnguarded(s, a)) || m.hasOther(s, a, spawns)
+}
+
+func (m *mapScope) litUnguarded(s flow.Spawn, a varAccess) bool {
+	if len(m.litHeld(s.Body, a.stmt)) > 0 {
+		return false
+	}
+	return len(semaphoreKeys(m.pass, m.fn, s, a.stmt.Pos())) == 0
 }
 
 func (m *mapScope) parentMapOp(a varAccess) bool {
@@ -605,16 +611,34 @@ func (m *mapScope) otherSpawnWrites(s flow.Spawn, a varAccess, spawns []flow.Spa
 }
 
 func (m *mapScope) otherLitConflicts(s flow.Spawn, a varAccess, o flow.Spawn) bool {
+	if siblingJoined(m.pass, m.graph, s, o) {
+		return false
+	}
 	lit, ok := m.lits[o.Body]
 	if !ok {
 		lit = collectLit(m.pass.TypesInfo, o.Body)
 	}
 	for _, b := range lit {
-		if b.key == a.key && mapOpAccess(b) && !commonKey(m.litHeld(s.Body, a.stmt), m.litHeld(o.Body, b.stmt)) {
+		if b.key == a.key && mapOpAccess(b) && !m.litLockShared(s, a.stmt, o, b.stmt) {
 			return true
 		}
 	}
 	return false
+}
+
+func (m *mapScope) litLockShared(s flow.Spawn, aAt ast.Node, o flow.Spawn, bAt ast.Node) bool {
+	if commonKey(m.litHeld(s.Body, aAt), m.litHeld(o.Body, bAt)) {
+		return true
+	}
+	return commonKey(semaphoreKeys(m.pass, m.fn, s, aAt.Pos()), semaphoreKeys(m.pass, m.fn, o, bAt.Pos()))
+}
+
+func siblingJoined(pass *analysis.Pass, g *flow.Graph, s, o flow.Spawn) bool {
+	first, second := s, o
+	if o.Site.Pos() < s.Site.Pos() {
+		first, second = o, s
+	}
+	return flow.Joined(pass, g, first, second.Site)
 }
 
 func runFanout(pass *analysis.Pass) (any, error) {

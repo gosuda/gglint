@@ -42,6 +42,40 @@ func mapJoinedSilent() {
 	_ = m[0]
 }
 
+func mapPhasesSilent() map[int]int {
+	m := map[int]int{}
+	done := make(chan struct{})
+	go func() {
+		m[1] = 1
+		close(done)
+	}()
+	<-done
+	done2 := make(chan struct{})
+	go func() {
+		m[2] = 2
+		close(done2)
+	}()
+	<-done2
+	return m
+}
+
+func mapTokenSilent(xs []int) map[int]int {
+	m := map[int]int{}
+	sem := make(chan struct{}, 1)
+	var wg sync.WaitGroup
+	for _, x := range xs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			m[x] = x
+			<-sem
+		}()
+	}
+	wg.Wait()
+	return m
+}
+
 func mapOtherReported() {
 	m := map[int]int{}
 	var mu sync.Mutex
@@ -165,14 +199,6 @@ func mapPerIterationParentReported() int {
 	return total
 }
 
-func mapLenSilent() {
-	m := map[int]int{}
-	go func() {
-		m[0] = 1
-	}()
-	_ = len(m)
-}
-
 func mapNestedLitReported() {
 	func() {
 		m := map[int]int{}
@@ -252,6 +278,35 @@ func mapGuardedReturnSilent() map[int]int {
 		}()
 	}
 	wg.Wait()
+	return m
+}
+
+func mapBothGuardedSilent(m map[int]int, mu *sync.Mutex) {
+	go func() {
+		mu.Lock()
+		m[1] = 1
+		mu.Unlock()
+	}()
+	mu.Lock()
+	print(m[0])
+	mu.Unlock()
+}
+
+func mapVarReadSilent() map[int]int {
+	m := map[int]int{}
+	done := make(chan struct{})
+	go func() {
+		m[0] = 1
+		close(done)
+	}()
+	<-done
+	done2 := make(chan struct{})
+	go func() {
+		v := m
+		_ = v
+		close(done2)
+	}()
+	<-done2
 	return m
 }
 

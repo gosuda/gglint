@@ -153,6 +153,18 @@ func fanoutOnceSilent(n *int, xs []int) {
 	}
 }
 
+func fanoutSingleSilent() int {
+	out := 0
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		out = 1
+	}()
+	wg.Wait()
+	return out
+}
+
 type fanoutLockerGroup struct{ L sync.Locker }
 
 func fanoutLockerSilent() {
@@ -430,4 +442,20 @@ func fanoutCondSemReported(xs []int) int {
 		}()
 	}
 	return out
+}
+
+func fanoutParamSemSilent(sem chan struct{}, xs []int) int {
+	total := 0
+	var wg sync.WaitGroup
+	for _, x := range xs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			total += x
+			<-sem
+		}()
+	}
+	wg.Wait()
+	return total
 }
