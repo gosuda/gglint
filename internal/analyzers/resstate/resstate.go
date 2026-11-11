@@ -38,14 +38,14 @@ var useafterputAnalyzer = &analysis.Analyzer{
 
 var useafterfreeAnalyzer = &analysis.Analyzer{
 	Name:     "useafterfree",
-	Doc:      "reports uses of values freed on every path to the use; a value held in a uintptr variable is not tracked; a literal called in place counts as its statements when its body has no control flow, otherwise the state is unknown",
+	Doc:      "reports uses of values freed on every path to the use; a value held in a uintptr variable is not tracked; a literal called in place counts as its statements when its body has no control flow, otherwise the state is unknown; a free and a later use inside the same literal are not reported",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUseafterfree,
 }
 
 var viewescapeAnalyzer = &analysis.Analyzer{
 	Name:     "viewescape",
-	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them; a receiver declared in the loop body is checked against later iterations only when it names a variable, field, or constant-index element from outside the loop that the body does not reassign before the declaration; a view variable that a function literal assigns is not tracked; a call counts only when the receiver is not assigned between the view and the call",
+	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them; a receiver declared in the loop body is checked against later iterations only when it names a variable, field, or constant-index element from outside the loop that some path round the loop does not reassign; a view variable that a function literal assigns is not tracked; a call counts only when the receiver is not assigned between the view and the call",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runViewescape,
 }
