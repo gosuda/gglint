@@ -21,6 +21,7 @@ func runMapcopy(pass *analysis.Pass) (any, error) {
 type mapDef struct {
 	v    *types.Var
 	text string
+	mkey flow.Key
 	pos  token.Pos
 	stmt ast.Node
 }
@@ -72,14 +73,14 @@ func mapAssignDef(info *types.Info, st *ast.AssignStmt) (mapDef, bool) {
 	if !ok {
 		return mapDef{}, false
 	}
-	text, ok := mapIndex(info, st.Rhs[0])
+	text, mkey, ok := mapIndex(info, st.Rhs[0])
 	if !ok {
 		return mapDef{}, false
 	}
-	return mapDef{v: v, text: text, pos: st.Pos(), stmt: st}, true
+	return mapDef{v: v, text: text, mkey: mkey, pos: st.Pos(), stmt: st}, true
 }
 
-func mapIndex(info *types.Info, e ast.Expr) (string, bool) {
+func mapIndex(info *types.Info, e ast.Expr) (string, flow.Key, bool) {
 	var x ast.Expr
 	switch n := ast.Unparen(e).(type) {
 	case *ast.IndexExpr:
@@ -87,20 +88,21 @@ func mapIndex(info *types.Info, e ast.Expr) (string, bool) {
 	case *ast.IndexListExpr:
 		x = n.X
 	default:
-		return "", false
+		return "", flow.Key{}, false
 	}
 	t := info.TypeOf(x)
 	if t == nil {
-		return "", false
+		return "", flow.Key{}, false
 	}
 	mp, ok := t.Underlying().(*types.Map)
 	if !ok {
-		return "", false
+		return "", flow.Key{}, false
 	}
 	if _, ok := mp.Elem().Underlying().(*types.Struct); !ok {
-		return "", false
+		return "", flow.Key{}, false
 	}
-	return types.ExprString(x), true
+	mkey, _ := flow.KeyOf(info, x)
+	return types.ExprString(x), mkey, true
 }
 
 func collectWholeUses(info *types.Info, fn ast.Node) map[*types.Var]bool {
@@ -209,7 +211,7 @@ func storedBack(info *types.Info, fn ast.Node, d mapDef, write ast.Stmt) bool {
 		return false
 	}
 	for _, p := range paths {
-		if !fieldStoredBack(info, fn, d, p, write) {
+		if !hasStore(info, fn, d, p, write) {
 			return false
 		}
 	}
@@ -252,34 +254,56 @@ func fieldPathOf(info *types.Info, e ast.Expr, v *types.Var) (string, bool) {
 	return k.Path, true
 }
 
-func fieldStoredBack(info *types.Info, fn ast.Node, d mapDef, path string, write ast.Stmt) bool {
+type storeQuery struct {
+	info  *types.Info
+	d     mapDef
+	want  string
+	write ast.Stmt
+	lits  []*ast.FuncLit
+}
+
+func (q storeQuery) matches(st *ast.AssignStmt) bool {
+	if st.Tok != token.ASSIGN {
+		return false
+	}
+	if !sameMap(q.info, st, q.d) {
+		return false
+	}
+	if !qualifies(st, q.write, q.lits) {
+		return false
+	}
+	for _, rhs := range st.Rhs {
+		if rhsReadsField(q.info, rhs, q.d.v, q.want) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasStore(info *types.Info, fn ast.Node, d mapDef, want string, write ast.Stmt) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	q := storeQuery{info: info, d: d, want: want, write: write, lits: collectLits(body)}
 	found := false
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
 		st, ok := n.(*ast.AssignStmt)
-		if !ok || st.Pos() <= write.Pos() || st.Tok != token.ASSIGN {
+		if !ok {
 			return true
 		}
-		if !storesSameMap(info, st, d.text) {
-			return true
-		}
-		for _, rhs := range st.Rhs {
-			if fieldReadHas(info, rhs, d.v, path) {
-				found = true
-				break
-			}
+		if q.matches(st) {
+			found = true
 		}
 		return !found
 	})
 	return found
 }
 
-func storesSameMap(info *types.Info, st *ast.AssignStmt, text string) bool {
+func sameMap(info *types.Info, st *ast.AssignStmt, d mapDef) bool {
 	for _, lhs := range st.Lhs {
 		var x ast.Expr
 		switch n := ast.Unparen(lhs).(type) {
@@ -297,16 +321,42 @@ func storesSameMap(info *types.Info, st *ast.AssignStmt, text string) bool {
 		if _, ok := t.Underlying().(*types.Map); !ok {
 			continue
 		}
-		if types.ExprString(x) == text {
+		if mapKeysEqual(info, x, d) {
 			return true
 		}
 	}
 	return false
 }
 
-func fieldReadHas(info *types.Info, e ast.Expr, v *types.Var, want string) bool {
+func mapKeysEqual(info *types.Info, x ast.Expr, d mapDef) bool {
+	k, ok := flow.KeyOf(info, x)
+	if !ok || d.mkey.Root == nil {
+		return types.ExprString(x) == d.text
+	}
+	return k == d.mkey
+}
+
+func qualifies(st *ast.AssignStmt, write ast.Stmt, lits []*ast.FuncLit) bool {
+	if stmtInLit(st, lits) {
+		return true
+	}
+	return st.Pos() > write.End()
+}
+
+func stmtInLit(st *ast.AssignStmt, lits []*ast.FuncLit) bool {
+	for _, l := range lits {
+		if st.Pos() >= l.Pos() && st.End() <= l.End() {
+			return true
+		}
+	}
+	return false
+}
+
+func rhsReadsField(info *types.Info, rhs ast.Expr, v *types.Var, want string) bool {
+	lhs := collectLHS(rhs)
+	inc := collectInc(rhs)
 	found := false
-	ast.Inspect(e, func(n ast.Node) bool {
+	ast.Inspect(rhs, func(n ast.Node) bool {
 		if found {
 			return false
 		}
@@ -314,16 +364,88 @@ func fieldReadHas(info *types.Info, e ast.Expr, v *types.Var, want string) bool 
 		if !ok {
 			return true
 		}
-		k, ok := flow.KeyOf(info, sel)
-		if !ok || k.Root != v {
+		if !overlaps(info, sel, v, want) {
 			return true
 		}
-		if k.Path == want || strings.HasPrefix(k.Path, want+".") {
-			found = true
+		if isWrite(sel, lhs, inc) {
+			return true
 		}
-		return !found
+		found = true
+		return false
 	})
 	return found
+}
+
+func overlaps(info *types.Info, sel *ast.SelectorExpr, v *types.Var, want string) bool {
+	k, ok := flow.KeyOf(info, sel)
+	if !ok {
+		return false
+	}
+	if k.Root != v {
+		return false
+	}
+	if k.Path == want {
+		return true
+	}
+	if strings.HasPrefix(k.Path, want+".") {
+		return true
+	}
+	return strings.HasPrefix(want, k.Path+".")
+}
+
+func collectLits(n ast.Node) []*ast.FuncLit {
+	var out []*ast.FuncLit
+	ast.Inspect(n, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok {
+			out = append(out, lit)
+		}
+		return true
+	})
+	return out
+}
+
+func collectLHS(n ast.Node) []ast.Expr {
+	var out []ast.Expr
+	ast.Inspect(n, func(n ast.Node) bool {
+		st, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		out = append(out, st.Lhs...)
+		return true
+	})
+	return out
+}
+
+func collectInc(n ast.Node) []ast.Expr {
+	var out []ast.Expr
+	ast.Inspect(n, func(n ast.Node) bool {
+		st, ok := n.(*ast.IncDecStmt)
+		if !ok {
+			return true
+		}
+		out = append(out, st.X)
+		return true
+	})
+	return out
+}
+
+func isWrite(sel *ast.SelectorExpr, lhs, inc []ast.Expr) bool {
+	for _, e := range lhs {
+		if within(sel, e) {
+			return true
+		}
+	}
+	for _, e := range inc {
+		if within(sel, e) {
+			return true
+		}
+	}
+	return false
+}
+
+func within(sel *ast.SelectorExpr, e ast.Expr) bool {
+	return sel.Pos() >= e.Pos() && sel.End() <= e.End()
 }
 
 func reportMapCopy(pass *analysis.Pass, st ast.Stmt, d mapDef) {

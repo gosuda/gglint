@@ -129,3 +129,19 @@ func MapcopyReportedOtherField(m map[string]namedItem, k string) string {
 	v.n++ // want `v is a copy of the element of m, so this write is lost`
 	return v.name
 }
+
+type mcInner struct{ x int }
+
+type mcOuter struct{ n mcInner }
+
+func MapcopySilentPrefixStoredBack(m map[string]mcOuter, k string) {
+	v := m[k]
+	v.n.x++
+	m[k] = mcOuter{n: v.n}
+}
+
+func MapcopySilentDeferredStore(m map[string]item, k string) {
+	v := m[k]
+	v.n++
+	defer func() { m[k] = item{n: v.n} }()
+}
