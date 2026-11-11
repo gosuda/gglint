@@ -121,3 +121,20 @@ func doublecheckLocalSilent() *chkT {
 	}
 	return s.inst
 }
+
+var chkRW sync.RWMutex
+
+func doublecheckRelockSilent() *chkT {
+	chkRW.RLock()
+	if chkInst == nil {
+		chkRW.RUnlock()
+		chkRW.Lock()
+		if chkInst == nil {
+			chkInst = newChk()
+		}
+		chkRW.Unlock()
+		return chkInst
+	}
+	chkRW.RUnlock()
+	return chkInst
+}
