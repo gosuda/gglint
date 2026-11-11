@@ -132,3 +132,11 @@ func useafterputReportedSelfSliceAppend() {
 	b = append(b, 1) // want "was returned to the pool"
 	_ = b
 }
+
+func useafterputReportedVarDecl() {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	var z int
+	_ = z
+	_ = b.n // want "was returned to the pool"
+}

@@ -110,8 +110,8 @@ func hasFreeRelease(pass *analysis.Pass, fnode, n ast.Node, v *types.Var, cache 
 	if !ok {
 		return false
 	}
-	if handled, release := freeLitRelease(pass, call, v, cache); handled {
-		return release
+	if _, ok := inPlaceLit(n); ok {
+		return false
 	}
 	fn := typeutil.StaticCallee(pass.TypesInfo, call)
 	if fn == nil {
@@ -137,112 +137,113 @@ func freeMunmapByPkg(pass *analysis.Pass, fnode ast.Node, pkg *types.Package, ca
 	return freeArgsMention(pass, fnode, call, v, cache)
 }
 
-func freeLitRelease(pass *analysis.Pass, call *ast.CallExpr, v *types.Var, cache *freeTempCache) (release, handled bool) {
-	lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit)
-	if !ok || len(call.Args) != 0 || lit.Body == nil {
-		return false, false
-	}
-	return litFreeRelease(pass, lit, v, cache), true
-}
-
-func litFreeRelease(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var, cache *freeTempCache) bool {
-	for _, s := range lit.Body.List {
-		if litFreeFound(pass, lit, s, v, cache) {
-			return true
-		}
-	}
-	return false
-}
-
-func litFreeFound(pass *analysis.Pass, lit *ast.FuncLit, x ast.Node, v *types.Var, cache *freeTempCache) bool {
-	es, ok := x.(*ast.ExprStmt)
+func inPlaceLit(n ast.Node) (*ast.FuncLit, bool) {
+	es, ok := n.(*ast.ExprStmt)
 	if !ok {
-		return false
+		return nil, false
 	}
 	call, ok := ast.Unparen(es.X).(*ast.CallExpr)
 	if !ok {
-		return false
+		return nil, false
 	}
-	if nested, ok := ast.Unparen(call.Fun).(*ast.FuncLit); ok {
-		if len(call.Args) != 0 || nested.Body == nil {
-			return false
-		}
-		return litFreeRelease(pass, nested, v, cache)
+	lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit)
+	if !ok || len(call.Args) != 0 || lit.Body == nil {
+		return nil, false
 	}
-	cfn := typeutil.StaticCallee(pass.TypesInfo, call)
-	if cfn == nil || cfn.Name() != cFreeFunc {
-		return false
-	}
-	return freeArgsMention(pass, lit, call, v, cache)
+	return lit, true
 }
 
-func rangeBindsVar(pass *analysis.Pass, r *ast.RangeStmt, v *types.Var) bool {
-	if id, ok := ast.Unparen(r.Key).(*ast.Ident); ok {
-		if pass.TypesInfo.Uses[id] == v || pass.TypesInfo.Defs[id] == v {
-			return true
-		}
-	}
-	if id, ok := ast.Unparen(r.Value).(*ast.Ident); ok {
-		if pass.TypesInfo.Uses[id] == v || pass.TypesInfo.Defs[id] == v {
-			return true
-		}
-	}
-	return false
-}
-
-func litDirtiesVar(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
+func flatLit(lit *ast.FuncLit) bool {
 	if lit.Body == nil {
 		return false
 	}
-	dirty := false
-	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if dirty {
+	for _, s := range lit.Body.List {
+		switch s.(type) {
+		case *ast.ExprStmt, *ast.AssignStmt, *ast.IncDecStmt, *ast.DeclStmt:
+		default:
 			return false
 		}
-		if litDirtiesNode(pass, n, v) {
-			dirty = true
-			return false
+	}
+	return true
+}
+
+type freeTrack struct {
+	pass  *analysis.Pass
+	fn    ast.Node
+	v     *types.Var
+	cache *freeTempCache
+}
+
+func freeLitState(t *freeTrack, lit *ast.FuncLit, s ostate) ostate {
+	if !flatLit(lit) {
+		if litMentions(t.pass, lit, t.v) {
+			return stUnknown
 		}
-		return true
-	})
-	return dirty
+		return s
+	}
+	for _, sb := range lit.Body.List {
+		s = freeStep(t, lit, sb, s)
+	}
+	return s
 }
 
-func litDirtiesNode(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
-	switch x := n.(type) {
-	case *ast.AssignStmt:
-		return lhsAssigns(pass, x.Lhs, v)
-	case *ast.RangeStmt:
-		return rangeBindsVar(pass, x, v)
-	case *ast.UnaryExpr:
-		return addrTakesVar(pass, x, v)
-	default:
-		return false
+func freeStep(t *freeTrack, lit ast.Node, sb ast.Stmt, s ostate) ostate {
+	if inner, ok := inPlaceLit(sb); ok {
+		return freeLitState(t, inner, s)
 	}
+	if hasFreeRelease(t.pass, lit, sb, t.v, t.cache) {
+		return stReleased
+	}
+	if keepsReleased(t.pass, sb, t.v) {
+		return s
+	}
+	if assignsVar(t.pass, t.fn, sb, t.v) {
+		return stUnknown
+	}
+	if escapesVar(t.pass, t.fn, sb, t.v) {
+		return stUnknown
+	}
+	return s
 }
 
-func addrTakesVar(pass *analysis.Pass, x *ast.UnaryExpr, v *types.Var) bool {
-	if x.Op != token.AND {
+func freeLitReleasesHeld(t *freeTrack, lit *ast.FuncLit, s ostate) bool {
+	if !flatLit(lit) {
 		return false
 	}
-	k, ok := flow.KeyOf(pass.TypesInfo, x.X)
-	return ok && k.Root == v
+	cur := s
+	for _, sb := range lit.Body.List {
+		var done bool
+		cur, done = freeHeldNext(t, lit, sb, cur)
+		if done {
+			return true
+		}
+	}
+	return false
 }
 
-func litDirtiesInPlace(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
-	es, ok := n.(*ast.ExprStmt)
-	if !ok {
-		return false
+func freeHeldNext(t *freeTrack, lit ast.Node, sb ast.Stmt, cur ostate) (ostate, bool) {
+	if inner, ok := inPlaceLit(sb); ok {
+		if freeLitReleasesHeld(t, inner, cur) {
+			return cur, true
+		}
+		return freeLitState(t, inner, cur), false
 	}
-	call, ok := ast.Unparen(es.X).(*ast.CallExpr)
-	if !ok {
-		return false
+	if hasFreeRelease(t.pass, lit, sb, t.v, t.cache) {
+		if cur == stReleased {
+			return cur, true
+		}
+		return stReleased, false
 	}
-	lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit)
-	if !ok || len(call.Args) != 0 || lit.Body == nil {
-		return false
+	if keepsReleased(t.pass, sb, t.v) {
+		return cur, false
 	}
-	return litDirtiesVar(pass, lit, v)
+	if assignsVar(t.pass, t.fn, sb, t.v) {
+		return stUnknown, false
+	}
+	if escapesVar(t.pass, t.fn, sb, t.v) {
+		return stUnknown, false
+	}
+	return cur, false
 }
 
 func freeArgsMention(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, v *types.Var, cache *freeTempCache) bool {

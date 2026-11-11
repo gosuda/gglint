@@ -167,3 +167,16 @@ func useafterfreeReportedAppendFresh() {
 	b[0] = 1
 	_ = b
 }
+
+func useafterfreeSilentAddrDrop() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	p := &b
+	_ = p
+}
+
+func useafterfreeReportedWholeSlice() {
+	b := make([]byte, 4096)
+	syscall.Munmap(b[:])
+	_ = b[0] // want "is used after it was freed"
+}

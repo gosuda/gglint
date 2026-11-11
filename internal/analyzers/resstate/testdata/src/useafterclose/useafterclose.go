@@ -133,3 +133,16 @@ type afterCloseProbe struct{}
 func (afterCloseProbe) Close() error { return nil }
 
 func (afterCloseProbe) Addr() string { return "" }
+
+func useaftercloseSilentBranchClose(done bool, p string, b []byte) {
+	f, _ := os.Open(p)
+	if done {
+		f.Close()
+	} else {
+		_ = b
+	}
+	if !done {
+		_, _ = f.Read(b)
+		f.Close()
+	}
+}

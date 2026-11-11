@@ -38,7 +38,7 @@ var useafterputAnalyzer = &analysis.Analyzer{
 
 var useafterfreeAnalyzer = &analysis.Analyzer{
 	Name:     "useafterfree",
-	Doc:      "reports uses of values freed on every path to the use; a value held in a uintptr variable is not tracked",
+	Doc:      "reports uses of values freed on every path to the use; a value held in a uintptr variable is not tracked; a literal called in place counts as its statements when its body has no control flow, otherwise the state is unknown",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUseafterfree,
 }
@@ -255,7 +255,13 @@ func collectLitFreeVars(pass *analysis.Pass, defMap map[*types.Var][]ast.Expr, l
 			continue
 		}
 		call, ok := ast.Unparen(es.X).(*ast.CallExpr)
-		if !ok || len(call.Args) == 0 {
+		if !ok {
+			continue
+		}
+		if len(call.Args) == 0 {
+			if inner, ok := ast.Unparen(call.Fun).(*ast.FuncLit); ok && inner.Body != nil {
+				collectLitFreeVars(pass, defMap, inner, out)
+			}
 			continue
 		}
 		if !freeCallName(call) {
@@ -429,8 +435,8 @@ func putTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) os
 }
 
 func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate, cache *freeTempCache) ostate {
-	if litDirtiesInPlace(pass, n, v) {
-		return stUnknown
+	if lit, ok := inPlaceLit(n); ok {
+		return freeLitState(&freeTrack{pass: pass, fn: fn, v: v, cache: cache}, lit, s)
 	}
 	if hasFreeRelease(pass, fn, n, v, cache) {
 		return stReleased
@@ -516,12 +522,26 @@ func freeVisit(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate, cach
 	if s != stReleased {
 		return
 	}
+	if lit, ok := inPlaceLit(n); ok {
+		visitInPlaceFree(&freeTrack{pass: pass, fn: fn, v: v, cache: cache}, n, lit, s)
+		return
+	}
 	if nilAssign(pass, n, v) {
 		return
 	}
 	if selfAssign(pass, n, v) {
 		return
 	}
+	reportFreedUse(pass, fn, n, v, cache)
+}
+
+func visitInPlaceFree(t *freeTrack, n ast.Node, lit *ast.FuncLit, s ostate) {
+	if freeLitReleasesHeld(t, lit, s) {
+		t.pass.Reportf(mentionPos(t.pass, n, t.v), "%s is used after it was freed: set it to nil after the free and do not use it again", t.v.Name())
+	}
+}
+
+func reportFreedUse(pass *analysis.Pass, fn, n ast.Node, v *types.Var, cache *freeTempCache) {
 	if hasFreeRelease(pass, fn, n, v, cache) {
 		pass.Reportf(mentionPos(pass, n, v), "%s is used after it was freed: set it to nil after the free and do not use it again", v.Name())
 		return
