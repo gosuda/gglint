@@ -379,6 +379,9 @@ func nodeSpan(n ast.Node) token.Pos {
 	return n.End() - n.Pos()
 }
 
+// Reaches reports whether one or more edges lead from the node of from
+// to the node of to through no node that avoid accepts. The first node
+// is not tested.
 func (g *Graph) Reaches(from, to ast.Node, avoid func(ast.Node) bool) bool {
 	if g == nil {
 		return false
@@ -392,6 +395,16 @@ func (g *Graph) Reaches(from, to ast.Node, avoid func(ast.Node) bool) bool {
 		return g.reachSet(f)[t]
 	}
 	return g.reach(f, t, avoid)
+}
+
+// SameNode reports whether a and b lie in one node of g. A body lies in
+// the node that it enters first.
+func (g *Graph) SameNode(a, b ast.Node) bool {
+	if g == nil {
+		return false
+	}
+	n := g.locate(a)
+	return n != nil && n == g.locate(b)
 }
 
 func (g *Graph) reachSet(from ast.Node) map[ast.Node]bool {

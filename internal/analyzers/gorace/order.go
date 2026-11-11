@@ -798,6 +798,13 @@ type waitSide struct {
 	keep  func(*ast.SelectStmt) bool
 }
 
+func (s waitSide) crosses(waits []syncOp) bool {
+	if s.from == ast.Node(s.root) && s.graph.SameNode(s.from, s.to) {
+		return false
+	}
+	return crosses(s.graph, s.from, s.to, waits)
+}
+
 func posOf(n ast.Node) token.Pos {
 	if n == nil {
 		return token.NoPos
@@ -881,7 +888,7 @@ func checkSide(sig syncOp, waits []syncOp, buf bool, keep func(syncKind) bool, s
 	if len(compat) == 0 {
 		return false
 	}
-	if !entryOrdered(s, compat) && !crosses(s.graph, s.from, s.to, compat) {
+	if !entryOrdered(s, compat) && !s.crosses(compat) {
 		return false
 	}
 	return !escapedIn(s, compat)
@@ -998,7 +1005,7 @@ func bracketedOn(ops []syncOp, s waitSide, key syncOpKey) bool {
 	if len(keyed) == 0 {
 		return false
 	}
-	if !crosses(s.graph, s.from, s.to, keyed) {
+	if !s.crosses(keyed) {
 		return false
 	}
 	if escapedIn(s, keyed) {

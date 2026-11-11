@@ -764,3 +764,47 @@ func sharedEntryAssignWaitSilent(ch chan int) int {
 	<-done
 	return n
 }
+
+func sharedEntryWriteThenSendReported() int {
+	x := 0
+	done := make(chan bool)
+	go func() { // want `x is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		x = 1
+		done <- true
+	}()
+	y := x
+	<-done
+	return y
+}
+
+func sharedEntryCondThenSendReported() int {
+	x := 0
+	done := make(chan bool)
+	go func() { // want `x is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		if x == 0 {
+			done <- true
+			return
+		}
+		done <- false
+	}()
+	x = 2
+	<-done
+	return x
+}
+
+func sharedEntryWriteHalfBracketReported() int {
+	x := 0
+	sem := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() { // want `x is written by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		x = 1
+		sem <- struct{}{}
+		<-sem
+		close(done)
+	}()
+	sem <- struct{}{}
+	x = 2
+	<-sem
+	<-done
+	return x
+}
