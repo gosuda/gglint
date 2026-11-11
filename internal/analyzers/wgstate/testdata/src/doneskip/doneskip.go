@@ -193,3 +193,37 @@ func doneskipSilentNestedDone() {
 	}()
 	wg.Wait()
 }
+
+func doneskipIteratorExit(next func() (int, bool), handle func(int), n int) {
+	var wg sync.WaitGroup
+	wg.Add(n)
+	go func() {
+		for {
+			x, ok := next()
+			if !ok {
+				return
+			}
+			handle(x)
+			wg.Done()
+		}
+	}()
+	wg.Wait()
+}
+
+func doneskipRetryNoCarry(try func() error) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		for attempt := 0; ; attempt++ {
+			if err := try(); err != nil {
+				if attempt == 3 {
+					return // want "skips.*Done"
+				}
+				continue
+			}
+			wg.Done()
+			return
+		}
+	}()
+	wg.Wait()
+}

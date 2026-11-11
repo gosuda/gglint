@@ -14,7 +14,7 @@ import (
 
 var doneskipAnalyzer = &analysis.Analyzer{
 	Name:     "doneskip",
-	Doc:      "report a return in a function literal started by go, errgroup Go, or WaitGroup Go that skips its direct WaitGroup Done call; a call that passes the group silences it, as does panic or testing FailNow, Fatal, or Skip, though testing calls still hang in a spawned goroutine; named functions are not checked",
+	Doc:      "report a return in a function literal started by go, errgroup Go or TryGo, or WaitGroup Go that skips its direct WaitGroup Done call; a return inside a loop that also calls Done on a path that continues the loop is not reported; a call that passes the group silences it, as does panic or testing FailNow, Fatal, or Skip, though testing calls still hang in a spawned goroutine; named functions are not checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runDoneskip,
 }
@@ -153,8 +153,113 @@ func reportSkipped(ctx *skipCtx, before []ast.Stmt, ret *ast.ReturnStmt) {
 		if doneSet[d.key] || releaseSet[d.key] {
 			continue
 		}
+		if loopContinuesDone(ctx, ret, d.key) {
+			continue
+		}
 		ctx.pass.Reportf(ret.Pos(), "this return skips %s.Done(), so any Wait on it blocks forever: defer the Done call", d.text)
 	}
+}
+
+func loopContinuesDone(ctx *skipCtx, ret *ast.ReturnStmt, k flow.Key) bool {
+	loop := enclosingLoop(ctx.lit, ret)
+	if loop == nil {
+		return false
+	}
+	return loopHasContinuingDone(ctx.info, loop, k)
+}
+
+func enclosingLoop(lit *ast.FuncLit, ret *ast.ReturnStmt) ast.Node {
+	var best ast.Node
+	var bestPos token.Pos
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		switch n.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			if n.Pos() <= ret.Pos() && ret.End() <= n.End() && n.Pos() > bestPos {
+				best = n
+				bestPos = n.Pos()
+			}
+		case *ast.FuncLit:
+			return false
+		}
+		return true
+	})
+	return best
+}
+
+func loopHasContinuingDone(info *types.Info, loop ast.Node, k flow.Key) bool {
+	found := false
+	ast.Inspect(loop, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		list, ok := stmtList(n)
+		if !ok {
+			return true
+		}
+		if listContinuesDone(info, list, k) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func listContinuesDone(info *types.Info, list []ast.Stmt, k flow.Key) bool {
+	for i, s := range list {
+		if !stmtHasDone(info, s, k) {
+			continue
+		}
+		if !followsExit(info, list[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtHasDone(info *types.Info, s ast.Stmt, k flow.Key) bool {
+	found := false
+	ast.Inspect(s, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if ak, _, ok := wgKey(info, call, "Done"); ok && ak == k {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func followsExit(info *types.Info, rest []ast.Stmt) bool {
+	for _, s := range rest {
+		u := unwrap(s)
+		if _, ok := u.(*ast.ReturnStmt); ok {
+			return true
+		}
+		if b, ok := u.(*ast.BranchStmt); ok && (b.Tok == token.BREAK || b.Tok == token.GOTO) {
+			return true
+		}
+		if call, ok := directCall(s); ok && isEndingCall(info, call) {
+			return true
+		}
+	}
+	return false
+}
+
+func isEndingCall(info *types.Info, call *ast.CallExpr) bool {
+	return isPanicCall(info, call) || isTestFail(info, call) || isExitCall(info, call)
 }
 
 func failsBefore(info *types.Info, before []ast.Stmt) bool {

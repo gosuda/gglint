@@ -60,6 +60,12 @@ func isControlStmt(s ast.Stmt) bool {
 	if _, ok := s.(*ast.LabeledStmt); ok {
 		return true
 	}
+	if _, ok := s.(*ast.ReturnStmt); ok {
+		return true
+	}
+	if _, ok := s.(*ast.BranchStmt); ok {
+		return true
+	}
 	switch unwrap(s).(type) {
 	case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
 		return true

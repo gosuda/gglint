@@ -3,6 +3,7 @@ package addlate
 import (
 	"log"
 	"sync"
+	"sync/atomic"
 )
 
 func work() {}
@@ -353,4 +354,68 @@ func addlateSilentDeferInsideLit() {
 		work()
 	}()
 	wg.Wait()
+}
+
+func addlateSendGated() {
+	var wg sync.WaitGroup
+	ch := make(chan int)
+	go func() {
+		defer wg.Done()
+		ch <- 1
+	}()
+	wg.Add(1)
+	<-ch
+	wg.Wait()
+}
+
+var started = make(chan struct{})
+
+func awaitStart() { <-started }
+
+func addlateHelperGated(work func()) {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		awaitStart()
+		work()
+	}()
+	wg.Add(1)
+	close(started)
+	wg.Wait()
+}
+
+func addlateAtomicLoadGated(work func(), flag *atomic.Bool) {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		for !flag.Load() {
+		}
+		work()
+	}()
+	wg.Add(1)
+	flag.Store(true)
+	wg.Wait()
+}
+
+func addlateEnclosingAdd(work func()) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	func() {
+		go func() { defer wg.Done(); work() }()
+		wg.Add(1)
+		go func() { defer wg.Done(); work() }()
+	}()
+	wg.Wait()
+}
+
+var poolWG sync.WaitGroup
+
+func reserve() { poolWG.Add(1) }
+
+func addlateHelperAdd() {
+	reserve()
+	go func() { defer poolWG.Done(); work() }()
+	poolWG.Add(1)
+	go func() { defer poolWG.Done(); work() }()
+	poolWG.Wait()
 }

@@ -153,3 +153,15 @@ func selfwaitSilentGoField() {
 	return
 	c.wg.Wait()
 }
+
+func selfwaitDoneByGoto() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	goto release
+wait:
+	wg.Wait()
+	return
+release:
+	wg.Done()
+	goto wait
+}
