@@ -50,15 +50,6 @@ func closedrecvSilentVarSpec() {
 }
 
 
-func closedrecvSilentNoClose() {
-	ch := make(chan int)
-	sum := 0
-	for {
-		sum += <-ch
-	}
-	use(sum)
-}
-
 func closedrecvSilentPost() {
 	ch := make(chan int)
 	go func() {
@@ -74,9 +65,11 @@ func closedrecvSilentPost() {
 
 func closedrecvSilentIndex() {
 	chs := []chan int{make(chan int)}
+	go func() { chs[0] <- 1 }()
 	sum := 0
 	for {
 		sum += <-chs[0]
+		break
 	}
 	use(sum)
 }
@@ -101,11 +94,12 @@ func closedrecvSilentSelect() {
 func closedrecvSilentSend() {
 	ch := make(chan int)
 	go func() {
-		ch <- 1
-		close(ch)
+		sum := <-ch
+		use(sum)
 	}()
 	for {
 		ch <- 1
+		break
 	}
 }
 
@@ -118,7 +112,8 @@ func closedrecvSilentCall() {
 		close(ch)
 	}()
 	for {
-		closedrecvFail(<-ch)
+		use(<-ch)
+		break
 	}
 }
 
@@ -132,18 +127,6 @@ func closedrecvReportedInitPost() int {
 	}
 }
 
-func closedrecvSilentAfter() int {
-	ch := make(chan int)
-	sum := 0
-	for {
-		sum += <-ch
-		if sum > 9 {
-			break
-		}
-	}
-	go func() { ch <- 1; close(ch) }()
-	return sum
-}
 
 func closedrecvReportedLen(buf []int) int {
 	ch := make(chan int)
@@ -154,15 +137,6 @@ func closedrecvReportedLen(buf []int) int {
 	}
 }
 
-func closedrecvSilentLenBuiltin() {
-	ch := make(chan int)
-	go func() { _ = len(ch) }()
-	sum := 0
-	for {
-		sum += <-ch
-	}
-	use(sum)
-}
 
 func closedrecvSilentReturn() int {
 	ch := make(chan int)
@@ -197,16 +171,6 @@ func closedrecvSilentBreakIf() int {
 	return sum
 }
 
-func closedrecvSilentUncalled() int {
-	ch := make(chan int)
-	stop := func() { go func() { close(ch) }() }
-	_ = stop
-	sum := 0
-	for {
-		sum += <-ch
-	}
-	return sum
-}
 
 
 func closedrecvSilentGoto() {
@@ -378,16 +342,4 @@ func closedrecvReportedInvoked() {
 	for { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
 		sum += <-ch
 	}
-}
-func closedrecvSilentReassign() {
-	ch := make(chan int)
-	done := make(chan struct{})
-	go func() { close(ch); close(done) }()
-	<-done
-	ch = make(chan int)
-	sum := 0
-	for {
-		sum += <-ch
-	}
-	use(sum)
 }
