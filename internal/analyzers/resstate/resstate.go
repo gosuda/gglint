@@ -38,7 +38,7 @@ var useafterputAnalyzer = &analysis.Analyzer{
 
 var useafterfreeAnalyzer = &analysis.Analyzer{
 	Name:     "useafterfree",
-	Doc:      "reports uses of values freed on every path to the use; a value held in a uintptr variable is not tracked; a literal called in place counts as its statements when its body has no control flow, otherwise the state is unknown; a free and a later use inside the same literal are not reported",
+	Doc:      "reports uses of values freed on every path to the use; a value held in a uintptr variable is not tracked; a literal called in place counts as its statements when its body has no control flow, otherwise the state is unknown; a free and a later use inside the same literal are not reported for a value declared outside it; a free through an alias is not followed when a function literal assigns the source of the alias",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUseafterfree,
 }
