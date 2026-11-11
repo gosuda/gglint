@@ -172,14 +172,18 @@ func enclosingLoop(lit *ast.FuncLit, ret *ast.ReturnStmt) ast.Node {
 	var best ast.Node
 	var bestPos token.Pos
 	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		switch n.(type) {
-		case *ast.ForStmt, *ast.RangeStmt:
+		if n, ok := n.(*ast.ForStmt); ok {
 			if n.Pos() <= ret.Pos() && ret.End() <= n.End() && n.Pos() > bestPos {
 				best = n
 				bestPos = n.Pos()
 			}
-		case *ast.FuncLit:
-			return false
+			return true
+		}
+		if n, ok := n.(*ast.RangeStmt); ok {
+			if n.Pos() <= ret.Pos() && ret.End() <= n.End() && n.Pos() > bestPos {
+				best = n
+				bestPos = n.Pos()
+			}
 		}
 		return true
 	})
@@ -259,7 +263,7 @@ func followsExit(info *types.Info, rest []ast.Stmt) bool {
 }
 
 func isEndingCall(info *types.Info, call *ast.CallExpr) bool {
-	return isPanicCall(info, call) || isTestFail(info, call) || isExitCall(info, call)
+	return isTestFail(info, call)
 }
 
 func failsBefore(info *types.Info, before []ast.Stmt) bool {

@@ -11,14 +11,16 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
+	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/flow"
+	"github.com/gosuda/gglint/internal/inspection"
 )
 
 var addlateAnalyzer = &analysis.Analyzer{
 	Name:     "addlate",
-	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable that can hold it at that call; an Add in a go statement never counts as earlier, and an Add in a defer statement in the function itself does not, while a defer inside a called literal does; a literal that receives or sends, ranges over a channel, or locks or waits is not reported, because that wait can order the Add; the check cannot know the capacity of every channel, so it stays silent for a buffered channel too; a call to another package or through a function value is assumed not to wait",
+	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable that can hold it at that call; an Add in a go statement never counts as earlier, and an Add in a defer statement in the function itself does not, while a defer inside a called literal does; a literal that receives or sends, ranges over a channel, or locks or waits is not reported, because that wait can order the Add; the check cannot know the capacity of every channel, so it stays silent for a buffered channel too; a call to another package or through a function value is assumed not to wait; a call passed the WaitGroup counts unless it is a same-package function whose body neither Adds on the receiving parameter nor hands it on",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runAddlate,
 }
@@ -30,14 +32,15 @@ type lateGroup struct {
 }
 
 func runAddlate(pass *analysis.Pass) (any, error) {
-	eachFunc(pass, func(fn ast.Node) {
-		checkAddlate(pass, fn)
-	})
+	for cur := range inspection.Of(pass).Root().Preorder((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		fn := cur.Node()
+		checkAddlate(pass, fn, enclosingFuncBodies(cur, fn))
+	}
 	return nil, nil
 }
 
-func checkAddlate(pass *analysis.Pass, fn ast.Node) {
-	first := firstAddPositions(pass, fn)
+func checkAddlate(pass *analysis.Pass, fn ast.Node, enclosing []*ast.BlockStmt) {
+	first := firstAddPositions(pass, fn, enclosing)
 	eachList(fn, func(list []ast.Stmt) {
 		seen := map[token.Pos]bool{}
 		for i, s := range list {
@@ -45,12 +48,12 @@ func checkAddlate(pass *analysis.Pass, fn ast.Node) {
 			if !ok {
 				continue
 			}
-			checkGoAddlate(pass, fn, g, lateGroup{list: list, goIdx: i, seen: seen}, first)
+			checkGoAddlate(pass, fn, g, lateGroup{list: list, goIdx: i, seen: seen}, first, enclosing)
 		}
 	})
 }
 
-func firstAddPositions(pass *analysis.Pass, fn ast.Node) map[flow.Key]token.Pos {
+func firstAddPositions(pass *analysis.Pass, fn ast.Node, enclosing []*ast.BlockStmt) map[flow.Key]token.Pos {
 	out := map[flow.Key]token.Pos{}
 	body := funcBody(fn)
 	if body == nil {
@@ -59,7 +62,9 @@ func firstAddPositions(pass *analysis.Pass, fn ast.Node) map[flow.Key]token.Pos 
 	collectDirectAdds(pass, body, out)
 	mergeInPlaceAdds(pass, body, out)
 	mergeVarLitAdds(pass, fn, body, out)
-	mergeEnclosingAdds(pass, fn, out)
+	if containsDirectGo(body) {
+		mergeEnclosingAdds(enclosing, fn.Pos(), pass, out)
+	}
 	return out
 }
 
@@ -84,43 +89,41 @@ func collectDirectAdds(pass *analysis.Pass, body *ast.BlockStmt, out map[flow.Ke
 	})
 }
 
-func mergeEnclosingAdds(pass *analysis.Pass, fn ast.Node, out map[flow.Key]token.Pos) {
-	for _, body := range enclosingBodies(pass, fn) {
-		collectEnclosingAdds(pass, body, fn.Pos(), out)
+func mergeEnclosingAdds(enclosing []*ast.BlockStmt, before token.Pos, pass *analysis.Pass, out map[flow.Key]token.Pos) {
+	for _, body := range enclosing {
+		collectEnclosingAdds(pass, body, before, out)
 	}
 }
 
-func enclosingBodies(pass *analysis.Pass, fn ast.Node) []*ast.BlockStmt {
+func enclosingFuncBodies(cur inspector.Cursor, fn ast.Node) []*ast.BlockStmt {
 	var out []*ast.BlockStmt
-	for _, f := range pass.Files {
-		ast.Inspect(f, func(n ast.Node) bool {
-			out = appendEnclosingBody(out, n, fn)
-			return true
-		})
-	}
-	return out
-}
-
-func appendEnclosingBody(out []*ast.BlockStmt, n, fn ast.Node) []*ast.BlockStmt {
-	switch n := n.(type) {
-	case *ast.FuncDecl:
-		if isEnclosingDecl(n, fn) {
-			out = append(out, n.Body)
+	for enc := range cur.Enclosing((*ast.FuncDecl)(nil), (*ast.FuncLit)(nil)) {
+		if enc.Node() == fn {
+			continue
 		}
-	case *ast.FuncLit:
-		if isEnclosingLit(n, fn) {
-			out = append(out, n.Body)
+		if body := funcBody(enc.Node()); body != nil {
+			out = append(out, body)
 		}
 	}
 	return out
 }
 
-func isEnclosingDecl(n *ast.FuncDecl, fn ast.Node) bool {
-	return n.Body != nil && ast.Node(n) != fn && containsNode(n.Body, fn.Pos(), fn.End())
-}
-
-func isEnclosingLit(n *ast.FuncLit, fn ast.Node) bool {
-	return n.Body != nil && ast.Node(n) != fn && containsNode(n, fn.Pos(), fn.End())
+func containsDirectGo(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if _, ok := n.(*ast.GoStmt); ok {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func collectEnclosingAdds(pass *analysis.Pass, body *ast.BlockStmt, before token.Pos, out map[flow.Key]token.Pos) {
@@ -431,7 +434,7 @@ func noteVarCall(info *types.Info, call *ast.CallExpr, set *varLitSet, view scop
 	})
 }
 
-func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, group lateGroup, first map[flow.Key]token.Pos) {
+func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, group lateGroup, first map[flow.Key]token.Pos, enclosing []*ast.BlockStmt) {
 	lit, ok := ast.Unparen(g.Call.Fun).(*ast.FuncLit)
 	if !ok || lit.Body == nil {
 		return
@@ -447,18 +450,18 @@ func checkGoAddlate(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, group lateG
 		if hasAddBefore(first, g, k) {
 			continue
 		}
-		if possibleAddBefore(pass, fn, g, k) {
+		if possibleAddBefore(pass, fn, enclosing, g, k) {
 			continue
 		}
 		reportLateAdds(pass, group, k)
 	}
 }
 
-func possibleAddBefore(pass *analysis.Pass, fn ast.Node, g *ast.GoStmt, k flow.Key) bool {
+func possibleAddBefore(pass *analysis.Pass, fn ast.Node, enclosing []*ast.BlockStmt, g *ast.GoStmt, k flow.Key) bool {
 	if possibleAddInBody(pass, funcBody(fn), g.Pos(), k) {
 		return true
 	}
-	for _, body := range enclosingBodies(pass, fn) {
+	for _, body := range enclosing {
 		if possibleAddInBody(pass, body, g.Pos(), k) {
 			return true
 		}
@@ -483,13 +486,86 @@ func possibleAddInBody(pass *analysis.Pass, body *ast.BlockStmt, before token.Po
 		if !ok || call.Pos() >= before {
 			return true
 		}
-		if passesWG(pass, call, k) || calleeAddsSame(pass, call, k) {
+		if possibleAddCall(pass, call, k) {
 			found = true
 			return false
 		}
 		return true
 	})
 	return found
+}
+
+func possibleAddCall(pass *analysis.Pass, call *ast.CallExpr, k flow.Key) bool {
+	if passesWG(pass, call, k) {
+		return passedWGCounts(pass, call, k)
+	}
+	return calleeAddsSame(pass, call, k)
+}
+
+func passedWGCounts(pass *analysis.Pass, call *ast.CallExpr, k flow.Key) bool {
+	fn := typeutil.StaticCallee(pass.TypesInfo, call)
+	if fn == nil || fn.Pkg() == nil || fn.Pkg() != pass.Pkg {
+		return true
+	}
+	decl := helperDecl(pass, fn)
+	if decl == nil || decl.Body == nil {
+		return true
+	}
+	return calleeUsesParamForAdd(pass, decl, call, k)
+}
+
+func calleeUsesParamForAdd(pass *analysis.Pass, decl *ast.FuncDecl, call *ast.CallExpr, k flow.Key) bool {
+	params := paramVars(pass, decl)
+	for i, pv := range params {
+		if i >= len(call.Args) {
+			continue
+		}
+		rk, ok := flow.KeyOf(pass.TypesInfo, call.Args[i])
+		if !ok || rk != k {
+			continue
+		}
+		if paramAddsOrHandsOff(pass, decl.Body, pv) {
+			return true
+		}
+	}
+	return false
+}
+
+func paramAddsOrHandsOff(pass *analysis.Pass, body *ast.BlockStmt, pv *types.Var) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch n.(type) {
+		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if addsOnParam(pass, call, pv) || passesParam(pass, call, pv) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func addsOnParam(pass *analysis.Pass, call *ast.CallExpr, pv *types.Var) bool {
+	ak, _, ok := wgKey(pass.TypesInfo, call, "Add")
+	return ok && ak.Root == pv
+}
+
+func passesParam(pass *analysis.Pass, call *ast.CallExpr, pv *types.Var) bool {
+	for _, arg := range call.Args {
+		if ak, ok := flow.KeyOf(pass.TypesInfo, arg); ok && ak.Root == pv {
+			return true
+		}
+	}
+	return false
 }
 
 func passesWG(pass *analysis.Pass, call *ast.CallExpr, k flow.Key) bool {
@@ -510,19 +586,55 @@ func calleeAddsSame(pass *analysis.Pass, call *ast.CallExpr, k flow.Key) bool {
 	if fn == nil || fn.Pkg() == nil || fn.Pkg() != pass.Pkg {
 		return false
 	}
-	body := helperBody(pass, fn)
-	if body == nil {
+	decl := helperDecl(pass, fn)
+	if decl == nil || decl.Body == nil {
 		return false
 	}
-	return bodyAddsSame(pass, body, k)
+	return bodyAddsSameForCall(pass, decl, call, k)
 }
 
-func bodyAddsSame(pass *analysis.Pass, body *ast.BlockStmt, k flow.Key) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
+func bodyAddsSameForCall(pass *analysis.Pass, decl *ast.FuncDecl, call *ast.CallExpr, k flow.Key) bool {
+	adds := collectBodyAdds(pass, decl.Body)
+	recvVar := receiverVar(pass, decl)
+	params := paramVars(pass, decl)
+	recvKey := callReceiverKey(pass, call)
+	for _, ak := range adds {
+		if ak == k && isPackageVar(ak.Root, pass) {
+			return true
 		}
+		if matchesReceiver(recvVar, ak, recvKey, k) {
+			return true
+		}
+		if sameParamAdd(call, params, ak, k, pass) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesReceiver(recvVar *types.Var, ak, recvKey, k flow.Key) bool {
+	return recvVar != nil && ak.Root == recvVar && recvKey.Root == k.Root && joinPath(recvKey.Path, ak.Path) == k.Path
+}
+
+func sameParamAdd(call *ast.CallExpr, params []*types.Var, ak, k flow.Key, pass *analysis.Pass) bool {
+	for i, pv := range params {
+		if ak.Root != pv || i >= len(call.Args) {
+			continue
+		}
+		rk, ok := flow.KeyOf(pass.TypesInfo, call.Args[i])
+		if !ok || rk.Root != k.Root {
+			continue
+		}
+		if joinPath(rk.Path, ak.Path) == k.Path {
+			return true
+		}
+	}
+	return false
+}
+
+func collectBodyAdds(pass *analysis.Pass, body *ast.BlockStmt) []flow.Key {
+	var out []flow.Key
+	ast.Inspect(body, func(n ast.Node) bool {
 		switch n.(type) {
 		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
 			return false
@@ -531,24 +643,12 @@ func bodyAddsSame(pass *analysis.Pass, body *ast.BlockStmt, k flow.Key) bool {
 		if !ok {
 			return true
 		}
-		ak, _, ok := wgKey(pass.TypesInfo, call, "Add")
-		if !ok {
-			return true
-		}
-		if keysCanBeSame(ak, k) {
-			found = true
-			return false
+		if ak, _, ok := wgKey(pass.TypesInfo, call, "Add"); ok {
+			out = append(out, ak)
 		}
 		return true
 	})
-	return found
-}
-
-func keysCanBeSame(a, b flow.Key) bool {
-	if a.Root != nil && a.Root == b.Root {
-		return true
-	}
-	return a.Path != "" && a.Path == b.Path
+	return out
 }
 
 func waitsForParent(pass *analysis.Pass, lit *ast.FuncLit) bool {
@@ -557,7 +657,8 @@ func waitsForParent(pass *analysis.Pass, lit *ast.FuncLit) bool {
 		if found {
 			return false
 		}
-		if _, ok := n.(*ast.FuncLit); ok {
+		switch n.(type) {
+		case *ast.FuncLit, *ast.GoStmt:
 			return false
 		}
 		if nodeWaits(pass, n) {
@@ -574,8 +675,6 @@ func nodeWaits(pass *analysis.Pass, n ast.Node) bool {
 	case *ast.UnaryExpr:
 		return n.Op == token.ARROW
 	case *ast.SendStmt:
-		return true
-	case *ast.SelectStmt:
 		return true
 	case *ast.RangeStmt:
 		return isChanRange(pass, n)
@@ -619,8 +718,6 @@ func directWaits(pass *analysis.Pass, n ast.Node) bool {
 		return n.Op == token.ARROW
 	case *ast.SendStmt:
 		return true
-	case *ast.SelectStmt:
-		return true
 	case *ast.RangeStmt:
 		return isChanRange(pass, n)
 	case *ast.CallExpr:
@@ -629,7 +726,7 @@ func directWaits(pass *analysis.Pass, n ast.Node) bool {
 	return false
 }
 
-func helperBody(pass *analysis.Pass, fn *types.Func) *ast.BlockStmt {
+func helperDecl(pass *analysis.Pass, fn *types.Func) *ast.FuncDecl {
 	for _, f := range pass.Files {
 		for _, decl := range f.Decls {
 			fd, ok := decl.(*ast.FuncDecl)
@@ -637,33 +734,124 @@ func helperBody(pass *analysis.Pass, fn *types.Func) *ast.BlockStmt {
 				continue
 			}
 			if pass.TypesInfo.ObjectOf(fd.Name) == fn {
-				return fd.Body
+				return fd
 			}
 		}
 	}
 	return nil
 }
 
+func helperBody(pass *analysis.Pass, fn *types.Func) *ast.BlockStmt {
+	if decl := helperDecl(pass, fn); decl != nil {
+		return decl.Body
+	}
+	return nil
+}
+
+func isPackageVar(obj types.Object, pass *analysis.Pass) bool {
+	return obj != nil && obj.Parent() == pass.Pkg.Scope()
+}
+
+func receiverVar(pass *analysis.Pass, decl *ast.FuncDecl) *types.Var {
+	if decl.Recv == nil || len(decl.Recv.List) == 0 || len(decl.Recv.List[0].Names) == 0 {
+		return nil
+	}
+	v, ok := pass.TypesInfo.ObjectOf(decl.Recv.List[0].Names[0]).(*types.Var)
+	if !ok {
+		return nil
+	}
+	return v
+}
+
+func paramVars(pass *analysis.Pass, decl *ast.FuncDecl) []*types.Var {
+	var out []*types.Var
+	if decl.Type == nil || decl.Type.Params == nil {
+		return out
+	}
+	for _, field := range decl.Type.Params.List {
+		for _, name := range field.Names {
+			if v, ok := pass.TypesInfo.ObjectOf(name).(*types.Var); ok {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+func callReceiverKey(pass *analysis.Pass, call *ast.CallExpr) flow.Key {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return flow.Key{}
+	}
+	k, _ := flow.KeyOf(pass.TypesInfo, sel.X)
+	return k
+}
+
+func joinPath(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "." + b
+}
+
 func spinsOnLoad(pass *analysis.Pass, stmt *ast.ForStmt) bool {
-	if stmt.Cond == nil {
+	if stmt.Init != nil || stmt.Post != nil || stmt.Cond == nil {
 		return false
 	}
-	found := false
-	ast.Inspect(stmt.Cond, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if isAtomicLoad(pass, call) {
-			found = true
-			return false
-		}
+	return isLoadWaitCond(pass, stmt.Cond)
+}
+
+var loadCompareTokens = map[token.Token]bool{
+	token.EQL: true,
+	token.NEQ: true,
+	token.LSS: true,
+	token.LEQ: true,
+	token.GTR: true,
+	token.GEQ: true,
+}
+
+func isLoadWaitCond(pass *analysis.Pass, cond ast.Expr) bool {
+	switch n := ast.Unparen(cond).(type) {
+	case *ast.CallExpr:
+		return isLoadCall(pass, n)
+	case *ast.UnaryExpr:
+		return isNegatedLoad(pass, n)
+	case *ast.BinaryExpr:
+		return isComparedLoad(pass, n)
+	}
+	return false
+}
+
+func isLoadCall(pass *analysis.Pass, call *ast.CallExpr) bool {
+	return isAtomicLoad(pass, call)
+}
+
+func isNegatedLoad(pass *analysis.Pass, n *ast.UnaryExpr) bool {
+	if n.Op != token.NOT {
+		return false
+	}
+	call, ok := ast.Unparen(n.X).(*ast.CallExpr)
+	return ok && isAtomicLoad(pass, call)
+}
+
+func isComparedLoad(pass *analysis.Pass, n *ast.BinaryExpr) bool {
+	if !loadCompareTokens[n.Op] {
+		return false
+	}
+	left, lok := ast.Unparen(n.X).(*ast.CallExpr)
+	right, rok := ast.Unparen(n.Y).(*ast.CallExpr)
+	if lok && isAtomicLoad(pass, left) && isConst(pass, n.Y) {
 		return true
-	})
-	return found
+	}
+	return rok && isAtomicLoad(pass, right) && isConst(pass, n.X)
+}
+
+func isConst(pass *analysis.Pass, e ast.Expr) bool {
+	tv, ok := pass.TypesInfo.Types[e]
+	return ok && tv.Value != nil
 }
 
 func isAtomicLoad(pass *analysis.Pass, call *ast.CallExpr) bool {

@@ -227,3 +227,18 @@ func doneskipRetryNoCarry(try func() error) {
 	}()
 	wg.Wait()
 }
+
+func doneskipLoopBreakBad(next func() bool) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		for {
+			if !next() {
+				return // want "skips.*Done"
+			}
+			wg.Done()
+			break
+		}
+	}()
+	wg.Wait()
+}

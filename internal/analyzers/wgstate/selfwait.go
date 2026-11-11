@@ -15,7 +15,7 @@ import (
 
 var selfwaitAnalyzer = &analysis.Analyzer{
 	Name:     "selfwait",
-	Doc:      "report a Wait on a WaitGroup declared in the function and not shared with any goroutine, closure, helper, or pointer, when constant Adds in the Wait's own block before it exceed the Done calls there; silent for parameters, fields of parameters, package variables, non-constant Adds, and any Done earlier in the function",
+	Doc:      "report a Wait on a WaitGroup declared in the function and not shared with any goroutine, closure, helper, or pointer, when constant Adds in the Wait's own block before it exceed the Done calls there; a branch statement or a label between the Add and the Wait ends the straight line; silent for parameters, fields of parameters, package variables, non-constant Adds, and any Done earlier in the function",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runSelfwait,
 }
@@ -58,9 +58,6 @@ type waitSite struct {
 
 func isControlStmt(s ast.Stmt) bool {
 	if _, ok := s.(*ast.LabeledStmt); ok {
-		return true
-	}
-	if _, ok := s.(*ast.ReturnStmt); ok {
 		return true
 	}
 	if _, ok := s.(*ast.BranchStmt); ok {

@@ -419,3 +419,62 @@ func addlateHelperAdd() {
 	go func() { defer poolWG.Done(); work() }()
 	poolWG.Wait()
 }
+
+type addPool struct{ wg sync.WaitGroup }
+type addStats struct{ wg sync.WaitGroup }
+
+func (s *addStats) bump() { s.wg.Add(1) }
+
+func addlateReportedOtherGroup(p *addPool, s *addStats, work func()) {
+	s.bump()
+	go func() { defer p.wg.Done(); work() }()
+	p.wg.Add(1) // want "negative WaitGroup counter"
+	p.wg.Wait()
+	s.wg.Done()
+}
+
+func addDrain(ch chan int) { for range ch {} }
+
+func addlateReportedSpawnsDrain(ch chan int, work func()) {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		go addDrain(ch)
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addlateReportedCountedLoad(work func(int64), size *atomic.Int64) {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		for i := int64(0); i < size.Load(); i++ {
+			work(i)
+		}
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addSetup(wg *sync.WaitGroup) { log.Print("setup") }
+
+func addlateReportedPassedNoAdd(work func()) {
+	var wg sync.WaitGroup
+	addSetup(&wg)
+	go func() { defer wg.Done(); work() }()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addOne(wg *sync.WaitGroup) { wg.Add(1) }
+
+func addlateSilentPassedParamAdd(work func()) {
+	var wg sync.WaitGroup
+	addOne(&wg)
+	go func() { defer wg.Done(); work() }()
+	wg.Add(1)
+	go func() { defer wg.Done(); work() }()
+	wg.Wait()
+}
