@@ -287,3 +287,47 @@ func (nocontextDialerSilentStruct) DialContext(ctx context.Context, network, add
 		return r.conn, r.err
 	}
 }
+
+type nocontextSender struct {
+	req *http.Request
+	url string
+}
+
+func (s *nocontextSender) nocontextSilentFieldWithContext(ctx context.Context) error {
+	var err error
+	s.req, err = http.NewRequest(http.MethodGet, s.url, nil)
+	if err != nil {
+		return err
+	}
+	s.req = s.req.WithContext(ctx)
+	return nil
+}
+
+func nocontextSilentManualCancel(ctx context.Context) error {
+	cmd := exec.Command("sleep", "10")
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		<-done
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}
+
+func nocontextReportedDoneWithoutTouch(ctx context.Context) error {
+	cmd := exec.Command("sleep", "10") // want "exec\\.Command cannot be cancelled"
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}

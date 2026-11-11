@@ -12,6 +12,7 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/go/types/typeutil"
 
+	"github.com/gosuda/gglint/internal/flow"
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
@@ -19,7 +20,7 @@ const httpDoReplacement = "http.NewRequestWithContext and (*http.Client).Do"
 
 var nocontextAnalyzer = &analysis.Analyzer{
 	Name:     "nocontext",
-	Doc:      "report the table calls that cannot be cancelled where a named context PARAMETER or LOCAL VARIABLE that is visible at the call exists; a wrapper is exempt only when its context parameter's value flows on: as a call argument, a method receiver, the right side of an assignment to another name, a composite literal element, a sent value, or a return operand; comparing the parameter with nil, overwriting it, or dropping it to blank does not exempt",
+	Doc:      "report the table calls that cannot be cancelled where a named context or *http.Request parameter, or a context local variable that is visible at the call exists; a wrapper is exempt only when its context parameter's value flows on: as a call argument, a method receiver, the right side of an assignment to another name, a composite literal element, a sent value, or a return operand; comparing the parameter with nil, overwriting it, or dropping it to blank does not exempt",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runNocontext,
 }
@@ -27,7 +28,7 @@ var nocontextAnalyzer = &analysis.Analyzer{
 func runNocontext(pass *analysis.Pass) (any, error) {
 	cache := &nocontextCache{
 		locals:   map[ast.Node][]*types.Var{},
-		uses:     map[ast.Node]map[*types.Var]token.Pos{},
+		uses:     map[ast.Node]map[flow.Key]token.Pos{},
 		wrappers: map[ast.Node]bool{},
 	}
 	for cur := range inspection.Of(pass).Root().Preorder((*ast.CallExpr)(nil)) {
@@ -38,7 +39,7 @@ func runNocontext(pass *analysis.Pass) (any, error) {
 
 type nocontextCache struct {
 	locals   map[ast.Node][]*types.Var
-	uses     map[ast.Node]map[*types.Var]token.Pos
+	uses     map[ast.Node]map[flow.Key]token.Pos
 	wrappers map[ast.Node]bool
 }
 
@@ -57,11 +58,91 @@ func checkNocontext(pass *analysis.Pass, cur inspector.Cursor, cache *nocontextC
 	if left == "http.NewRequest" && newRequestGetsContext(pass, cur, call, cache) {
 		return
 	}
+	if manuallyCancelled(pass, cur, call) {
+		return
+	}
 	pass.Report(analysis.Diagnostic{
 		Pos:     call.Pos(),
 		End:     call.End(),
 		Message: "a context is in scope and " + left + " cannot be cancelled: use " + right,
 	})
+}
+
+func manuallyCancelled(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) bool {
+	k, ok := requestResultVar(pass, cur, call)
+	if !ok {
+		return false
+	}
+	fn := ownerOf(cur)
+	if fn.Node() == nil {
+		return false
+	}
+	return resultInDoneClause(pass, fn, k)
+}
+
+func resultInDoneClause(pass *analysis.Pass, fn inspector.Cursor, target flow.Key) bool {
+	for sel := range fn.Preorder((*ast.SelectStmt)(nil)) {
+		stmt, ok := sel.Node().(*ast.SelectStmt)
+		if !ok {
+			continue
+		}
+		if selectMentionsResult(pass, stmt, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectMentionsResult(pass *analysis.Pass, stmt *ast.SelectStmt, target flow.Key) bool {
+	for _, s := range stmt.Body.List {
+		clause, ok := s.(*ast.CommClause)
+		if !ok || clause.Comm == nil {
+			continue
+		}
+		if !receivesDone(pass.TypesInfo, clause.Comm) {
+			continue
+		}
+		if mentionsResultKey(pass.TypesInfo, clause.Body, target) {
+			return true
+		}
+	}
+	return false
+}
+
+type resultKeySearch struct {
+	info   *types.Info
+	target flow.Key
+	found  bool
+}
+
+func (s *resultKeySearch) visit(n ast.Node) bool {
+	if s.found {
+		return false
+	}
+	e, ok := n.(ast.Expr)
+	if !ok {
+		return true
+	}
+	k, ok := flow.KeyOf(s.info, e)
+	if !ok || k.Root != s.target.Root {
+		return true
+	}
+	if s.target.Path == "" || k.Path == s.target.Path || strings.HasPrefix(k.Path, s.target.Path+".") {
+		s.found = true
+		return false
+	}
+	return true
+}
+
+func mentionsResultKey(info *types.Info, body []ast.Stmt, target flow.Key) bool {
+	s := &resultKeySearch{info: info, target: target}
+	for _, stmt := range body {
+		ast.Inspect(stmt, s.visit)
+		if s.found {
+			return true
+		}
+	}
+	return false
 }
 
 func nocontextTarget(info *types.Info, call *ast.CallExpr) (left, right string, found bool) {
@@ -397,18 +478,18 @@ func isContextValueType(info *types.Info, e ast.Expr) bool {
 }
 
 func newRequestGetsContext(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, cache *nocontextCache) bool {
-	v := requestResultVar(pass, cur, call)
-	if v == nil {
+	k, ok := requestResultVar(pass, cur, call)
+	if !ok {
 		return false
 	}
 	fn := ownerOf(cur)
 	if fn.Node() == nil {
 		return false
 	}
-	return getsContextBeforeSend(pass, fn, call, v, cache)
+	return getsContextBeforeSend(pass, fn, call, k, cache)
 }
 
-func requestResultVar(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) *types.Var {
+func requestResultVar(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) (flow.Key, bool) {
 	for ac := range cur.Enclosing((*ast.AssignStmt)(nil), (*ast.ValueSpec)(nil)) {
 		switch n := ac.Node().(type) {
 		case *ast.AssignStmt:
@@ -420,34 +501,42 @@ func requestResultVar(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallE
 			}
 			return firstResultVar(pass, lhs, n.Values, call)
 		}
-		return nil
+		return flow.Key{}, false
 	}
-	return nil
+	return flow.Key{}, false
 }
 
-func firstResultVar(pass *analysis.Pass, lhs, rhs []ast.Expr, call *ast.CallExpr) *types.Var {
+func firstResultVar(pass *analysis.Pass, lhs, rhs []ast.Expr, call *ast.CallExpr) (flow.Key, bool) {
 	if len(rhs) != 1 || stripParens(rhs[0]) != call {
-		return nil
+		return flow.Key{}, false
 	}
 	if len(lhs) == 0 {
-		return nil
+		return flow.Key{}, false
 	}
-	id, ok := stripParens(lhs[0]).(*ast.Ident)
-	if !ok || id.Name == "" || id.Name == "_" {
-		return nil
+	first := stripParens(lhs[0])
+	if id, ok := first.(*ast.Ident); ok {
+		v := varOf(pass.TypesInfo, id)
+		if v == nil {
+			return flow.Key{}, false
+		}
+		return flow.Key{Root: v}, true
 	}
-	return varOf(pass.TypesInfo, id)
+	k, ok := flow.KeyOf(pass.TypesInfo, first)
+	if !ok {
+		return flow.Key{}, false
+	}
+	return k, true
 }
 
-func getsContextBeforeSend(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, v *types.Var, cache *nocontextCache) bool {
-	return latestContextUse(pass, fn, cache)[v] >= call.End()
+func getsContextBeforeSend(pass *analysis.Pass, fn inspector.Cursor, call *ast.CallExpr, k flow.Key, cache *nocontextCache) bool {
+	return latestContextUse(pass, fn, cache)[k] >= call.End()
 }
 
-func latestContextUse(pass *analysis.Pass, fn inspector.Cursor, cache *nocontextCache) map[*types.Var]token.Pos {
+func latestContextUse(pass *analysis.Pass, fn inspector.Cursor, cache *nocontextCache) map[flow.Key]token.Pos {
 	if done, ok := cache.uses[fn.Node()]; ok {
 		return done
 	}
-	done := map[*types.Var]token.Pos{}
+	done := map[flow.Key]token.Pos{}
 	for cc := range fn.Preorder((*ast.CallExpr)(nil)) {
 		if c, ok := cc.Node().(*ast.CallExpr); ok {
 			recordContextUse(pass, cc, c, done)
@@ -457,28 +546,26 @@ func latestContextUse(pass *analysis.Pass, fn inspector.Cursor, cache *nocontext
 	return done
 }
 
-func recordContextUse(pass *analysis.Pass, cc inspector.Cursor, c *ast.CallExpr, done map[*types.Var]token.Pos) {
-	for _, v := range callVars(pass, c) {
-		if withContextOn(pass, cc, c, v) || passedWithContext(pass, c, v) {
-			if pos := c.Pos(); pos > done[v] {
-				done[v] = pos
+func recordContextUse(pass *analysis.Pass, cc inspector.Cursor, c *ast.CallExpr, done map[flow.Key]token.Pos) {
+	for _, k := range callKeys(pass, c) {
+		if withContextOn(pass, cc, c, k) || passedWithContext(pass, c, k) {
+			if pos := c.Pos(); pos > done[k] {
+				done[k] = pos
 			}
 		}
 	}
 }
 
-func callVars(pass *analysis.Pass, c *ast.CallExpr) []*types.Var {
-	var out []*types.Var
-	seen := map[*types.Var]bool{}
+func callKeys(pass *analysis.Pass, c *ast.CallExpr) []flow.Key {
+	var out []flow.Key
+	seen := map[flow.Key]bool{}
 	add := func(e ast.Expr) {
-		id, ok := stripParens(e).(*ast.Ident)
-		if !ok {
+		k, ok := flow.KeyOf(pass.TypesInfo, stripParens(e))
+		if !ok || seen[k] {
 			return
 		}
-		if v := varOf(pass.TypesInfo, id); v != nil && !seen[v] {
-			seen[v] = true
-			out = append(out, v)
-		}
+		seen[k] = true
+		out = append(out, k)
 	}
 	if sel, ok := stripParens(c.Fun).(*ast.SelectorExpr); ok {
 		add(sel.X)
@@ -489,8 +576,8 @@ func callVars(pass *analysis.Pass, c *ast.CallExpr) []*types.Var {
 	return out
 }
 
-func withContextOn(pass *analysis.Pass, cc inspector.Cursor, c *ast.CallExpr, v *types.Var) bool {
-	if !isWithContextCall(pass, c, v) {
+func withContextOn(pass *analysis.Pass, cc inspector.Cursor, c *ast.CallExpr, k flow.Key) bool {
+	if !isWithContextCall(pass, c, k) {
 		return false
 	}
 	if _, ok := cc.Parent().Node().(*ast.ExprStmt); ok {
@@ -504,12 +591,13 @@ func withContextOn(pass *analysis.Pass, cc inspector.Cursor, c *ast.CallExpr, v 
 	return false
 }
 
-func isWithContextCall(pass *analysis.Pass, c *ast.CallExpr, v *types.Var) bool {
+func isWithContextCall(pass *analysis.Pass, c *ast.CallExpr, k flow.Key) bool {
 	sel, ok := stripParens(c.Fun).(*ast.SelectorExpr)
 	if !ok || sel.Sel == nil || sel.Sel.Name != "WithContext" {
 		return false
 	}
-	return identResolvesTo(pass.TypesInfo, sel.X, v)
+	got, ok := flow.KeyOf(pass.TypesInfo, sel.X)
+	return ok && got == k
 }
 
 func usableContextArg(pass *analysis.Pass, arg ast.Expr) bool {
@@ -522,14 +610,13 @@ func usableContextArg(pass *analysis.Pass, arg ast.Expr) bool {
 	return true
 }
 
-func passedWithContext(pass *analysis.Pass, c *ast.CallExpr, v *types.Var) bool {
+func passedWithContext(pass *analysis.Pass, c *ast.CallExpr, k flow.Key) bool {
 	seenVar := false
 	seenCtx := false
 	for _, arg := range c.Args {
-		switch {
-		case identResolvesTo(pass.TypesInfo, arg, v):
+		if got, ok := flow.KeyOf(pass.TypesInfo, arg); ok && got == k {
 			seenVar = true
-		case isContextValueType(pass.TypesInfo, arg):
+		} else if isContextValueType(pass.TypesInfo, arg) {
 			seenCtx = true
 		}
 	}
