@@ -668,6 +668,28 @@ func viewescapeSilentHexIndex(in []string, out [][]byte) [][]byte {
 	return out
 }
 
+type wrapCounted struct{ *counted }
+
+func viewescapeSilentPromotedRebind(in []string, h *wrapCounted, out [][]byte) [][]byte {
+	for _, s := range in {
+		b := h
+		_, _ = b.buf.WriteString(s)
+		out = append(out, b.buf.Bytes())
+		h.buf = bytes.Buffer{}
+	}
+	return out
+}
+
+func viewescapeSilentPromotedExplicit(in []string, h *wrapCounted, out [][]byte) [][]byte {
+	for _, s := range in {
+		b := h
+		_, _ = b.buf.WriteString(s)
+		out = append(out, b.buf.Bytes())
+		h.counted.buf = bytes.Buffer{}
+	}
+	return out
+}
+
 type counted struct {
 	buf    bytes.Buffer
 	writes int

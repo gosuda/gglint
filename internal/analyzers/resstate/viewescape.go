@@ -371,7 +371,7 @@ func pathAffectsTarget(pass *analysis.Pass, e ast.Expr, full []string, root *typ
 	}
 	lc, ok := pathChain(pass, e, root)
 	if !ok {
-		return false
+		return mentionsRootVar(pass, e, root)
 	}
 	for i, s := range lc {
 		if i >= len(full) {
@@ -419,7 +419,7 @@ func pathChain(pass *analysis.Pass, e ast.Expr, root *types.Var) ([]string, bool
 		if !ok {
 			return nil, false
 		}
-		return append(steps, x.Sel.Name), true
+		return append(steps, selectorSteps(pass, x)...), true
 	case *ast.IndexExpr:
 		steps, ok := pathChain(pass, x.X, root)
 		if !ok {
@@ -434,6 +434,62 @@ func pathChain(pass *analysis.Pass, e ast.Expr, root *types.Var) ([]string, bool
 		return append(steps, constIndexStep(pass, x.Low)), true
 	}
 	return nil, false
+}
+
+func selectorSteps(pass *analysis.Pass, x *ast.SelectorExpr) []string {
+	sel := pass.TypesInfo.Selections[x]
+	if sel == nil {
+		return []string{x.Sel.Name}
+	}
+	idx := sel.Index()
+	if len(idx) <= 1 {
+		return []string{x.Sel.Name}
+	}
+	t := pass.TypesInfo.TypeOf(x.X)
+	var out []string
+	for _, i := range idx {
+		st, ok := structOf(t)
+		if !ok || i < 0 || i >= st.NumFields() {
+			return []string{x.Sel.Name}
+		}
+		out = append(out, st.Field(i).Name())
+		t = st.Field(i).Type()
+	}
+	return out
+}
+
+func structOf(t types.Type) (*types.Struct, bool) {
+	if t == nil {
+		return nil, false
+	}
+	u := types.Unalias(t)
+	if p, ok := u.(*types.Pointer); ok {
+		u = types.Unalias(p.Elem())
+	}
+	st, ok := u.Underlying().(*types.Struct)
+	return st, ok
+}
+
+func mentionsRootVar(pass *analysis.Pass, e ast.Expr, root *types.Var) bool {
+	if e == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if v, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && v == root {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func stripAddr(e ast.Expr) ast.Expr {
