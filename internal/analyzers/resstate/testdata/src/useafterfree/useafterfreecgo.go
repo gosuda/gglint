@@ -52,3 +52,45 @@ func useafterfreeReportedDefinedHandle() {
 	*(*byte)(unsafe.Pointer(h)) = 1 // want "is used after it was freed"
 }
 
+func useafterfreeSilentInPlaceNilSecondFree() {
+	p := C.malloc(16)
+	func() { C.free(unsafe.Pointer(p)); p = nil }()
+	C.free(unsafe.Pointer(p))
+}
+
+func consumeFreePtr(p unsafe.Pointer) {
+	_ = p
+}
+
+func useafterfreeSilentInPlaceNilUse() {
+	buf := C.malloc(16)
+	func() { C.free(unsafe.Pointer(buf)); buf = nil }()
+	consumeFreePtr(buf)
+}
+
+func useafterfreeReportedInPlaceFree() {
+	p := C.malloc(16)
+	func() { C.free(unsafe.Pointer(p)) }()
+	*(*byte)(p) = 1 // want "is used after it was freed"
+}
+
+func useafterfreeSilentInPlaceAddrUse() {
+	p := C.malloc(16)
+	func() { C.free(unsafe.Pointer(p)); _ = &p }()
+	consumeFreePtr(p)
+}
+
+func useafterfreeSilentInPlaceRangeUse() {
+	p := C.malloc(16)
+	ch := make(chan unsafe.Pointer, 1)
+	ch <- p
+	close(ch)
+	func() {
+		C.free(unsafe.Pointer(p))
+		for p = range ch {
+			_ = p
+		}
+	}()
+	consumeFreePtr(p)
+}
+

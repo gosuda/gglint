@@ -223,22 +223,46 @@ func putCandidateOf(pass *analysis.Pass, n ast.Node) (*types.Var, bool) {
 
 func freeCandidates(pass *analysis.Pass, fn ast.Node) map[*types.Var]bool {
 	out := map[*types.Var]bool{}
+	defMap := buildDefMap(pass, fn)
 	ast.Inspect(fn, func(n ast.Node) bool {
 		es, ok := n.(*ast.ExprStmt)
 		if !ok {
 			return true
 		}
 		call, ok := ast.Unparen(es.X).(*ast.CallExpr)
-		if !ok || len(call.Args) == 0 {
+		if !ok {
+			return true
+		}
+		if len(call.Args) == 0 {
+			if lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit); ok && lit.Body != nil {
+				collectLitFreeVars(pass, defMap, lit, out)
+			}
 			return true
 		}
 		if !freeCallName(call) {
 			return true
 		}
-		collectFreeArgVars(pass, fn, call.Args[0], out)
+		collectFreeArgVars(pass, defMap, call.Args[0], out)
 		return true
 	})
 	return out
+}
+
+func collectLitFreeVars(pass *analysis.Pass, defMap map[*types.Var][]ast.Expr, lit *ast.FuncLit, out map[*types.Var]bool) {
+	for _, s := range lit.Body.List {
+		es, ok := s.(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		call, ok := ast.Unparen(es.X).(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			continue
+		}
+		if !freeCallName(call) {
+			continue
+		}
+		collectFreeArgVars(pass, defMap, call.Args[0], out)
+	}
 }
 
 func freeCallName(call *ast.CallExpr) bool {
@@ -251,14 +275,14 @@ func freeCallName(call *ast.CallExpr) bool {
 	return false
 }
 
-func collectFreeArgVars(pass *analysis.Pass, fn ast.Node, arg ast.Expr, out map[*types.Var]bool) {
+func collectFreeArgVars(pass *analysis.Pass, defMap map[*types.Var][]ast.Expr, arg ast.Expr, out map[*types.Var]bool) {
 	for _, id := range freeBaseIdents(pass, arg) {
 		v, ok := pass.TypesInfo.Uses[id].(*types.Var)
 		if !ok || out[v] || !isFreeableVar(v) {
 			continue
 		}
 		out[v] = true
-		collectTempSources(pass, fn, v, out)
+		collectTempSources(pass, defMap, v, out)
 	}
 }
 
@@ -282,28 +306,6 @@ func freeBaseIdents(pass *analysis.Pass, e ast.Expr) []*ast.Ident {
 	}
 }
 
-func assignBindsTV(pass *analysis.Pass, x *ast.AssignStmt, tv *types.Var) bool {
-	for _, l := range x.Lhs {
-		lid, ok := ast.Unparen(l).(*ast.Ident)
-		if !ok {
-			continue
-		}
-		if pass.TypesInfo.Uses[lid] == tv || pass.TypesInfo.Defs[lid] == tv {
-			return true
-		}
-	}
-	return false
-}
-
-func valueSpecBindsTV(pass *analysis.Pass, x *ast.ValueSpec, tv *types.Var) bool {
-	for _, l := range x.Names {
-		if pass.TypesInfo.Defs[l] == tv {
-			return true
-		}
-	}
-	return false
-}
-
 func isFreeableVar(v *types.Var) bool {
 	t := v.Type()
 	if t == nil {
@@ -324,20 +326,44 @@ func isFreeableVar(v *types.Var) bool {
 	}
 }
 
-func collectTempSources(pass *analysis.Pass, fn ast.Node, tv *types.Var, out map[*types.Var]bool) {
+func buildDefMap(pass *analysis.Pass, fn ast.Node) map[*types.Var][]ast.Expr {
+	out := map[*types.Var][]ast.Expr{}
 	ast.Inspect(fn, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.AssignStmt:
-			if assignBindsTV(pass, x, tv) {
-				collectBaseIdents(pass, x.Rhs, out)
-			}
+			defMapAssign(pass, x, out)
 		case *ast.ValueSpec:
-			if valueSpecBindsTV(pass, x, tv) {
-				collectBaseIdents(pass, x.Values, out)
-			}
+			defMapValueSpec(pass, x, out)
 		}
 		return true
 	})
+	return out
+}
+
+func defMapAssign(pass *analysis.Pass, x *ast.AssignStmt, out map[*types.Var][]ast.Expr) {
+	for _, l := range x.Lhs {
+		id, ok := ast.Unparen(l).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if v, ok := pass.TypesInfo.Defs[id].(*types.Var); ok {
+			out[v] = append(out[v], x.Rhs...)
+		} else if v, ok := pass.TypesInfo.Uses[id].(*types.Var); ok {
+			out[v] = append(out[v], x.Rhs...)
+		}
+	}
+}
+
+func defMapValueSpec(pass *analysis.Pass, x *ast.ValueSpec, out map[*types.Var][]ast.Expr) {
+	for _, id := range x.Names {
+		if v, ok := pass.TypesInfo.Defs[id].(*types.Var); ok {
+			out[v] = append(out[v], x.Values...)
+		}
+	}
+}
+
+func collectTempSources(pass *analysis.Pass, defMap map[*types.Var][]ast.Expr, tv *types.Var, out map[*types.Var]bool) {
+	collectBaseIdents(pass, defMap[tv], out)
 }
 
 func collectBaseIdents(pass *analysis.Pass, exprs []ast.Expr, out map[*types.Var]bool) {
@@ -403,6 +429,9 @@ func putTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) os
 }
 
 func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate, cache *freeTempCache) ostate {
+	if litDirtiesInPlace(pass, n, v) {
+		return stUnknown
+	}
 	if hasFreeRelease(pass, fn, n, v, cache) {
 		return stReleased
 	}
