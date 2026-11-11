@@ -21,11 +21,11 @@ func staticcheckRules() []Rule {
 }
 
 func buildStaticcheck(cfg config.Config) []*analysis.Analyzer {
-	prefixes, excluded := staticcheckPolicy(cfg.Mode)
+	excluded := staticcheckExcluded(cfg.Mode)
 	var selected []*analysis.Analyzer
 	for _, a := range staticcheck.Analyzers {
 		name := a.Analyzer.Name
-		if slices.Contains(prefixes, strings.TrimRight(name, "0123456789")) && !slices.Contains(excluded, name) {
+		if strings.TrimRight(name, "0123456789") == "SA" && !slices.Contains(excluded, name) {
 			selected = append(selected, a.Analyzer)
 		}
 	}
@@ -40,13 +40,9 @@ func buildGosimple(config.Config) []*analysis.Analyzer {
 	return selected
 }
 
-func staticcheckPolicy(m config.Mode) (prefixes, excluded []string) {
-	switch m {
-	case config.Basic:
-		return []string{"SA"}, strings.Fields("SA1019 SA4006")
-	case config.Standard:
-		return []string{"SA"}, strings.Fields("SA4006")
-	case config.Strict:
+func staticcheckExcluded(m config.Mode) []string {
+	if m == config.Basic {
+		return strings.Fields("SA1019 SA4006")
 	}
-	return []string{"SA"}, strings.Fields("SA4006")
+	return strings.Fields("SA4006")
 }
