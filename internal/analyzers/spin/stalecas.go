@@ -88,7 +88,10 @@ func restEndsExiting(info *types.Info, fc *staleFn, loop *ast.ForStmt, rest []as
 	if len(rest) == 0 {
 		return false
 	}
-	return stmtEndsExiting(info, fc, loop, rest[len(rest)-1])
+	if !stmtEndsExiting(info, fc, loop, rest[len(rest)-1]) {
+		return false
+	}
+	return !restHasLoopContinue(fc, loop, rest)
 }
 
 func stmtEndsExiting(info *types.Info, fc *staleFn, loop *ast.ForStmt, stmt ast.Stmt) bool {
@@ -139,6 +142,91 @@ func findStaleLabel(fc *staleFn, name string) *ast.LabeledStmt {
 		}
 	}
 	return nil
+}
+
+func restHasLoopContinue(fc *staleFn, loop *ast.ForStmt, rest []ast.Stmt) bool {
+	return listHasUnlabeledContinueOutsideFor(rest) || listHasOwnLabeledContinue(fc, loop, rest)
+}
+
+func listHasUnlabeledContinueOutsideFor(list []ast.Stmt) bool {
+	for _, s := range list {
+		if stmtHasUnlabeledContinueOutsideFor(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtHasUnlabeledContinueOutsideFor(n ast.Node) bool {
+	switch t := n.(type) {
+	case *ast.BranchStmt:
+		return t.Tok == token.CONTINUE && t.Label == nil
+	case *ast.BlockStmt:
+		return blockHasUnlabeledContinueOutsideFor(t.List)
+	case *ast.IfStmt:
+		return ifHasUnlabeledContinueOutsideFor(t)
+	case *ast.LabeledStmt:
+		return stmtHasUnlabeledContinueOutsideFor(t.Stmt)
+	default:
+		return false
+	}
+}
+
+func blockHasUnlabeledContinueOutsideFor(list []ast.Stmt) bool {
+	for _, s := range list {
+		if stmtHasUnlabeledContinueOutsideFor(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func ifHasUnlabeledContinueOutsideFor(check *ast.IfStmt) bool {
+	if blockHasUnlabeledContinueOutsideFor(check.Body.List) {
+		return true
+	}
+	if check.Else == nil {
+		return false
+	}
+	return elseHasUnlabeledContinueOutsideFor(check.Else)
+}
+
+func elseHasUnlabeledContinueOutsideFor(e ast.Stmt) bool {
+	if blk, ok := e.(*ast.BlockStmt); ok {
+		return blockHasUnlabeledContinueOutsideFor(blk.List)
+	}
+	if ifStmt, ok := e.(*ast.IfStmt); ok {
+		return ifHasUnlabeledContinueOutsideFor(ifStmt)
+	}
+	return false
+}
+
+func listHasOwnLabeledContinue(fc *staleFn, loop *ast.ForStmt, rest []ast.Stmt) bool {
+	own := ownLoopLabels(fc, loop)
+	if len(own) == 0 {
+		return false
+	}
+	found := false
+	for _, s := range rest {
+		walkNoLit(s, func(n ast.Node) bool {
+			if found {
+				return false
+			}
+			b, ok := n.(*ast.BranchStmt)
+			if !ok || b.Tok != token.CONTINUE || b.Label == nil {
+				return true
+			}
+			if own[b.Label.Name] {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func staleFnFor(info *types.Info, fn ast.Node, cache map[ast.Node]*staleFn) *staleFn {

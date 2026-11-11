@@ -159,7 +159,7 @@ func pollLeaves(pass *analysis.Pass, cur inspector.Cursor, stmt ast.Stmt) bool {
 	case *ast.BranchStmt:
 		return pollBranchLeaves(pass, cur, t)
 	case *ast.ExprStmt:
-		return isPollPanic(pass.TypesInfo, t.X)
+		return isPanicCall(pass.TypesInfo, t.X)
 	case *ast.BlockStmt:
 		return pollBlockTailLeaves(pass, cur, t)
 	case *ast.IfStmt:
@@ -397,19 +397,6 @@ func pollIfLeaves(pass *analysis.Pass, cur inspector.Cursor, check *ast.IfStmt) 
 	default:
 		return false
 	}
-}
-
-func isPollPanic(info *types.Info, e ast.Expr) bool {
-	call, ok := ast.Unparen(e).(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
-	if !ok {
-		return false
-	}
-	b, ok := info.ObjectOf(id).(*types.Builtin)
-	return ok && b.Name() == "panic"
 }
 
 func pollSelect(loop *ast.ForStmt) (*ast.SelectStmt, *ast.CommClause, int, bool) {

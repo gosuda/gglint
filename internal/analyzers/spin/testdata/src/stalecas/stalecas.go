@@ -457,6 +457,30 @@ func stalecasSilentSinglePopBreak(head *atomic.Pointer[casNode]) (*casNode, bool
 	}
 	return old, true
 }
+
+func stalecasReportedBusyRetry(n *atomic.Int64, busy func() bool) int {
+	old := n.Load()
+	for { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		if n.CompareAndSwap(old, old+1) {
+			return 1
+		}
+		if busy() {
+			continue
+		}
+		return 0
+	}
+}
+
+func stalecasReportedBusyRetryCond(n *atomic.Int64, busy func() bool) int {
+	old := n.Load()
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		if busy() {
+			continue
+		}
+		return 0
+	}
+	return 1
+}
 func stalecasSilentSelfGotoInit(n *atomic.Int64) {
 retry:
 	for old := n.Load(); !n.CompareAndSwap(old, old+1); {
