@@ -26,7 +26,7 @@ var appendclobber = &analysis.Analyzer{
 
 var mapcopy = &analysis.Analyzer{
 	Name:     "mapcopy",
-	Doc:      "Reports a field write to v := m[k] lost when v is never used as a whole and the field is not stored back into the map; only :=, struct elements.",
+	Doc:      "Reports a field write to v := m[k] lost when v is never used as a whole and the field is not stored back into the map; a store inside a function literal counts wherever the literal runs; only :=, struct elements.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runMapcopy,
 }
@@ -40,7 +40,7 @@ var rangemutate = &analysis.Analyzer{
 
 var rangeref = &analysis.Analyzer{
 	Name:     "rangeref",
-	Doc:      "Reports &v of range copy v that escapes by append, send, map store, or written outer store; an outer pointer whose address is taken before the write is not followed.",
+	Doc:      "Reports &v of range copy v that escapes by append, send, map store, or written outer store; an outer pointer whose address is taken before the write, or anywhere inside a function literal, is not followed.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runRangeref,
 }
