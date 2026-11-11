@@ -289,10 +289,10 @@ func freshReceiver(pass *analysis.Pass, ctx loopCtx, k flow.Key) bool {
 	if !out.hasValue {
 		return true
 	}
-	return !sameOutsideBuffer(pass, ctx, out.rhs, out.node)
+	return !sameOutsideBuffer(pass, ctx, out.rhs, out.node, k)
 }
 
-func sameOutsideBuffer(pass *analysis.Pass, ctx loopCtx, rhs ast.Expr, decl ast.Node) bool {
+func sameOutsideBuffer(pass *analysis.Pass, ctx loopCtx, rhs ast.Expr, decl ast.Node, k flow.Key) bool {
 	r := stripAddr(rhs)
 	if hasCall(r) {
 		return false
@@ -311,42 +311,61 @@ func sameOutsideBuffer(pass *analysis.Pass, ctx loopCtx, rhs ast.Expr, decl ast.
 	if !ok {
 		return false
 	}
-	return !assignedEveryPass(pass, ctx, decl, r, w)
+	src, ok := pathChain(pass, r, w)
+	if !ok {
+		return false
+	}
+	full := slices.Concat(src, keyFieldSteps(k.Path))
+	return !assignedEveryPass(pass, ctx, decl, full, w)
 }
 
-func assignedEveryPass(pass *analysis.Pass, ctx loopCtx, decl ast.Node, path ast.Expr, root *types.Var) bool {
+func keyFieldSteps(path string) []string {
+	var out []string
+	start := -1
+	for i := 0; i <= len(path); i++ {
+		if i == len(path) || path[i] == '.' {
+			if start >= 0 {
+				out = append(out, path[start:i])
+			}
+			start = i + 1
+		}
+	}
+	return out
+}
+
+func assignedEveryPass(pass *analysis.Pass, ctx loopCtx, decl ast.Node, full []string, root *types.Var) bool {
 	g := viewCachedGraph(pass, ctx)
 	if g == nil {
 		return true
 	}
 	avoid := func(n ast.Node) bool {
-		return stmtAssignsPath(pass, n, path, root)
+		return stmtAssignsPath(pass, n, full, root)
 	}
 	return !g.Reaches(decl, decl, avoid)
 }
 
-func stmtAssignsPath(pass *analysis.Pass, n ast.Node, path ast.Expr, root *types.Var) bool {
+func stmtAssignsPath(pass *analysis.Pass, n ast.Node, full []string, root *types.Var) bool {
 	switch x := n.(type) {
 	case *ast.AssignStmt:
-		return lhsHitsPath(pass, x.Lhs, path, root)
+		return lhsHitsPath(pass, x.Lhs, full, root)
 	case *ast.IncDecStmt:
-		return pathAffectsTarget(pass, x.X, path, root)
+		return pathAffectsTarget(pass, x.X, full, root)
 	case *ast.RangeStmt:
-		return pathAffectsTarget(pass, x.Key, path, root) || pathAffectsTarget(pass, x.Value, path, root)
+		return pathAffectsTarget(pass, x.Key, full, root) || pathAffectsTarget(pass, x.Value, full, root)
 	}
 	return false
 }
 
-func lhsHitsPath(pass *analysis.Pass, lhs []ast.Expr, path ast.Expr, root *types.Var) bool {
+func lhsHitsPath(pass *analysis.Pass, lhs []ast.Expr, full []string, root *types.Var) bool {
 	for _, l := range lhs {
-		if pathAffectsTarget(pass, l, path, root) {
+		if pathAffectsTarget(pass, l, full, root) {
 			return true
 		}
 	}
 	return false
 }
 
-func pathAffectsTarget(pass *analysis.Pass, e, path ast.Expr, root *types.Var) bool {
+func pathAffectsTarget(pass *analysis.Pass, e ast.Expr, full []string, root *types.Var) bool {
 	if e == nil {
 		return false
 	}
@@ -354,15 +373,11 @@ func pathAffectsTarget(pass *analysis.Pass, e, path ast.Expr, root *types.Var) b
 	if !ok {
 		return false
 	}
-	pc, ok := pathChain(pass, path, root)
-	if !ok {
-		return false
-	}
 	for i, s := range lc {
-		if i >= len(pc) {
+		if i >= len(full) {
 			return true
 		}
-		if stepsMatch(s, pc[i]) {
+		if stepsMatch(s, full[i]) {
 			continue
 		}
 		return false
