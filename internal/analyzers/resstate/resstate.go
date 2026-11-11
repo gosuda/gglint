@@ -44,7 +44,7 @@ var useafterfreeAnalyzer = &analysis.Analyzer{
 
 var viewescapeAnalyzer = &analysis.Analyzer{
 	Name:     "viewescape",
-	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them; a receiver declared in the loop body is checked against later iterations only when it names a variable, field, or constant-index element from outside the loop that some path round the loop does not reassign, where an assignment through & or a call that starts at or mentions the same variable counts as a reassignment; a view variable that a function literal assigns is not tracked; a call counts only when the receiver is not assigned between the view and the call",
+	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them; the call that produced a view invalidates the views of earlier loop passes only when it is ReadSlice, which advances the reader, and a repeated Peek or Bytes call reads the same window and invalidates nothing; a receiver declared in the loop body is checked against later iterations only when it names a variable, field, or constant-index element from outside the loop that some path round the loop does not reassign, where an assignment through & or a call that starts at or mentions the same variable counts as a reassignment; a view variable that a function literal assigns is not tracked; a call counts only when the receiver is not assigned between the view and the call",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runViewescape,
 }

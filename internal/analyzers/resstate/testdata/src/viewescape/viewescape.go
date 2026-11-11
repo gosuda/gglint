@@ -171,7 +171,6 @@ func viewescapeSilentBufferRead(buf *bytes.Buffer, out [][]byte) [][]byte {
 	return out
 }
 
-
 func viewescapeSilentSelfInvalid(b *bufio.Reader) []byte {
 	var frag []byte
 	for {
@@ -335,7 +334,6 @@ func viewescapeSilentPeekReassigned(r *bufio.Reader) (n int, err error) {
 	}
 }
 
-
 func viewescapeSilentAssignBreakClone(sc *bufio.Scanner) []byte {
 	var line []byte
 	for sc.Scan() {
@@ -371,7 +369,6 @@ func viewescapeSilentHeadersCopy(r *bufio.Reader) (out []string) {
 		out = append(out, string(line))
 	}
 }
-
 
 func viewescapeReportedDeferredPut(sc *bufio.Scanner, pool *sync.Pool) []byte {
 	var buf bytes.Buffer
@@ -837,4 +834,105 @@ func viewescapeReportedPeekRead(r *bufio.Reader, buf []byte, out [][]byte) [][]b
 		break
 	}
 	return out
+}
+
+func viewescapeReportedReadSliceLoop(r *bufio.Reader) [][]byte {
+	var out [][]byte
+	for {
+		p, err := r.ReadSlice('\n')
+		if err != nil {
+			break
+		}
+		out = append(out, p) // want "points into the buffer of"
+	}
+	return out
+}
+
+func viewescapeReportedReadSliceSend(r *bufio.Reader, out chan<- []byte) {
+	for {
+		p, err := r.ReadSlice('\n')
+		if err != nil {
+			return
+		}
+		out <- p // want "points into the buffer of"
+	}
+}
+
+func viewescapeReportedReadSliceLast(r *bufio.Reader) []byte {
+	var last []byte
+	for {
+		p, err := r.ReadSlice('\n')
+		if err != nil {
+			break
+		}
+		last = p // want "points into the buffer of"
+	}
+	return last
+}
+
+func viewescapeSilentReadSliceClone(r *bufio.Reader) [][]byte {
+	var out [][]byte
+	for {
+		p, err := r.ReadSlice('\n')
+		if err != nil {
+			break
+		}
+		out = append(out, bytes.Clone(p))
+	}
+	return out
+}
+
+func viewescapeSilentReadSliceReturn(r *bufio.Reader) []byte {
+	for {
+		p, err := r.ReadSlice('\n')
+		if err != nil {
+			return nil
+		}
+		if len(p) > 1 {
+			return p
+		}
+	}
+}
+
+func viewescapeSilentReadSliceLen(r *bufio.Reader) int {
+	n := 0
+	for {
+		p, err := r.ReadSlice('\n')
+		if err != nil {
+			break
+		}
+		n += len(p)
+	}
+	return n
+}
+
+func viewescapeSilentReadSliceNoLoop(r *bufio.Reader) [][]byte {
+	var out [][]byte
+	p, err := r.ReadSlice('\n')
+	if err != nil {
+		return nil
+	}
+	out = append(out, p)
+	return out
+}
+
+func viewescapeSilentPeekOnly(r *bufio.Reader) [][]byte {
+	var out [][]byte
+	for i := 0; i < 3; i++ {
+		p, err := r.Peek(4)
+		if err != nil {
+			break
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func viewescapeSilentScanLenReturn(sc *bufio.Scanner) []byte {
+	for sc.Scan() {
+		if len(sc.Bytes()) > 1 {
+			return sc.Bytes()
+		}
+	}
+	return nil
 }

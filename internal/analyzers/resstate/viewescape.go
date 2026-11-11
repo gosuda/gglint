@@ -140,7 +140,7 @@ func firstReachableName(pass *analysis.Pass, g *flow.Graph, calls []*ast.CallExp
 
 func invalidName(pass *analysis.Pass, call *ast.CallExpr, viewMethod string) (string, bool) {
 	name := viewInvalidName(pass, call)
-	if name == "" || name == viewMethod {
+	if name == "" || (name == viewMethod && !viewMethodAdvances[name]) {
 		return "", false
 	}
 	return name, true
