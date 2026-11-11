@@ -587,3 +587,24 @@ func viewescapeSilentMultiAssign(in []string, out [][]byte) [][]byte {
 	}
 	return out
 }
+
+var sharedViewBufs = []*bytes.Buffer{new(bytes.Buffer)}
+
+func viewescapeReportedConstIndex(in []string, out [][]byte) [][]byte {
+	for _, s := range in {
+		b := sharedViewBufs[0]
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes()) // want "points into the buffer of"
+	}
+	return out
+}
+
+func viewescapeReportedLocalDeferredPut(sc *bufio.Scanner, pool *sync.Pool) []byte {
+	for sc.Scan() {
+		var buf bytes.Buffer
+		buf.Write(sc.Bytes())
+		defer pool.Put(&buf)
+		return buf.Bytes() // want "hands it to the pool"
+	}
+	return nil
+}

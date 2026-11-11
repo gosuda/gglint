@@ -132,7 +132,12 @@ func sinkReady(pass *analysis.Pass, ctx loopCtx, views map[*types.Var]viewSrc, s
 	if !ok {
 		return nil, nil, flow.Key{}, "", false
 	}
-	if freshReceiver(pass, ctx.body, k) && !freshInvalidAfter(pass, ctx, s.expr, k, method) {
+	if s.ret {
+		if _, pooled := deferredPoolPut(pass, ctx.fn, k); pooled {
+			return v, recv, k, method, true
+		}
+	}
+	if freshReceiver(pass, ctx.loop, ctx.body, k) && !freshInvalidAfter(pass, ctx, s.expr, k, method) {
 		return nil, nil, flow.Key{}, "", false
 	}
 	if viewSilent(pass, ctx, s, k, method) {
@@ -172,7 +177,7 @@ func invalidAfter(pass *analysis.Pass, ctx loopCtx, from ast.Node, recvKey flow.
 	return false
 }
 
-func freshReceiver(pass *analysis.Pass, body ast.Node, k flow.Key) bool {
+func freshReceiver(pass *analysis.Pass, loop, body ast.Node, k flow.Key) bool {
 	v, ok := k.Root.(*types.Var)
 	if !ok {
 		return false
@@ -184,19 +189,22 @@ func freshReceiver(pass *analysis.Pass, body ast.Node, k flow.Key) bool {
 	if !hasValue {
 		return true
 	}
-	return !sameOutsideBuffer(pass, body, rhs)
+	return !sameOutsideBuffer(pass, loop, body, rhs)
 }
 
-func sameOutsideBuffer(pass *analysis.Pass, body ast.Node, rhs ast.Expr) bool {
+func sameOutsideBuffer(pass *analysis.Pass, loop, body ast.Node, rhs ast.Expr) bool {
 	r := stripAddr(rhs)
-	if hasIndexOrCall(r) {
+	if hasCall(r) {
 		return false
 	}
-	root, ok := selectorRoot(r)
+	root, ok := pathRoot(r)
 	if !ok {
 		return false
 	}
-	return isOuterVar(pass, body, root)
+	if !isOuterVar(pass, body, root) {
+		return false
+	}
+	return !indexMentionsLoopVar(pass, loop, r)
 }
 
 func stripAddr(e ast.Expr) ast.Expr {
@@ -210,14 +218,13 @@ func stripAddr(e ast.Expr) ast.Expr {
 	}
 }
 
-func hasIndexOrCall(e ast.Expr) bool {
+func hasCall(e ast.Expr) bool {
 	found := false
 	ast.Inspect(e, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		switch n.(type) {
-		case *ast.IndexExpr, *ast.CallExpr:
+		if _, ok := n.(*ast.CallExpr); ok {
 			found = true
 			return false
 		}
@@ -226,12 +233,16 @@ func hasIndexOrCall(e ast.Expr) bool {
 	return found
 }
 
-func selectorRoot(e ast.Expr) (*ast.Ident, bool) {
+func pathRoot(e ast.Expr) (*ast.Ident, bool) {
 	switch x := ast.Unparen(e).(type) {
 	case *ast.Ident:
 		return x, true
 	case *ast.SelectorExpr:
-		return selectorRoot(x.X)
+		return pathRoot(x.X)
+	case *ast.IndexExpr:
+		return pathRoot(x.X)
+	case *ast.SliceExpr:
+		return pathRoot(x.X)
 	}
 	return nil, false
 }
@@ -242,6 +253,102 @@ func isOuterVar(pass *analysis.Pass, body ast.Node, id *ast.Ident) bool {
 		return false
 	}
 	return w.Pos() < body.Pos() || w.Pos() > body.End()
+}
+
+func indexMentionsLoopVar(pass *analysis.Pass, loop ast.Node, e ast.Expr) bool {
+	vars := loopVarSet(pass, loop)
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.IndexExpr:
+			if exprUsesLoopVar(pass, x.Index, vars) {
+				found = true
+				return false
+			}
+		case *ast.SliceExpr:
+			if exprUsesLoopVar(pass, x.Low, vars) || exprUsesLoopVar(pass, x.High, vars) || exprUsesLoopVar(pass, x.Max, vars) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func loopVarSet(pass *analysis.Pass, loop ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	ast.Inspect(loop, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if x.Tok == token.DEFINE {
+				addDefIdents(pass, x.Lhs, out)
+			}
+		case *ast.ValueSpec:
+			addDefNames(pass, x, out)
+		case *ast.RangeStmt:
+			addRangeDefs(pass, x, out)
+		}
+		return true
+	})
+	return out
+}
+
+func addDefIdents(pass *analysis.Pass, lhs []ast.Expr, out map[*types.Var]bool) {
+	for _, l := range lhs {
+		id, ok := ast.Unparen(l).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		addDefIdent(pass, id, out)
+	}
+}
+
+func addDefNames(pass *analysis.Pass, x *ast.ValueSpec, out map[*types.Var]bool) {
+	for _, id := range x.Names {
+		addDefIdent(pass, id, out)
+	}
+}
+
+func addRangeDefs(pass *analysis.Pass, x *ast.RangeStmt, out map[*types.Var]bool) {
+	for _, e := range []ast.Expr{x.Key, x.Value} {
+		id, ok := ast.Unparen(e).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		addDefIdent(pass, id, out)
+	}
+}
+
+func addDefIdent(pass *analysis.Pass, id *ast.Ident, out map[*types.Var]bool) {
+	if v, ok := pass.TypesInfo.Defs[id].(*types.Var); ok {
+		out[v] = true
+	}
+}
+
+func exprUsesLoopVar(pass *analysis.Pass, e ast.Expr, vars map[*types.Var]bool) bool {
+	if e == nil {
+		return false
+	}
+	used := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if used {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if v, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && vars[v] {
+			used = true
+			return false
+		}
+		return true
+	})
+	return used
 }
 
 func bodyDeclRHS(pass *analysis.Pass, body ast.Node, v *types.Var) (ast.Expr, bool, bool) {

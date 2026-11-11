@@ -45,7 +45,7 @@ var useafterfreeAnalyzer = &analysis.Analyzer{
 
 var viewescapeAnalyzer = &analysis.Analyzer{
 	Name:     "viewescape",
-	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them; a receiver declared in the loop body is checked against later iterations only when it names a buffer from outside the loop",
+	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them; a receiver declared in the loop body is checked against later iterations only when it names a variable, field, or constant-index element from outside the loop",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runViewescape,
 }
