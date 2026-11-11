@@ -291,3 +291,41 @@ func cancelreturnedReportedOnce(parent context.Context) (context.Context, contex
 	c2, cancel = context.WithTimeout(parent, time.Second)
 	return c1, c2
 }
+
+func cancelreturnedSilentResetBefore(parent context.Context) context.Context {
+	var c context.Context = parent
+	var cancel context.CancelFunc
+	reset := func() { c = parent }
+	c, cancel = context.WithTimeout(parent, time.Second)
+	defer cancel()
+	reset()
+	return c
+}
+
+func cancelreturnedSilentLoopReset(parent context.Context) context.Context {
+	var c context.Context
+	var cancel context.CancelFunc
+	for i := 0; i < 2; i++ {
+		if i == 0 {
+			c, cancel = context.WithTimeout(parent, time.Second)
+			defer cancel()
+		} else {
+			c = parent
+		}
+	}
+	return c
+}
+
+func cancelreturnedSilentLoopCarry(parent context.Context) context.Context {
+	c := parent
+	var cancel context.CancelFunc
+	for i := 0; i < 2; i++ {
+		if i > 0 {
+			c = parent
+			continue
+		}
+		c, cancel = context.WithTimeout(parent, time.Second)
+		defer cancel()
+	}
+	return c
+}

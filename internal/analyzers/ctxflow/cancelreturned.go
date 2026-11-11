@@ -43,17 +43,29 @@ func checkCancel(pass *analysis.Pass, fn inspector.Cursor) {
 	}
 }
 
+type reassignInfo struct {
+	pos       token.Pos
+	inLiteral bool
+}
+
+type loopRange struct {
+	pos token.Pos
+	end token.Pos
+}
+
 type cancelSummary struct {
 	defers     map[*types.Var]*ast.DeferStmt
 	returned   map[*types.Var]bool
-	reassigned map[*types.Var][]token.Pos
+	reassigned map[*types.Var][]reassignInfo
+	loops      []loopRange
 }
 
 func summarizeCancel(pass *analysis.Pass, fn inspector.Cursor) cancelSummary {
 	s := cancelSummary{
 		defers:     map[*types.Var]*ast.DeferStmt{},
 		returned:   map[*types.Var]bool{},
-		reassigned: map[*types.Var][]token.Pos{},
+		reassigned: map[*types.Var][]reassignInfo{},
+		loops:      collectLoops(fn),
 	}
 	for cur := range fn.Preorder((*ast.DeferStmt)(nil), (*ast.ReturnStmt)(nil), (*ast.AssignStmt)(nil)) {
 		if _, isAssign := cur.Node().(*ast.AssignStmt); !isAssign {
@@ -67,10 +79,23 @@ func summarizeCancel(pass *analysis.Pass, fn inspector.Cursor) cancelSummary {
 		case *ast.ReturnStmt:
 			s.recordReturn(pass, fn, n)
 		case *ast.AssignStmt:
-			s.recordAssign(pass, n)
+			s.recordAssign(pass, n, ownerOf(cur) != fn)
 		}
 	}
 	return s
+}
+
+func collectLoops(fn inspector.Cursor) []loopRange {
+	var out []loopRange
+	for cur := range fn.Preorder((*ast.ForStmt)(nil), (*ast.RangeStmt)(nil)) {
+		switch n := cur.Node().(type) {
+		case *ast.ForStmt:
+			out = append(out, loopRange{pos: n.Pos(), end: n.End()})
+		case *ast.RangeStmt:
+			out = append(out, loopRange{pos: n.Pos(), end: n.End()})
+		}
+	}
+	return out
 }
 
 func (s cancelSummary) recordDefer(pass *analysis.Pass, d *ast.DeferStmt) {
@@ -104,14 +129,14 @@ func (s cancelSummary) recordReturn(pass *analysis.Pass, fn inspector.Cursor, r 
 	}
 }
 
-func (s cancelSummary) recordAssign(pass *analysis.Pass, as *ast.AssignStmt) {
+func (s cancelSummary) recordAssign(pass *analysis.Pass, as *ast.AssignStmt, inLiteral bool) {
 	for _, lhs := range as.Lhs {
 		id, ok := stripParens(lhs).(*ast.Ident)
 		if !ok {
 			continue
 		}
 		if v := varOf(pass.TypesInfo, id); v != nil {
-			s.reassigned[v] = append(s.reassigned[v], as.Pos())
+			s.reassigned[v] = append(s.reassigned[v], reassignInfo{pos: as.Pos(), inLiteral: inLiteral})
 		}
 	}
 }
@@ -124,16 +149,33 @@ func checkPair(pass *analysis.Pass, p cancelPair, s cancelSummary, reported map[
 	if s.returned[p.cancel] || !s.returned[p.ctx] {
 		return
 	}
-	for _, pos := range s.reassigned[p.ctx] {
-		if pos > p.def {
-			return
+	for _, r := range s.reassigned[p.ctx] {
+		if r.pos == p.def {
+			continue
 		}
+		if certainlyBefore(s.loops, r, p.def) {
+			continue
+		}
+		return
 	}
 	if reported[site.Pos()] {
 		return
 	}
 	reported[site.Pos()] = true
 	pass.Report(analysis.Diagnostic{Pos: site.Pos(), End: site.End(), Message: cancelMessage})
+}
+
+func certainlyBefore(loops []loopRange, r reassignInfo, def token.Pos) bool {
+	return r.pos < def && !r.inLiteral && !enclosedByLoop(loops, r.pos, def)
+}
+
+func enclosedByLoop(loops []loopRange, a, b token.Pos) bool {
+	for _, l := range loops {
+		if l.pos < a && a < l.end && l.pos < b && b < l.end {
+			return true
+		}
+	}
+	return false
 }
 
 func deferredVar(pass *analysis.Pass, d *ast.DeferStmt) (*types.Var, bool) {
