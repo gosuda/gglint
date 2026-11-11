@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	"sort"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
@@ -239,15 +240,37 @@ func (idx *funcIndex) firstUse(v *types.Var, after token.Pos) (inspector.Cursor,
 	return list[i].cur, true
 }
 
-func (idx *funcIndex) firstRead(v *types.Var, after token.Pos) (inspector.Cursor, bool) {
-	list := idx.uses[v]
-	start := sort.Search(len(list), func(i int) bool { return list[i].pos > after })
-	for i := start; i < len(list); i++ {
-		if !isFieldStore(idx.info, v, list[i].cur) {
-			return list[i].cur, true
+type freshPaths map[string]bool
+
+func (f freshPaths) covers(path string) bool {
+	if f[""] {
+		return true
+	}
+	if path == "" {
+		return false
+	}
+	current := ""
+	for field := range strings.SplitSeq(path, ".") {
+		if current == "" {
+			current = field
+		} else {
+			current += "." + field
+		}
+		if f[current] {
+			return true
 		}
 	}
-	return inspector.Cursor{}, false
+	return false
+}
+
+func (f freshPaths) mark(path string) {
+	f[path] = true
+}
+
+type mentionPath struct {
+	path   string
+	derefs []string
+	store  bool
 }
 
 func rootIsPointer(v *types.Var) bool {
@@ -255,41 +278,75 @@ func rootIsPointer(v *types.Var) bool {
 	return ok
 }
 
-func isDirectField(info *types.Info, sel *ast.SelectorExpr) bool {
+func selectsIndirect(info *types.Info, sel *ast.SelectorExpr) bool {
 	s, ok := info.Selections[sel]
-	return ok && !s.Indirect()
+	return !ok || s.Indirect()
 }
 
-func isFieldStore(info *types.Info, v *types.Var, cur inspector.Cursor) bool {
-	if rootIsPointer(v) {
-		return false
-	}
+func joinFields(fields []string) string {
+	return strings.Join(fields, ".")
+}
+
+func pathOfMention(info *types.Info, root *types.Var, cur inspector.Cursor) mentionPath {
 	child := cur.Node()
 	up := cur
-	seen := false
+	var fields []string
+	var derefs []string
 	for {
 		parent := skipParens(up.Parent())
-		if sel, ok := parent.Node().(*ast.SelectorExpr); ok {
-			if ast.Unparen(sel.X) != child {
-				return false
+		sel, ok := parent.Node().(*ast.SelectorExpr)
+		if !ok {
+			break
+		}
+		if ast.Unparen(sel.X) != child {
+			break
+		}
+		if selectsIndirect(info, sel) {
+			derefs = append(derefs, joinFields(fields))
+		}
+		fields = append(fields, sel.Sel.Name)
+		child = parent.Node()
+		up = parent
+	}
+	path := joinFields(fields)
+	if rootIsPointer(root) && path != "" {
+		derefs = append(derefs, "")
+	}
+	store := false
+	if as, ok := skipParens(up.Parent()).Node().(*ast.AssignStmt); ok {
+		store = lhsStoresField(as, child)
+	}
+	return mentionPath{path: path, derefs: derefs, store: store}
+}
+
+func storeReadsDecode(store mentionPath, fresh freshPaths) bool {
+	for _, d := range store.derefs {
+		if !fresh.covers(d) {
+			return true
+		}
+	}
+	return false
+}
+
+func (idx *funcIndex) firstRead(v *types.Var, after token.Pos) (inspector.Cursor, bool) {
+	list := idx.uses[v]
+	start := sort.Search(len(list), func(i int) bool { return list[i].pos > after })
+	fresh := freshPaths{}
+	for i := start; i < len(list); i++ {
+		mention := pathOfMention(idx.info, v, list[i].cur)
+		if mention.store {
+			if storeReadsDecode(mention, fresh) {
+				return list[i].cur, true
 			}
-			if !isDirectField(info, sel) {
-				return false
-			}
-			seen = true
-			child = parent.Node()
-			up = parent
+			fresh.mark(mention.path)
 			continue
 		}
-		as, ok := parent.Node().(*ast.AssignStmt)
-		if !ok {
-			return false
+		if fresh.covers(mention.path) {
+			continue
 		}
-		if !seen {
-			return false
-		}
-		return lhsStoresField(as, child)
+		return list[i].cur, true
 	}
+	return inspector.Cursor{}, false
 }
 
 func lhsStoresField(as *ast.AssignStmt, child ast.Node) bool {

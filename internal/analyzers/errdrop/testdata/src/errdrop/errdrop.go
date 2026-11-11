@@ -1014,3 +1014,18 @@ func outReportedNestedPointerFieldStore(b []byte) error {
 	o.In.X = 1
 	return nil
 }
+
+func outSilentReseatedPointer(b []byte) error {
+	var o errdropOuter
+	json.Unmarshal(b, &o)
+	o.In = &errdropInner{}
+	o.In.X = 1
+	return nil
+}
+
+func outReportedWholeAfterPartialStore(b []byte) errdropOuter {
+	var o errdropOuter
+	json.Unmarshal(b, &o) // want "o is read after the error of json.Unmarshal is dropped"
+	o.In = &errdropInner{}
+	return o
+}
