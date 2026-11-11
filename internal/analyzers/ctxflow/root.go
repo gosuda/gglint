@@ -17,7 +17,7 @@ const rootMessage = "a context is in scope, and this root context drops its canc
 
 var rootAnalyzer = &analysis.Analyzer{
 	Name:     "root",
-	Doc:      "report context.Background and context.TODO whose result is used where a named context is in scope; it stays silent in main and init, in a nil-check fallback, in a comparison, and in a composite literal that holds that context",
+	Doc:      "report context.Background and context.TODO whose result is used where a named context is in scope; it stays silent in the bodies of main and init but not in literals inside them that take their own context parameter, in a nil-check fallback, in a comparison, and in a composite literal that holds that context",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runRoot,
 }
@@ -69,7 +69,7 @@ func isRootCall(info *types.Info, call *ast.CallExpr) bool {
 }
 
 func resultUsed(cur inspector.Cursor) bool {
-	switch n := cur.Parent().Node().(type) {
+	switch n := parentAboveParens(cur).Node().(type) {
 	case *ast.ExprStmt, *ast.GoStmt, *ast.DeferStmt:
 		return false
 	case *ast.AssignStmt:
@@ -78,6 +78,16 @@ func resultUsed(cur inspector.Cursor) bool {
 		return !allBlankIdents(n.Names)
 	}
 	return true
+}
+
+func parentAboveParens(cur inspector.Cursor) inspector.Cursor {
+	p := cur.Parent()
+	for {
+		if _, ok := p.Node().(*ast.ParenExpr); !ok {
+			return p
+		}
+		p = p.Parent()
+	}
 }
 
 func allBlank(exprs []ast.Expr) bool {
@@ -104,10 +114,14 @@ func nilGuarded(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) b
 	if as == nil {
 		return false
 	}
-	v := assignedContextParam(pass, cur, as)
+	v := assignedContextVar(pass, as)
 	if v == nil {
 		return false
 	}
+	return inNilIfBody(pass, cur, call, v) || afterGuardReturn(pass, cur, v, as)
+}
+
+func inNilIfBody(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, v *types.Var) bool {
 	for icur := range cur.Enclosing((*ast.IfStmt)(nil)) {
 		ifs, ok := icur.Node().(*ast.IfStmt)
 		if !ok {
@@ -121,6 +135,48 @@ func nilGuarded(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) b
 		}
 	}
 	return false
+}
+
+func afterGuardReturn(pass *analysis.Pass, cur inspector.Cursor, v *types.Var, as *ast.AssignStmt) bool {
+	for bcur := range cur.Enclosing((*ast.BlockStmt)(nil)) {
+		block, ok := bcur.Node().(*ast.BlockStmt)
+		if !ok {
+			continue
+		}
+		return guardReturnBefore(pass, block, as, v)
+	}
+	return false
+}
+
+func guardReturnBefore(pass *analysis.Pass, block *ast.BlockStmt, as *ast.AssignStmt, v *types.Var) bool {
+	for i, st := range block.List {
+		if st != as {
+			continue
+		}
+		for _, prev := range block.List[:i] {
+			if guardReturnsOnLive(pass, prev, v) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func guardReturnsOnLive(pass *analysis.Pass, st ast.Stmt, v *types.Var) bool {
+	ifs, ok := st.(*ast.IfStmt)
+	if !ok || ifs.Else != nil || !comparesLiveWith(pass.TypesInfo, ifs.Cond, v) {
+		return false
+	}
+	return bodyEndsInReturn(ifs.Body)
+}
+
+func bodyEndsInReturn(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	_, ok := b.List[len(b.List)-1].(*ast.ReturnStmt)
+	return ok
 }
 
 func inBody(call *ast.CallExpr, ifs *ast.IfStmt) bool {
@@ -201,17 +257,27 @@ func inRHS(as *ast.AssignStmt, call *ast.CallExpr) bool {
 	return call.Pos() >= start && call.End() <= end
 }
 
-func assignedContextParam(pass *analysis.Pass, cur inspector.Cursor, as *ast.AssignStmt) *types.Var {
+func assignedContextVar(pass *analysis.Pass, as *ast.AssignStmt) *types.Var {
 	for _, lhs := range as.Lhs {
 		id, ok := stripParens(lhs).(*ast.Ident)
 		if !ok {
 			continue
 		}
-		if v := varOf(pass.TypesInfo, id); v != nil && isContextParam(pass, cur, v) {
+		v := varOf(pass.TypesInfo, id)
+		if v != nil && isContextVarType(v.Type()) {
 			return v
 		}
 	}
 	return nil
+}
+
+func isContextVarType(t types.Type) bool {
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj.Name() == contextName && obj.Pkg() != nil && obj.Pkg().Path() == contextPath
 }
 
 func comparesNilWith(info *types.Info, cond ast.Expr, v *types.Var) bool {
@@ -226,7 +292,7 @@ func comparesNilWith(info *types.Info, cond ast.Expr, v *types.Var) bool {
 }
 
 func isCompared(cur inspector.Cursor) bool {
-	bin, ok := cur.Parent().Node().(*ast.BinaryExpr)
+	bin, ok := parentAboveParens(cur).Node().(*ast.BinaryExpr)
 	if !ok {
 		return false
 	}

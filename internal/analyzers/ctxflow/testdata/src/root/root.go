@@ -161,6 +161,31 @@ func rootSilentBlankParam(_ context.Context) {
 	use(context.Background())
 }
 
+func rootSilentParens(ctx context.Context) bool {
+	_ = (context.Background())
+	return ctx != (context.Background())
+}
+
+func workOn(context.Context) error { return nil }
+
+func rootSilentGuardReturn(ctx context.Context) error {
+	if ctx != nil {
+		return workOn(ctx)
+	}
+	ctx = context.Background()
+	return workOn(ctx)
+}
+
+type rootOptions struct{ Ctx context.Context }
+
+func rootSilentLocalFallback(ctx context.Context, opt rootOptions) error {
+	c := opt.Ctx
+	if c == nil {
+		c = context.Background()
+	}
+	return workOn(c)
+}
+
 func rootReportedLandElse(ctx context.Context, flag bool) {
 	if ctx != nil && flag {
 		use(ctx)
