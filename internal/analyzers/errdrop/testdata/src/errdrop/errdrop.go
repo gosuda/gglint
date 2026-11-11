@@ -1221,12 +1221,57 @@ func (errdropRows) Scan(dest ...any) error {
 	if len(dest) == 0 {
 		return errors.New("no dest")
 	}
+	n, ok := dest[0].(*int)
+	if !ok {
+		return errors.New("need *int")
+	}
+	*n = 42
+	if len(dest) > 1 {
+		return errors.New("one only")
+	}
 	return nil
 }
+
 func outReportedLocalScan(rows errdropRows) int {
 	var n int
 	rows.Scan(&n) // want "n is read after the error of rows.Scan is dropped"
 	return n
+}
+
+type errdropKeyStore struct{}
+
+func (errdropKeyStore) ScanKeys(dst ...any) error {
+	if len(dst) == 0 {
+		return errors.New("no dest")
+	}
+	return nil
+}
+
+func outSilentScanKeysStub(s errdropKeyStore) int {
+	var n int
+	s.ScanKeys(&n)
+	return n
+}
+
+type errdropLazySet map[string]struct{}
+
+func (s *errdropLazySet) Add(k string) {
+	if *s == nil {
+		*s = errdropLazySet{}
+	}
+	(*s)[k] = struct{}{}
+}
+
+func loadLazySet(p string) (errdropLazySet, error) {
+	if p == "" {
+		return nil, errors.New("empty")
+	}
+	return errdropLazySet{}, nil
+}
+
+func valueSilentLazyAlloc(p string) {
+	s, _ := loadLazySet(p)
+	s.Add("x")
 }
 
 func durableReportedExecOut(cmd []string, outfile string) int {
@@ -1250,12 +1295,12 @@ type errdropWriterHolder struct {
 
 func useWriterHolder(h errdropWriterHolder) {}
 
-func durableReportedFieldPassed(p string) error {
+func durableSilentSamePackageField(p string) error {
 	f, err := os.Create(p)
 	if err != nil {
 		return err
 	}
-	defer f.Close() // want "f is written in this function and the error of f.Close is dropped"
+	defer f.Close()
 	var h errdropWriterHolder
 	h.w = f
 	useWriterHolder(h)
@@ -1270,5 +1315,24 @@ func durableSilentFieldNoUse(p string) error {
 	defer f.Close()
 	var c errdropWriterHolder
 	c.w = f
+	return nil
+}
+
+type errdropTLSHolder struct {
+	TLS *tls.Config
+}
+
+func useTLSHolder(c errdropTLSHolder) {}
+
+func durableReportedNestedFieldPassed(p string) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close() // want "f is written in this function and the error of f.Close is dropped"
+	var cfg errdropTLSHolder
+	cfg.TLS = &tls.Config{}
+	cfg.TLS.KeyLogWriter = f
+	useTLSHolder(cfg)
 	return nil
 }

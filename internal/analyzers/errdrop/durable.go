@@ -219,6 +219,9 @@ func noteStoredField(pass *analysis.Pass, as *ast.AssignStmt, lhs, rhs ast.Expr,
 	if !ok {
 		return
 	}
+	if !fieldDeclaredAbroad(pass, lhs) {
+		return
+	}
 	memo.storedField[v] = append(memo.storedField[v], fieldStore{root: w, pos: as.Pos()})
 }
 
@@ -231,6 +234,52 @@ func fieldStoreRoot(pass *analysis.Pass, lhs ast.Expr) (*types.Var, bool) {
 		return nil, false
 	}
 	return v, true
+}
+
+func fieldDeclaredAbroad(pass *analysis.Pass, lhs ast.Expr) bool {
+	sel, ok := ast.Unparen(lhs).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	choice, ok := pass.TypesInfo.Selections[sel]
+	if !ok || choice == nil {
+		return false
+	}
+	if _, ok := choice.Obj().(*types.Var); !ok {
+		return false
+	}
+	return selectionDeclAbroad(choice, pass.Pkg)
+}
+
+func selectionDeclAbroad(choice *types.Selection, here *types.Package) bool {
+	t := types.Unalias(choice.Recv())
+	for _, index := range choice.Index()[:len(choice.Index())-1] {
+		var ok bool
+		t, ok = descendField(t, index)
+		if !ok {
+			return false
+		}
+	}
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return false
+	}
+	pkg := named.Obj().Pkg()
+	return pkg != nil && pkg != here
+}
+
+func descendField(t types.Type, index int) (types.Type, bool) {
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	st, ok := types.Unalias(t).Underlying().(*types.Struct)
+	if !ok || index < 0 || index >= st.NumFields() {
+		return nil, false
+	}
+	return st.Field(index).Type(), true
 }
 
 func storeThroughField(lhs ast.Expr) bool {

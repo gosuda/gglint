@@ -246,19 +246,47 @@ func mapWriteMethod(pass *analysis.Pass, sel *ast.SelectorExpr, v *types.Var) bo
 	if !ok {
 		return false
 	}
-	origin := originOf(fn)
-	if origin.Pkg() == nil || origin.Pkg() != pass.Pkg {
-		return false
+	return methodWritesRecvElem(pass, originOf(fn))
+}
+
+func methodWritesRecvElem(pass *analysis.Pass, fn *types.Func) bool {
+	if fn.Pkg() != nil && fn.Pkg() == pass.Pkg {
+		return samePackageMethodWrites(pass, fn)
 	}
-	decl := declOfMethod(pass, origin)
+	return false
+}
+
+func samePackageMethodWrites(pass *analysis.Pass, fn *types.Func) bool {
+	decl := declOfMethod(pass, fn)
 	if decl == nil || decl.Body == nil {
 		return false
 	}
-	sig, ok := origin.Type().(*types.Signature)
+	sig, ok := fn.Type().(*types.Signature)
 	if !ok || sig.Recv() == nil {
 		return false
 	}
-	return bodyWritesRecvElem(pass, decl.Body, sig.Recv())
+	return bodyWritesRecvElem(pass, decl.Body, sig.Recv()) && !bodyAssignsRecv(pass, decl.Body, sig.Recv())
+}
+
+func bodyAssignsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			if star, ok := ast.Unparen(lhs).(*ast.StarExpr); ok && isRecvIdent(pass, star.X, recv) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 func valueVarNonderef(v *types.Var) bool {

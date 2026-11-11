@@ -5,7 +5,6 @@ import (
 	"go/token"
 	"go/types"
 	"slices"
-	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
@@ -227,8 +226,50 @@ func isScanOut(pass *analysis.Pass, call *ast.CallExpr) bool {
 	if !ok || fn == nil {
 		return false
 	}
-	name := fn.Name()
-	return strings.HasPrefix(name, "Scan") || strings.HasPrefix(name, "Sscan") || strings.HasPrefix(name, "Fscan")
+	if isFmtScan(fn) {
+		return true
+	}
+	if fn.Name() != "Scan" {
+		return false
+	}
+	return scanMethodOut(pass, originOf(fn))
+}
+
+func isFmtScan(fn *types.Func) bool {
+	if fn.Pkg() == nil || fn.Pkg().Path() != "fmt" {
+		return false
+	}
+	switch fn.Name() {
+	case "Scan", "Scanf", "Scanln", "Sscan", "Sscanf", "Sscanln", "Fscan", "Fscanf", "Fscanln":
+		return true
+	}
+	return false
+}
+
+func scanMethodOut(pass *analysis.Pass, origin *types.Func) bool {
+	sig, ok := origin.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	if origin.Pkg() == nil {
+		return false
+	}
+	if origin.Pkg() != pass.Pkg {
+		return sig.Recv() != nil
+	}
+	return scanUsesVariadic(pass, origin)
+}
+
+func scanUsesVariadic(pass *analysis.Pass, fn *types.Func) bool {
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Params() == nil || !sig.Variadic() {
+		return false
+	}
+	decl := declOfMethod(pass, fn)
+	if decl == nil || decl.Body == nil {
+		return false
+	}
+	return usesRecv(pass, decl.Body, sig.Params().At(sig.Params().Len()-1))
 }
 
 func isEmptyInterface(t types.Type) bool {
