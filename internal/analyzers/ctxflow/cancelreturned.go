@@ -110,22 +110,26 @@ func (s cancelSummary) recordDefer(pass *analysis.Pass, d *ast.DeferStmt) {
 }
 
 func (s cancelSummary) recordReturn(pass *analysis.Pass, fn inspector.Cursor, r *ast.ReturnStmt) {
-	if len(r.Results) == 0 {
-		ft := funcTypeOf(fn.Node())
-		if ft == nil || ft.Results == nil {
-			return
-		}
-		for _, field := range ft.Results.List {
-			for _, name := range field.Names {
-				if v := varOf(pass.TypesInfo, name); v != nil {
-					s.returned[v] = true
-				}
-			}
+	if len(r.Results) != 0 {
+		for _, res := range r.Results {
+			collectReturnedVars(pass.TypesInfo, res, s.returned)
 		}
 		return
 	}
-	for _, res := range r.Results {
-		collectReturnedVars(pass.TypesInfo, res, s.returned)
+	ft := funcTypeOf(fn.Node())
+	if ft == nil || ft.Results == nil {
+		return
+	}
+	for _, field := range ft.Results.List {
+		s.recordResultField(pass, field)
+	}
+}
+
+func (s cancelSummary) recordResultField(pass *analysis.Pass, field *ast.Field) {
+	for _, name := range field.Names {
+		if v := varOf(pass.TypesInfo, name); v != nil {
+			s.returned[v] = true
+		}
 	}
 }
 

@@ -12,7 +12,6 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
-// Analyzers returns the four use-after-release analyzers.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{
 		useaftercloseAnalyzer,
@@ -375,12 +374,18 @@ func collectTempSources(pass *analysis.Pass, defMap map[*types.Var][]ast.Expr, t
 func collectBaseIdents(pass *analysis.Pass, exprs []ast.Expr, out map[*types.Var]bool) {
 	for _, e := range exprs {
 		for _, id := range freeBaseIdents(pass, e) {
-			if w, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && isFreeableVar(w) {
-				out[w] = true
-			} else if w, ok := pass.TypesInfo.Defs[id].(*types.Var); ok && isFreeableVar(w) {
-				out[w] = true
-			}
+			recordFreeIdent(pass, id, out)
 		}
+	}
+}
+
+func recordFreeIdent(pass *analysis.Pass, id *ast.Ident, out map[*types.Var]bool) {
+	if w, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && isFreeableVar(w) {
+		out[w] = true
+		return
+	}
+	if w, ok := pass.TypesInfo.Defs[id].(*types.Var); ok && isFreeableVar(w) {
+		out[w] = true
 	}
 }
 

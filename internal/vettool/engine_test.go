@@ -162,11 +162,12 @@ func analyzeWithEngine(cfg config.Config, pkg *packages.Package) error {
 		if root.Err != nil {
 			failures = append(failures, fmt.Errorf("mode %v: %s: %w", cfg.Mode, root.Analyzer.Name, root.Err))
 		}
-		if root.Analyzer.Name == "checklocks" {
-			for _, d := range root.Diagnostics {
-				if strings.Contains(d.Message, "may require checklocks annotation") {
-					found++
-				}
+		if root.Analyzer.Name != "checklocks" {
+			continue
+		}
+		for _, d := range root.Diagnostics {
+			if strings.Contains(d.Message, "may require checklocks annotation") {
+				found++
 			}
 		}
 	}

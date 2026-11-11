@@ -940,12 +940,18 @@ func markCopied(info *types.Info, f *bodyFacts, lhs, rhs []ast.Expr) {
 		return
 	}
 	for _, l := range lhs {
-		if kk, ok := keyOfIdent(info, l); ok {
-			for rk := range rhsKeys {
-				if kk != rk {
-					f.copied[rk] = true
-				}
-			}
+		kk, ok := keyOfIdent(info, l)
+		if !ok {
+			continue
+		}
+		markCopiedKey(f, kk, rhsKeys)
+	}
+}
+
+func markCopiedKey(f *bodyFacts, kk flow.Key, rhsKeys map[flow.Key]bool) {
+	for rk := range rhsKeys {
+		if kk != rk {
+			f.copied[rk] = true
 		}
 	}
 }

@@ -19,10 +19,11 @@ func escapeOf(t *testing.T, src, name, param string) bool {
 	var v *types.Var
 	for _, field := range decl.Type.Params.List {
 		for _, id := range field.Names {
-			if id.Name == param {
-				if vv, ok := info.Defs[id].(*types.Var); ok {
-					v = vv
-				}
+			if id.Name != param {
+				continue
+			}
+			if vv, ok := info.Defs[id].(*types.Var); ok {
+				v = vv
 			}
 		}
 	}
@@ -806,10 +807,11 @@ func TestCallResultIsNoAlias(t *testing.T) {
 	var v *types.Var
 	for _, field := range decl.Type.Params.List {
 		for _, id := range field.Names {
-			if id.Name == "v" {
-				if vv, ok := info.Defs[id].(*types.Var); ok {
-					v = vv
-				}
+			if id.Name != "v" {
+				continue
+			}
+			if vv, ok := info.Defs[id].(*types.Var); ok {
+				v = vv
 			}
 		}
 	}
@@ -882,10 +884,11 @@ func TestUnrelatedSelectCaseDoesNotRefine(t *testing.T) {
 	var done *types.Var
 	for _, field := range fd.Type.Params.List {
 		for _, id := range field.Names {
-			if id.Name == "done" {
-				if vv, ok2 := pass.TypesInfo.Defs[id].(*types.Var); ok2 {
-					done = vv
-				}
+			if id.Name != "done" {
+				continue
+			}
+			if vv, ok2 := pass.TypesInfo.Defs[id].(*types.Var); ok2 {
+				done = vv
 			}
 		}
 	}

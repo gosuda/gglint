@@ -500,6 +500,15 @@ func assertTokenRoundTrip(t *testing.T, r rules.Rule, built []*analysis.Analyzer
 	}
 }
 
+func checkDriverToken(t *testing.T, m config.Mode, driver string, orders [][]rules.Rule) {
+	t.Helper()
+	for i, order := range orders {
+		if rule, check := rules.Token(driver, order); rule != driver || check != "" {
+			t.Errorf("mode %v order %d: Token(%q) = (%q, %q), want (%q, \"\")", m, i, driver, rule, check, driver)
+		}
+	}
+}
+
 func TestTokenInvertsAnalyzerNameForEveryBuiltAnalyzerInAnyRuleOrder(t *testing.T) {
 	t.Parallel()
 	strict := ruleNames(selectOrFatal(t, modeConfig(config.Strict)))
@@ -518,11 +527,7 @@ func TestTokenInvertsAnalyzerNameForEveryBuiltAnalyzerInAnyRuleOrder(t *testing.
 			}
 		}
 		for _, driver := range []string{rules.TypecheckName, rules.NolintName} {
-			for i, order := range orders {
-				if rule, check := rules.Token(driver, order); rule != driver || check != "" {
-					t.Errorf("mode %v order %d: Token(%q) = (%q, %q), want (%q, \"\")", m, i, driver, rule, check, driver)
-				}
-			}
+			checkDriverToken(t, m, driver, orders)
 		}
 	}
 }

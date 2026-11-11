@@ -406,20 +406,24 @@ func writeHasFact(pass *analysis.Pass, t types.Type, set map[*types.Func]bool) b
 func buildDeclIndex(pass *analysis.Pass) map[*types.Func]*ast.FuncDecl {
 	out := map[*types.Func]*ast.FuncDecl{}
 	for _, f := range pass.Files {
-		for _, d := range f.Decls {
-			fd, ok := d.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			if obj, ok := pass.TypesInfo.Defs[fd.Name].(*types.Func); ok {
-				origin := originOf(obj)
-				if _, done := out[origin]; !done {
-					out[origin] = fd
-				}
+		indexFileDecls(pass, out, f)
+	}
+	return out
+}
+
+func indexFileDecls(pass *analysis.Pass, out map[*types.Func]*ast.FuncDecl, f *ast.File) {
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		if obj, ok := pass.TypesInfo.Defs[fd.Name].(*types.Func); ok {
+			origin := originOf(obj)
+			if _, done := out[origin]; !done {
+				out[origin] = fd
 			}
 		}
 	}
-	return out
 }
 
 func calleeDecl(pass *analysis.Pass, call *ast.CallExpr, decls map[*types.Func]*ast.FuncDecl) *ast.FuncDecl {
