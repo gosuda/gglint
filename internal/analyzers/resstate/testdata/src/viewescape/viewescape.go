@@ -633,6 +633,41 @@ func viewescapeSilentReboundElement(in []string, out [][]byte) [][]byte {
 	return out
 }
 
+func viewescapeSilentRebindAfterView(in []string, h *viewLazyHolder, out [][]byte) [][]byte {
+	for _, s := range in {
+		b := h.buf
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes())
+		h.buf = new(bytes.Buffer)
+	}
+	return out
+}
+
+func viewescapeSilentRebindBothBranches(in []string, h *viewLazyHolder, out [][]byte) [][]byte {
+	for _, s := range in {
+		if s == "" {
+			h.buf = new(bytes.Buffer)
+		} else {
+			h.buf = new(bytes.Buffer)
+		}
+		b := h.buf
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes())
+	}
+	return out
+}
+
+func viewescapeSilentHexIndex(in []string, out [][]byte) [][]byte {
+	bufs := []*bytes.Buffer{new(bytes.Buffer)}
+	for _, s := range in {
+		bufs[0x0] = new(bytes.Buffer)
+		b := bufs[0]
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes())
+	}
+	return out
+}
+
 type viewLazyHolder struct{ buf *bytes.Buffer }
 
 func viewescapeReportedLazyField(in []string, h *viewLazyHolder, out [][]byte) [][]byte {

@@ -180,7 +180,7 @@ func pooledReturn(pass *analysis.Pass, ctx loopCtx, s viewSink, k flow.Key) bool
 }
 
 func freshSilent(pass *analysis.Pass, ctx loopCtx, s viewSink, k flow.Key, viewMethod string) bool {
-	return freshReceiver(pass, ctx.loop, ctx.body, k) && !freshInvalidAfter(pass, ctx, s.expr, k, viewMethod)
+	return freshReceiver(pass, ctx, k) && !freshInvalidAfter(pass, ctx, s.expr, k, viewMethod)
 }
 
 type poolNeed struct {
@@ -277,22 +277,22 @@ func reassignsRoot(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
 	return assignsRoot(pass, n, v)
 }
 
-func freshReceiver(pass *analysis.Pass, loop, body ast.Node, k flow.Key) bool {
+func freshReceiver(pass *analysis.Pass, ctx loopCtx, k flow.Key) bool {
 	v, ok := k.Root.(*types.Var)
 	if !ok {
 		return false
 	}
-	out := bodyDeclRHS(pass, body, v)
+	out := bodyDeclRHS(pass, ctx.body, v)
 	if !out.found {
 		return false
 	}
 	if !out.hasValue {
 		return true
 	}
-	return !sameOutsideBuffer(pass, loop, body, out.rhs, out.pos)
+	return !sameOutsideBuffer(pass, ctx, out.rhs, out.node)
 }
 
-func sameOutsideBuffer(pass *analysis.Pass, loop, body ast.Node, rhs ast.Expr, declPos token.Pos) bool {
+func sameOutsideBuffer(pass *analysis.Pass, ctx loopCtx, rhs ast.Expr, decl ast.Node) bool {
 	r := stripAddr(rhs)
 	if hasCall(r) {
 		return false
@@ -301,33 +301,28 @@ func sameOutsideBuffer(pass *analysis.Pass, loop, body ast.Node, rhs ast.Expr, d
 	if !ok {
 		return false
 	}
-	if !isOuterVar(pass, loop, body, root) {
+	if !isOuterVar(pass, ctx.loop, ctx.body, root) {
 		return false
 	}
-	if indexMentionsLoopVar(pass, loop, r) {
+	if indexMentionsLoopVar(pass, ctx.loop, r) {
 		return false
 	}
 	w, ok := pass.TypesInfo.Uses[root].(*types.Var)
 	if !ok {
 		return false
 	}
-	return !assignsAlongPath(pass, body, r, w, declPos)
+	return !assignedEveryPass(pass, ctx, decl, r, w)
 }
 
-func assignsAlongPath(pass *analysis.Pass, body ast.Node, path ast.Expr, root *types.Var, declPos token.Pos) bool {
-	blk, ok := body.(*ast.BlockStmt)
-	if !ok {
-		return false
+func assignedEveryPass(pass *analysis.Pass, ctx loopCtx, decl ast.Node, path ast.Expr, root *types.Var) bool {
+	g := viewCachedGraph(pass, ctx)
+	if g == nil {
+		return true
 	}
-	for _, stmt := range blk.List {
-		if stmt.Pos() >= declPos {
-			continue
-		}
-		if stmtAssignsPath(pass, stmt, path, root) {
-			return true
-		}
+	avoid := func(n ast.Node) bool {
+		return stmtAssignsPath(pass, n, path, root)
 	}
-	return false
+	return !g.Reaches(decl, decl, avoid)
 }
 
 func stmtAssignsPath(pass *analysis.Pass, n ast.Node, path ast.Expr, root *types.Var) bool {
@@ -386,12 +381,15 @@ func stepsMatch(a, b string) bool {
 	return (a == "[]" || b == "[]") && isIndexStep(a) && isIndexStep(b)
 }
 
-func constIndexStep(e ast.Expr) string {
-	lit, ok := ast.Unparen(e).(*ast.BasicLit)
-	if !ok {
+func constIndexStep(pass *analysis.Pass, e ast.Expr) string {
+	if e == nil {
 		return "[]"
 	}
-	return "[" + lit.Value + "]"
+	tv, ok := pass.TypesInfo.Types[ast.Unparen(e)]
+	if !ok || tv.Value == nil {
+		return "[]"
+	}
+	return "[" + tv.Value.ExactString() + "]"
 }
 
 func pathChain(pass *analysis.Pass, e ast.Expr, root *types.Var) ([]string, bool) {
@@ -412,13 +410,13 @@ func pathChain(pass *analysis.Pass, e ast.Expr, root *types.Var) ([]string, bool
 		if !ok {
 			return nil, false
 		}
-		return append(steps, constIndexStep(x.Index)), true
+		return append(steps, constIndexStep(pass, x.Index)), true
 	case *ast.SliceExpr:
 		steps, ok := pathChain(pass, x.X, root)
 		if !ok {
 			return nil, false
 		}
-		return append(steps, constIndexStep(x.Low)), true
+		return append(steps, constIndexStep(pass, x.Low)), true
 	}
 	return nil, false
 }
@@ -644,6 +642,7 @@ type declOutcome struct {
 	hasValue bool
 	found    bool
 	pos      token.Pos
+	node     ast.Node
 }
 
 func declRHS(pass *analysis.Pass, n ast.Node, v *types.Var) declOutcome {
@@ -660,12 +659,12 @@ func specOutcome(pass *analysis.Pass, x *ast.ValueSpec, v *types.Var) declOutcom
 	for i, id := range x.Names {
 		if pass.TypesInfo.Defs[id] == v {
 			if len(x.Values) == 0 {
-				return declOutcome{found: true, pos: x.Pos()}
+				return declOutcome{found: true, pos: x.Pos(), node: x}
 			}
 			if len(x.Names) == len(x.Values) {
-				return declOutcome{rhs: x.Values[i], hasValue: true, found: true, pos: x.Pos()}
+				return declOutcome{rhs: x.Values[i], hasValue: true, found: true, pos: x.Pos(), node: x}
 			}
-			return declOutcome{rhs: x.Values[0], hasValue: true, found: true, pos: x.Pos()}
+			return declOutcome{rhs: x.Values[0], hasValue: true, found: true, pos: x.Pos(), node: x}
 		}
 	}
 	return declOutcome{}
@@ -682,12 +681,12 @@ func defineOutcome(pass *analysis.Pass, x *ast.AssignStmt, v *types.Var) declOut
 		}
 		if pass.TypesInfo.Defs[id] == v {
 			if len(x.Rhs) == 0 {
-				return declOutcome{found: true, pos: x.Pos()}
+				return declOutcome{found: true, pos: x.Pos(), node: x}
 			}
 			if len(x.Lhs) == len(x.Rhs) {
-				return declOutcome{rhs: x.Rhs[i], hasValue: true, found: true, pos: x.Pos()}
+				return declOutcome{rhs: x.Rhs[i], hasValue: true, found: true, pos: x.Pos(), node: x}
 			}
-			return declOutcome{rhs: x.Rhs[0], hasValue: true, found: true, pos: x.Pos()}
+			return declOutcome{rhs: x.Rhs[0], hasValue: true, found: true, pos: x.Pos(), node: x}
 		}
 	}
 	return declOutcome{}
