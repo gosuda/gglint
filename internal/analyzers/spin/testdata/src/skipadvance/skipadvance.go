@@ -250,3 +250,27 @@ func skipadvanceReportedAttempts(xs []int) {
 		i++
 	}
 }
+
+
+var errTransient error = &ptrErr{}
+
+var skipGate int
+
+func stepGated(i int) error {
+	if skipGate < 3 {
+		return errTransient
+	}
+	return nil
+}
+
+func skipadvanceSilentGateFromCounter(n int) {
+	i, w := 0, 0
+	for i < n {
+		skipGate = w
+		if err := stepGated(i); err != nil {
+			w++
+			continue
+		}
+		i++
+	}
+}

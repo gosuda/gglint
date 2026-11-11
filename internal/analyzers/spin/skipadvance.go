@@ -13,7 +13,7 @@ import (
 
 var skipadvanceAnalyzer = &analysis.Analyzer{
 	Name:     "skipadvance",
-	Doc:      "report a continue directly in if err != nil where err has static type error that skips the advance when the advance follows the if and none precedes it; spin covers five shapes only",
+	Doc:      "report a continue directly in if err != nil where err has static type error and the failing step mentions a variable the advance changes that skips the advance when the advance follows the if and none precedes it; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runSkipadvance,
 }
@@ -215,7 +215,9 @@ func outerAdvanced(info *types.Info, site continueSite, k int) bool {
 		return false
 	}
 	uses := failingStepUses(info, site)
-	maps.DeleteFunc(written, func(v *types.Var, _ bool) bool { return !uses[v] })
+	branch := branchWrittenVars(info, site, k)
+	read := prefixReadVars(site)
+	maps.DeleteFunc(written, dropWritten(uses, branch, read))
 	if len(written) == 0 {
 		return false
 	}
@@ -226,6 +228,33 @@ func outerAdvanced(info *types.Info, site continueSite, k int) bool {
 		return true
 	}
 	return condReadsWritten(info, site.check.Cond, written)
+}
+
+func dropWritten(uses, branch, read map[*types.Var]bool) func(*types.Var, bool) bool {
+	return func(v *types.Var, _ bool) bool {
+		if uses[v] {
+			return false
+		}
+		return !branch[v] || !read[v]
+	}
+}
+
+func branchWrittenVars(info *types.Info, site continueSite, k int) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	for _, stmt := range site.check.Body.List[:k] {
+		collectOuterWrites(info, site.loop, stmt, site.errs, out)
+	}
+	return out
+}
+
+func prefixReadVars(site continueSite) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	for i := range site.at {
+		for v := range site.pre.reads[i] {
+			out[v] = true
+		}
+	}
+	return out
 }
 
 func collectPrefixWritten(site continueSite, out map[*types.Var]bool) {
