@@ -13,7 +13,7 @@ func workFirst() {}
 func firstresultReported() int {
 	ch := make(chan int)
 	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and at most 1 values are received with capacity 0`
+		go func() { ch <- i }() // want `this loop starts 3 goroutines that send on ch, and at most 1 values are received with capacity 0`
 	}
 	return <-ch
 }
@@ -314,7 +314,7 @@ func firstresultReportedLabeled() int {
 	}
 LFan:
 	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and at most 1 values are received with capacity 0`
+		go func() { ch <- i }() // want `this loop starts 3 goroutines that send on ch, and at most 1 values are received with capacity 0`
 	}
 	return <-ch
 }
@@ -686,7 +686,7 @@ LFirstGoto:
 func firstresultReportedZeroTrip() int {
 	ch := make(chan int)
 	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and at most 1 values are received with capacity 0`
+		go func() { ch <- i }() // want `this loop starts 3 goroutines that send on ch, and at most 1 values are received with capacity 0`
 	}
 	for j := 0; j < 0; j++ {
 		<-ch
@@ -697,7 +697,7 @@ func firstresultReportedZeroTrip() int {
 func firstresultReportedRangeZero() int {
 	ch := make(chan int)
 	for i := 0; i < 3; i++ {
-		go func() { ch <- i }() // want `3 goroutines send on ch and at most 1 values are received with capacity 0`
+		go func() { ch <- i }() // want `this loop starts 3 goroutines that send on ch, and at most 1 values are received with capacity 0`
 	}
 	for range 0 {
 		<-ch
@@ -725,4 +725,17 @@ func firstresultSilentBufferedMakeInLoop() {
 		out := make(chan int, 1)
 		go func() { out <- i }()
 	}
+}
+
+func firstresultSilentCondSend() int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func(v int) {
+			if v == 0 {
+				return
+			}
+			ch <- v
+		}(i)
+	}
+	return <-ch + <-ch
 }

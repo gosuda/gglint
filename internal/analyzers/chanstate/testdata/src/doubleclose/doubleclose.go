@@ -41,3 +41,10 @@ func doublecloseReportedGoClose() {
 	close(ch)
 	go close(ch) // want `ch is already closed on every path to this close, which panics: close it once`
 }
+
+func doublecloseReportedSpawnSend() {
+	ch := make(chan int, 1)
+	close(ch)
+	close(ch) // want `ch is already closed on every path to this close, which panics: close it once`
+	go func() { ch <- 1 }()
+}

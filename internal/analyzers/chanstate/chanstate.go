@@ -18,7 +18,7 @@ func Analyzers() []*analysis.Analyzer {
 		mk("nilop", "reports nil-channel ops in the declaring function; select cases and literals are not reported", runNilop),
 		mk("doubleclose", "reports a close of an owned channel already closed on every path to it", runDoubleclose),
 		mk("sendafterclose", "reports a send to an owned channel closed on every path; select sends are not reported", runSendafterclose),
-		mk("selfdeadlock", "reports a send and later receive outside select on an owned unbuffered channel no literal mentions", runSelfdeadlock),
+		mk("selfdeadlock", "reports a send and a receive, in either order, outside select on an owned unbuffered channel no literal mentions; code after a return is checked like live code", runSelfdeadlock),
 		mk("rangeunclosed", "reports a range over an owned made channel no code closes with no loop exit", runRangeunclosed),
 		mk("orphansend", "reports a spawned send on an owned unbuffered channel drained only by a select that returns elsewhere", runOrphansend),
 		mk("firstresult", "reports sends exceeding receives plus capacity; counts every receive site, so a one-branch leak is not reported. A function with a goto that jumps backward is not checked.", runFirstresult),
@@ -41,7 +41,7 @@ const (
 	msgSelfdeadlock   = "%s is unbuffered and both ends are in this goroutine, so this operation deadlocks: give it capacity 1, or hand one end to another goroutine"
 	msgRangeunclosed  = "no code closes %s, so this range never ends: close it when the senders finish"
 	msgOrphansend     = "when the parent returns through its other select case, this send on %s blocks forever and the goroutine leaks: give %s capacity 1, or select on the same cancellation in the sender"
-	msgFirstresult    = "%d goroutines send on %s and at most %d values are received with capacity %d, so the others block forever: size the buffer to the fan-out, or receive in a loop"
+	msgFirstresult    = "this loop starts %d goroutines that send on %s, and at most %d values are received with capacity %d, so the others block forever: size the buffer to the fan-out, or receive in a loop"
 )
 
 func runNilop(pass *analysis.Pass) (any, error) {
@@ -173,6 +173,9 @@ func rangeKeyClosed(info *types.Info, fn ast.Node, r *ast.RangeStmt, k flow.Key)
 	if handsOn(info, fn, k) {
 		return true
 	}
+	if spawnExits(info, fn, k) {
+		return true
+	}
 	return loopExits(fn, r)
 }
 
@@ -196,6 +199,9 @@ func orphansendCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 func reportOrphanSpawns(pass *analysis.Pass, info *types.Info, memo *orphanMemo, sp flow.Spawn) {
 	for _, op := range loneSends(info, sp.Body) {
 		if !memo.unbuffered(op.Key) {
+			continue
+		}
+		if channelCopied(info, memo.fn, op.Key) {
 			continue
 		}
 		if memo.escaped(op.Key) || memo.drained(op.Key) {

@@ -101,3 +101,12 @@ func selfdeadlockSilentSelectPair() {
 	default:
 	}
 }
+
+// Silent when src has capacity: the range reassigns ch to the caller channel.
+func selfdeadlockSilentRangeAssign(src chan int) int {
+	ch := make(chan int)
+	for _, ch = range []chan int{src} {
+	}
+	ch <- 1
+	return <-ch
+}

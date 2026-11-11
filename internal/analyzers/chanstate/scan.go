@@ -210,23 +210,41 @@ func reassigned(info *types.Info, fn ast.Node, k flow.Key) bool {
 	if body == nil {
 		return false
 	}
-	count := 0
+	c := keyAssignCounter{info: info, key: k}
 	ast.Inspect(body, func(n ast.Node) bool {
-		if count > 1 {
+		if c.count > 1 {
 			return false
 		}
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		if a, ok := n.(*ast.AssignStmt); ok && targets(info, a.Lhs, k) {
-			count++
-		}
-		if vs, ok := n.(*ast.ValueSpec); ok && len(vs.Values) > 0 && targets(info, identExprs(vs.Names), k) {
-			count++
-		}
-		return count <= 1
+		c.countNode(n)
+		return c.count <= 1
 	})
-	return count > 1
+	return c.count > 1
+}
+
+type keyAssignCounter struct {
+	info  *types.Info
+	key   flow.Key
+	count int
+}
+
+func (c *keyAssignCounter) countNode(n ast.Node) {
+	switch n := n.(type) {
+	case *ast.AssignStmt:
+		if targets(c.info, n.Lhs, c.key) {
+			c.count++
+		}
+	case *ast.ValueSpec:
+		if len(n.Values) > 0 && targets(c.info, identExprs(n.Names), c.key) {
+			c.count++
+		}
+	case *ast.RangeStmt:
+		if n.Tok == token.ASSIGN && rangeTargets(c.info, n, c.key) {
+			c.count++
+		}
+	}
 }
 
 func madeCap(info *types.Info, fn ast.Node, k flow.Key) (int64, bool) {
@@ -874,4 +892,50 @@ func (w *handWalker) storesOne(l ast.Expr) bool {
 func (w *handWalker) storesGlobal(id *ast.Ident) bool {
 	v, ok := cmp.Or(w.info.Defs[id], w.info.Uses[id]).(*types.Var)
 	return ok && (v.Pos() < w.fn.Pos() || v.Pos() >= w.fn.End())
+}
+
+func spawnExits(info *types.Info, fn ast.Node, k flow.Key) bool {
+	for lit := range spawnLits(info, fn) {
+		if !mentionsKey(info, lit, k) {
+			continue
+		}
+		if litExits(info, lit) {
+			return true
+		}
+	}
+	return false
+}
+
+func litExits(info *types.Info, lit *ast.FuncLit) bool {
+	exited := false
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if exited {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if s, ok := n.(*ast.ExprStmt); ok {
+			if c, ok := s.X.(*ast.CallExpr); ok && isNeverReturn(info, c) {
+				exited = true
+			}
+		}
+		return !exited
+	})
+	return exited
+}
+
+func isNeverReturn(info *types.Info, c *ast.CallExpr) bool {
+	if isPanicCall(info, c) {
+		return true
+	}
+	fn := typeutil.StaticCallee(info, c)
+	if fn == nil || fn.Pkg() == nil {
+		return false
+	}
+	switch fn.Pkg().Path() + "." + fn.Name() {
+	case "os.Exit", "log.Fatal", "log.Fatalf", "log.Fatalln", "runtime.Goexit":
+		return true
+	}
+	return false
 }

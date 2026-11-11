@@ -12,6 +12,23 @@ func loneSend(info *types.Info, lit *ast.FuncLit) (chanOp, bool) {
 	if lit == nil {
 		return chanOp{}, false
 	}
+	send, ok := onlySend(info, lit)
+	if !ok {
+		return chanOp{}, false
+	}
+	for _, s := range lit.Body.List {
+		if s != send.Expr {
+			continue
+		}
+		if exitsBeforeSend(info, lit, send.Pos) {
+			return chanOp{}, false
+		}
+		return send, true
+	}
+	return chanOp{}, false
+}
+
+func onlySend(info *types.Info, lit *ast.FuncLit) (chanOp, bool) {
 	w := &opWalker{info: info}
 	w.stmts(lit.Body.List)
 	var send chanOp
@@ -25,15 +42,42 @@ func loneSend(info *types.Info, lit *ast.FuncLit) (chanOp, bool) {
 		}
 		send, found = op, true
 	}
-	if !found {
-		return chanOp{}, false
-	}
-	for _, s := range lit.Body.List {
-		if s == send.Expr {
-			return send, true
+	return send, found
+}
+
+func exitsBeforeSend(info *types.Info, lit *ast.FuncLit, before token.Pos) bool {
+	exited := false
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if exited {
+			return false
 		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		exited = exitsAt(info, n, before)
+		return !exited
+	})
+	return exited
+}
+
+func exitsAt(info *types.Info, n ast.Node, before token.Pos) bool {
+	switch n := n.(type) {
+	case *ast.ReturnStmt:
+		return n.Pos() < before
+	case *ast.BranchStmt:
+		return n.Pos() < before && (n.Tok == token.GOTO || n.Label != nil)
+	case *ast.CallExpr:
+		return n.Pos() < before && isPanicCall(info, n)
 	}
-	return chanOp{}, false
+	return false
+}
+
+func isPanicCall(info *types.Info, c *ast.CallExpr) bool {
+	id, ok := ast.Unparen(c.Fun).(*ast.Ident)
+	if !ok || id.Name != "panic" {
+		return false
+	}
+	return info.ObjectOf(id) == types.Universe.Lookup("panic")
 }
 
 func loneSends(info *types.Info, lit *ast.FuncLit) []chanOp {

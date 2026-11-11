@@ -126,3 +126,16 @@ func orphansendSilentCallDrain(ctx context.Context) (int, error) {
 		return 0, ctx.Err()
 	}
 }
+
+func orphansendSilentCopied() int {
+	ch := make(chan int)
+	alias := ch
+	go func() { ch <- workOrphan() }()
+	_ = <-alias
+	select {
+	case v := <-ch:
+		return v
+	default:
+		return -1
+	}
+}

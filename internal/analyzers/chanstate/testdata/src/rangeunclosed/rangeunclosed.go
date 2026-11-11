@@ -1,5 +1,7 @@
 package rangeunclosed
 
+import "os"
+
 var rangeSink any
 
 func useRange(v int) { _ = v }
@@ -161,5 +163,25 @@ LRange:
 		if v > 0 {
 			continue LRange
 		}
+	}
+}
+
+func rangeunclosedSilentRangeAssign(src chan int) {
+	ch := make(chan int)
+	for _, ch = range []chan int{src} {
+	}
+	for v := range ch {
+		_ = v
+	}
+}
+
+func rangeunclosedSilentExit() {
+	ch := make(chan int)
+	go func() {
+		ch <- 1
+		os.Exit(0)
+	}()
+	for v := range ch {
+		_ = v
 	}
 }
