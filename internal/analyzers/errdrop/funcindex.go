@@ -10,6 +10,7 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
 
+	"github.com/gosuda/gglint/internal/flow"
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
@@ -20,6 +21,7 @@ type indexedUse struct {
 
 type funcIndex struct {
 	info       *types.Info
+	graph      *flow.Graph
 	uses       map[*types.Var][]indexedUse
 	assigns    map[*types.Var][]token.Pos
 	pathWrites map[*types.Var][]token.Pos
@@ -29,6 +31,7 @@ type funcIndex struct {
 func buildFuncIndex(pass *analysis.Pass, fn inspector.Cursor) *funcIndex {
 	idx := &funcIndex{
 		info:       pass.TypesInfo,
+		graph:      flow.NewGraph(pass, fn.Node()),
 		uses:       map[*types.Var][]indexedUse{},
 		assigns:    map[*types.Var][]token.Pos{},
 		pathWrites: map[*types.Var][]token.Pos{},
@@ -241,9 +244,9 @@ func (idx *funcIndex) firstUse(v *types.Var, after token.Pos) (inspector.Cursor,
 }
 
 type freshMark struct {
-	path  string
-	end   token.Pos
-	block ast.Node
+	path string
+	end  token.Pos
+	stmt ast.Node
 }
 
 func pathHasPrefix(path, mark string) bool {
@@ -253,28 +256,20 @@ func pathHasPrefix(path, mark string) bool {
 	return path == mark || strings.HasPrefix(path, mark+".")
 }
 
-func enclosingScope(cur inspector.Cursor) ast.Node {
-	for scope := range cur.Enclosing((*ast.BlockStmt)(nil), (*ast.CaseClause)(nil), (*ast.CommClause)(nil)) {
-		return scope.Node()
-	}
-	return nil
+func avoidStmt(stmt ast.Node) func(ast.Node) bool {
+	return func(n ast.Node) bool { return n == stmt }
 }
 
-func scopeEncloses(block ast.Node, cur inspector.Cursor) bool {
-	if block == nil {
-		return true
-	}
-	for scope := range cur.Enclosing((*ast.BlockStmt)(nil), (*ast.CaseClause)(nil), (*ast.CommClause)(nil)) {
-		if scope.Node() == block {
-			return true
-		}
-	}
-	return false
+type coverQuery struct {
+	graph *flow.Graph
+	call  ast.Node
+	pos   token.Pos
+	cur   ast.Node
 }
 
-func freshCovers(fresh []freshMark, path string, pos token.Pos, cur inspector.Cursor) bool {
+func freshCovers(fresh []freshMark, path string, q coverQuery) bool {
 	for _, m := range fresh {
-		if m.end < pos && scopeEncloses(m.block, cur) && pathHasPrefix(path, m.path) {
+		if m.end < q.pos && pathHasPrefix(path, m.path) && !q.graph.Reaches(q.call, q.cur, avoidStmt(m.stmt)) {
 			return true
 		}
 	}
@@ -286,7 +281,7 @@ type mentionPath struct {
 	derefs []string
 	store  bool
 	end    token.Pos
-	block  ast.Node
+	stmt   ast.Node
 }
 
 func rootIsPointer(v *types.Var) bool {
@@ -332,34 +327,35 @@ func pathOfMention(info *types.Info, root *types.Var, cur inspector.Cursor) ment
 	if as, ok := skipParens(up.Parent()).Node().(*ast.AssignStmt); ok && lhsStoresField(as, child) {
 		mention.store = true
 		mention.end = as.End()
-		mention.block = enclosingScope(cur)
+		mention.stmt = as
 	}
 	return mention
 }
 
-func storeReadsDecode(store mentionPath, fresh []freshMark, pos token.Pos, cur inspector.Cursor) bool {
+func storeReadsDecode(store mentionPath, fresh []freshMark, q coverQuery) bool {
 	for _, d := range store.derefs {
-		if !freshCovers(fresh, d, pos, cur) {
+		if !freshCovers(fresh, d, q) {
 			return true
 		}
 	}
 	return false
 }
 
-func (idx *funcIndex) firstRead(v *types.Var, after token.Pos) (inspector.Cursor, bool) {
+func (idx *funcIndex) firstRead(call *ast.CallExpr, v *types.Var, after token.Pos) (inspector.Cursor, bool) {
 	list := idx.uses[v]
 	start := sort.Search(len(list), func(i int) bool { return list[i].pos > after })
 	var fresh []freshMark
 	for i := start; i < len(list); i++ {
 		mention := pathOfMention(idx.info, v, list[i].cur)
+		q := coverQuery{graph: idx.graph, call: call, pos: list[i].pos, cur: list[i].cur.Node()}
 		if mention.store {
-			if storeReadsDecode(mention, fresh, list[i].pos, list[i].cur) {
+			if storeReadsDecode(mention, fresh, q) {
 				return list[i].cur, true
 			}
-			fresh = append(fresh, freshMark{path: mention.path, end: mention.end, block: mention.block})
+			fresh = append(fresh, freshMark{path: mention.path, end: mention.end, stmt: mention.stmt})
 			continue
 		}
-		if freshCovers(fresh, mention.path, list[i].pos, list[i].cur) {
+		if freshCovers(fresh, mention.path, q) {
 			continue
 		}
 		return list[i].cur, true

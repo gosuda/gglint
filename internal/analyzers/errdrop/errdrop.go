@@ -6,6 +6,7 @@ import (
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/passes/ctrlflow"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 
@@ -38,7 +39,7 @@ var Analyzer = &analysis.Analyzer{
 	Doc: "reports a dropped error when later code depends on the call having succeeded, when the call is the Close of a written file, or when the next statement returns nil\n" +
 		"\n" +
 		"A call fails only through its writer when every error it returns is nil or comes from a Write call on one writer parameter, and the buffer Write never fails, so it stays silent. A decoder that overlays caller-chosen defaults keeps those defaults on failure, so a variable given a value, or a field or element of it set, before the call stays silent. A variable whose address an earlier call took through a pointer parameter or a non-variadic empty-interface parameter stays silent even when that call only reads it; a variadic argument does not. A Write on an unexported single-method interface stays silent, as does a helper that only forwards Close. A Close stays silent without write evidence through the handle in this function, when the handle is a connection, when the handle was not opened for writing here but was only stored in a writer variable, or when the Close sits in the failure branch of its only write call. A Close or Sync whose result is used silences the durable report for that handle. A method named Close is never a verdict report. A sticky call whose error stays in the receiver and is handed back by another method stays silent; check the handing-back call. A variable passed through a non-empty interface that is not a writer is not reported. The neverFails, nilSafe, sticky, and writerOnly facts are derived from the file set of the current build, so a function with build-tagged variants has the fact of the variant that is built.",
-	Requires:  []*analysis.Analyzer{inspect.Analyzer},
+	Requires:  []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:       run,
 	FactTypes: []analysis.Fact{(*neverFails)(nil), (*nilSafe)(nil), (*sticky)(nil), (*writerOnly)(nil)},
 }

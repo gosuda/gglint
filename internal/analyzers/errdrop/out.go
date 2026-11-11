@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	"slices"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/ast/inspector"
@@ -223,17 +224,11 @@ func isVariadicAny(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
 
 func isScanOut(pass *analysis.Pass, call *ast.CallExpr) bool {
 	fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
-	if !ok || fn == nil || fn.Pkg() == nil {
+	if !ok || fn == nil {
 		return false
 	}
-	if fn.Pkg().Path() != "fmt" {
-		return false
-	}
-	switch fn.Name() {
-	case "Scan", "Scanf", "Scanln", "Sscan", "Sscanf", "Sscanln", "Fscan", "Fscanf", "Fscanln":
-		return true
-	}
-	return false
+	name := fn.Name()
+	return strings.HasPrefix(name, "Scan") || strings.HasPrefix(name, "Sscan") || strings.HasPrefix(name, "Fscan")
 }
 
 func isEmptyInterface(t types.Type) bool {
@@ -274,7 +269,7 @@ func outHolds(call *ast.CallExpr, x *types.Var, memo *outMemo) bool {
 	if takenBefore(memo, x, call.Pos()) {
 		return false
 	}
-	_, ok := memo.idx.firstRead(x, call.End())
+	_, ok := memo.idx.firstRead(call, x, call.End())
 	return ok
 }
 

@@ -17,17 +17,24 @@ import (
 const closeMethodName = "Close"
 
 type durableMemo struct {
-	fn        inspector.Cursor
-	method    map[*types.Var][]token.Pos
-	arg       map[*types.Var][]token.Pos
-	opened    map[*types.Var]bool
-	storedVar map[*types.Var][]*types.Var
-	called    map[*types.Var]bool
-	used      map[*types.Var]bool
+	fn          inspector.Cursor
+	method      map[*types.Var][]token.Pos
+	arg         map[*types.Var][]token.Pos
+	opened      map[*types.Var]bool
+	storedVar   map[*types.Var][]*types.Var
+	storedField map[*types.Var][]fieldStore
+	called      map[*types.Var][]token.Pos
+	passed      map[*types.Var][]token.Pos
+	used        map[*types.Var]bool
+}
+
+type fieldStore struct {
+	root *types.Var
+	pos  token.Pos
 }
 
 func buildDurableMemo(pass *analysis.Pass, fn inspector.Cursor) *durableMemo {
-	memo := &durableMemo{fn: fn, method: map[*types.Var][]token.Pos{}, arg: map[*types.Var][]token.Pos{}, opened: map[*types.Var]bool{}, storedVar: map[*types.Var][]*types.Var{}, called: map[*types.Var]bool{}, used: map[*types.Var]bool{}}
+	memo := &durableMemo{fn: fn, method: map[*types.Var][]token.Pos{}, arg: map[*types.Var][]token.Pos{}, opened: map[*types.Var]bool{}, storedVar: map[*types.Var][]*types.Var{}, storedField: map[*types.Var][]fieldStore{}, called: map[*types.Var][]token.Pos{}, passed: map[*types.Var][]token.Pos{}, used: map[*types.Var]bool{}}
 	collectDurableCalls(pass, fn, memo)
 	collectDurableAssigns(pass, fn, memo)
 	collectDurableSpecs(pass, fn, memo)
@@ -47,6 +54,7 @@ func noteDurableCall(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallEx
 	noteMethodWrite(pass, call, memo)
 	noteArgWrite(pass, call, memo)
 	noteCalledOn(pass, call, memo)
+	notePassedOn(pass, call, memo)
 	noteUsedClose(pass, cur, call, memo)
 }
 
@@ -100,7 +108,21 @@ func noteCalledOn(pass *analysis.Pass, call *ast.CallExpr, memo *durableMemo) {
 		return
 	}
 	if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
-		memo.called[v] = true
+		memo.called[v] = append(memo.called[v], call.Pos())
+	}
+}
+
+func notePassedOn(pass *analysis.Pass, call *ast.CallExpr, memo *durableMemo) {
+	for _, arg := range call.Args {
+		a := ast.Unparen(arg)
+		if u, ok := a.(*ast.UnaryExpr); ok && u.Op == token.AND {
+			a = ast.Unparen(u.X)
+		}
+		if id, ok := a.(*ast.Ident); ok {
+			if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
+				memo.passed[v] = append(memo.passed[v], call.Pos())
+			}
+		}
 	}
 }
 
@@ -137,6 +159,7 @@ func noteDurableAssign(pass *analysis.Pass, as *ast.AssignStmt, memo *durableMem
 		}
 		noteOpened(pass, lhs, rhs, memo)
 		noteStoredAssign(pass, as, lhs, rhs, memo)
+		noteStoredField(pass, as, lhs, rhs, memo)
 	}
 }
 
@@ -173,6 +196,55 @@ func noteStoredAssign(pass *analysis.Pass, as *ast.AssignStmt, lhs, rhs ast.Expr
 	}
 	if w, ok := pass.TypesInfo.ObjectOf(wid).(*types.Var); ok {
 		memo.storedVar[v] = append(memo.storedVar[v], w)
+	}
+}
+
+func noteStoredField(pass *analysis.Pass, as *ast.AssignStmt, lhs, rhs ast.Expr, memo *durableMemo) {
+	if len(as.Lhs) != len(as.Rhs) && len(as.Rhs) != 1 {
+		return
+	}
+	id, ok := ast.Unparen(rhs).(*ast.Ident)
+	if !ok {
+		return
+	}
+	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if !ok {
+		return
+	}
+	t := pass.TypesInfo.TypeOf(lhs)
+	if t == nil || !isWriterInterface(t) {
+		return
+	}
+	w, ok := fieldStoreRoot(pass, lhs)
+	if !ok {
+		return
+	}
+	memo.storedField[v] = append(memo.storedField[v], fieldStore{root: w, pos: as.Pos()})
+}
+
+func fieldStoreRoot(pass *analysis.Pass, lhs ast.Expr) (*types.Var, bool) {
+	if !storeThroughField(lhs) {
+		return nil, false
+	}
+	v := pathRootVar(pass, lhs)
+	if v == nil {
+		return nil, false
+	}
+	return v, true
+}
+
+func storeThroughField(lhs ast.Expr) bool {
+	e := lhs
+	for {
+		child, ok := pathStep(e)
+		if !ok {
+			return false
+		}
+		switch ast.Unparen(e).(type) {
+		case *ast.SelectorExpr, *ast.IndexExpr, *ast.IndexListExpr:
+			return true
+		}
+		e = child
 	}
 }
 
@@ -299,7 +371,7 @@ func writtenExcept(x *types.Var, ignore *ast.CallExpr, memo *durableMemo) bool {
 	if hasArgWrite(x, ignore, memo) {
 		return true
 	}
-	return storedVarWritten(x, memo)
+	return storedVarWritten(x, memo) || storedFieldWritten(x, memo)
 }
 
 func storedVarWritten(x *types.Var, memo *durableMemo) bool {
@@ -307,7 +379,33 @@ func storedVarWritten(x *types.Var, memo *durableMemo) bool {
 		return false
 	}
 	for _, w := range memo.storedVar[x] {
-		if memo.called[w] || len(memo.arg[w]) > 0 {
+		if len(memo.called[w]) > 0 || len(memo.arg[w]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func storedFieldWritten(x *types.Var, memo *durableMemo) bool {
+	if !memo.opened[x] {
+		return false
+	}
+	for _, s := range memo.storedField[x] {
+		if rootUsedAfter(s, memo) {
+			return true
+		}
+	}
+	return false
+}
+
+func rootUsedAfter(s fieldStore, memo *durableMemo) bool {
+	for _, pos := range memo.called[s.root] {
+		if pos > s.pos {
+			return true
+		}
+	}
+	for _, pos := range memo.passed[s.root] {
+		if pos > s.pos {
 			return true
 		}
 	}

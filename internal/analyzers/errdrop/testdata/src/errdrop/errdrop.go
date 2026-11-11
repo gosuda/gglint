@@ -18,6 +18,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1183,4 +1184,91 @@ func loadFallthrough(s string) (*fallthroughT, error) {
 func valueReportedGuardFallthrough(s string) int {
 	t, _ := loadFallthrough(s) // want "t is used after the error of loadFallthrough is dropped"
 	return t.Get()
+}
+
+func outStoreThenReturnElse(b []byte, cond bool) (int, error) {
+	var o errdropOuter
+	json.Unmarshal(b, &o)
+	if cond {
+		o.In = &errdropInner{}
+	} else {
+		return 0, errors.New("no")
+	}
+	return o.In.X, nil
+}
+
+func outStoreThenPanicElse(b []byte, cond bool) int {
+	var o errdropOuter
+	json.Unmarshal(b, &o)
+	if cond {
+		o.In = &errdropInner{}
+	} else {
+		panic("no")
+	}
+	return o.In.X
+}
+
+func (s *errdropSet) Add(k string) { (*s)[k] = struct{}{} }
+
+func valueMapWrite(p string) {
+	s, _ := loadSet(p) // want "s is used after the error of loadSet is dropped"
+	s.Add("x")
+}
+
+type errdropRows struct{}
+
+func (errdropRows) Scan(dest ...any) error {
+	if len(dest) == 0 {
+		return errors.New("no dest")
+	}
+	return nil
+}
+func outReportedLocalScan(rows errdropRows) int {
+	var n int
+	rows.Scan(&n) // want "n is read after the error of rows.Scan is dropped"
+	return n
+}
+
+func durableReportedExecOut(cmd []string, outfile string) int {
+	of, err := os.OpenFile(outfile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return -1
+	}
+	c := exec.Command(cmd[0], cmd[1:]...)
+	defer of.Close() // want "of is written in this function and the error of of.Close is dropped"
+	c.Stdout = of
+	c.Stderr = of
+	if err := c.Run(); err != nil {
+		return -1
+	}
+	return 0
+}
+
+type errdropWriterHolder struct {
+	w io.Writer
+}
+
+func useWriterHolder(h errdropWriterHolder) {}
+
+func durableReportedFieldPassed(p string) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close() // want "f is written in this function and the error of f.Close is dropped"
+	var h errdropWriterHolder
+	h.w = f
+	useWriterHolder(h)
+	return nil
+}
+
+func durableSilentFieldNoUse(p string) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var c errdropWriterHolder
+	c.w = f
+	return nil
 }

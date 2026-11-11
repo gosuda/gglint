@@ -232,7 +232,33 @@ func valueRecvNonderef(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 }
 
 func methodCallNonderef(pass *analysis.Pass, sel *ast.SelectorExpr, v *types.Var) bool {
-	return valueRecvNonderef(pass, sel) || valueVarNonderef(v)
+	if valueRecvNonderef(pass, sel) {
+		return true
+	}
+	return valueVarNonderef(v) && !mapWriteMethod(pass, sel, v)
+}
+
+func mapWriteMethod(pass *analysis.Pass, sel *ast.SelectorExpr, v *types.Var) bool {
+	if _, ok := types.Unalias(v.Type()).Underlying().(*types.Map); !ok {
+		return false
+	}
+	fn, ok := directMethod(pass, sel)
+	if !ok {
+		return false
+	}
+	origin := originOf(fn)
+	if origin.Pkg() == nil || origin.Pkg() != pass.Pkg {
+		return false
+	}
+	decl := declOfMethod(pass, origin)
+	if decl == nil || decl.Body == nil {
+		return false
+	}
+	sig, ok := origin.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	return bodyWritesRecvElem(pass, decl.Body, sig.Recv())
 }
 
 func valueVarNonderef(v *types.Var) bool {
@@ -241,6 +267,61 @@ func valueVarNonderef(v *types.Var) bool {
 		return false
 	}
 	return true
+}
+
+func declOfMethod(pass *analysis.Pass, fn *types.Func) *ast.FuncDecl {
+	for _, f := range pass.Files {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Name == nil {
+				continue
+			}
+			if pass.TypesInfo.Defs[fd.Name] == fn {
+				return fd
+			}
+		}
+	}
+	return nil
+}
+
+func bodyWritesRecvElem(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch t := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range t.Lhs {
+				if indexOnRecv(pass, lhs, recv) {
+					found = true
+					return false
+				}
+			}
+		case *ast.IncDecStmt:
+			if indexOnRecv(pass, t.X, recv) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func indexOnRecv(pass *analysis.Pass, e ast.Expr, recv *types.Var) bool {
+	idx, ok := ast.Unparen(e).(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	x := ast.Unparen(idx.X)
+	if id, ok := x.(*ast.Ident); ok {
+		return pass.TypesInfo.Uses[id] == recv || pass.TypesInfo.Defs[id] == recv
+	}
+	if star, ok := x.(*ast.StarExpr); ok {
+		return isRecvIdent(pass, star.X, recv)
+	}
+	return false
 }
 
 func unparenIdentEquals(e ast.Expr, id *ast.Ident) bool {
