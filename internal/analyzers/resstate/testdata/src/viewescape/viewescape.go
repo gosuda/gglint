@@ -553,3 +553,37 @@ func viewescapeReportedFreshReset(in []string, out [][]byte) [][]byte {
 	}
 	return out
 }
+
+func viewescapeSilentFreshOtherBranch(in []string, out [][]byte) [][]byte {
+	for _, s := range in {
+		var b bytes.Buffer
+		if s != "" {
+			_, _ = b.WriteString(s)
+			out = append(out, b.Bytes())
+		} else {
+			_, _ = b.WriteString("x")
+		}
+	}
+	return out
+}
+
+func viewescapeSilentElementPointer(bufs []bytes.Buffer, out [][]byte) [][]byte {
+	for i := range bufs {
+		b := &bufs[i]
+		_, _ = b.WriteString("x")
+		out = append(out, b.Bytes())
+	}
+	return out
+}
+
+func viewescapeSilentMultiAssign(in []string, out [][]byte) [][]byte {
+	for _, s := range in {
+		n, b := 0, bytes.Buffer{}
+		_ = n
+		if s != "" {
+			_, _ = b.WriteString(s)
+			out = append(out, b.Bytes())
+		}
+	}
+	return out
+}
