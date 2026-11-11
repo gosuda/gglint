@@ -152,3 +152,10 @@ func useafterputSilentRefillInPlace() {
 	_ = b.n
 	_ = tries
 }
+
+func useafterputSilentValueCopy() {
+	v := struct{ N int }{}
+	resPool.Put(v)
+	v.N++
+	_ = v.N
+}
