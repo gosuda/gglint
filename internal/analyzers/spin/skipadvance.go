@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"maps"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -12,7 +13,7 @@ import (
 
 var skipadvanceAnalyzer = &analysis.Analyzer{
 	Name:     "skipadvance",
-	Doc:      "report a continue directly in if err != nil that skips the advance when the advance follows the if and none precedes it; spin covers five shapes only",
+	Doc:      "report a continue directly in if err != nil where err has static type error that skips the advance when the advance follows the if and none precedes it; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runSkipadvance,
 }
@@ -120,7 +121,7 @@ func reportContinue(pass *analysis.Pass, site continueSite, label string, k int,
 	if !ok || branch.Tok != token.CONTINUE {
 		return
 	}
-	if branch.Label != nil && (label == "" || branch.Label.Name != label) {
+	if !continueTargetsLoop(branch, label) {
 		return
 	}
 	info := pass.TypesInfo
@@ -130,8 +131,74 @@ func reportContinue(pass *analysis.Pass, site continueSite, label string, k int,
 	if outerAdvanced(info, site, k) {
 		return
 	}
+	if !failingMentionsAdvance(info, site) {
+		return
+	}
 	if advancedAfter(site) {
 		pass.Reportf(branch.Pos(), "this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue")
+	}
+}
+
+func continueTargetsLoop(branch *ast.BranchStmt, label string) bool {
+	return branch.Label == nil || (label != "" && branch.Label.Name == label)
+}
+
+func failingMentionsAdvance(info *types.Info, site continueSite) bool {
+	after := map[*types.Var]bool{}
+	for _, stmt := range site.list[site.at+1:] {
+		collectAssignedLoopVars(info, stmt, site.vars, after)
+	}
+	if len(after) == 0 {
+		return false
+	}
+	uses := failingStepUses(info, site)
+	for v := range after {
+		if uses[v] {
+			return true
+		}
+	}
+	return false
+}
+
+func failingStepUses(info *types.Info, site continueSite) map[*types.Var]bool {
+	uses := condVars(info, site.check.Cond)
+	if site.check.Init != nil {
+		for v := range collectReads(info, site.check.Init) {
+			uses[v] = true
+		}
+	}
+	return uses
+}
+
+func collectAssignedLoopVars(info *types.Info, stmt ast.Stmt, loopVars, out map[*types.Var]bool) {
+	walkNoLit(stmt, func(n ast.Node) bool {
+		switch t := n.(type) {
+		case *ast.AssignStmt:
+			for _, e := range t.Lhs {
+				addLoopVar(info, e, loopVars, out)
+			}
+		case *ast.IncDecStmt:
+			addLoopVar(info, t.X, loopVars, out)
+		case *ast.RangeStmt:
+			if t.Tok == token.ASSIGN {
+				addLoopVar(info, t.Key, loopVars, out)
+				addLoopVar(info, t.Value, loopVars, out)
+			}
+		}
+		return true
+	})
+}
+
+func addLoopVar(info *types.Info, e ast.Expr, loopVars, out map[*types.Var]bool) {
+	if e == nil {
+		return
+	}
+	id := rootIdent(e)
+	if id == nil {
+		return
+	}
+	if v, ok := info.ObjectOf(id).(*types.Var); ok && loopVars[v] {
+		out[v] = true
 	}
 }
 
@@ -144,6 +211,11 @@ func outerAdvanced(info *types.Info, site continueSite, k int) bool {
 	for _, stmt := range site.check.Body.List[:k] {
 		collectOuterWrites(info, site.loop, stmt, site.errs, written)
 	}
+	if len(written) == 0 {
+		return false
+	}
+	uses := failingStepUses(info, site)
+	maps.DeleteFunc(written, func(v *types.Var, _ bool) bool { return !uses[v] })
 	if len(written) == 0 {
 		return false
 	}

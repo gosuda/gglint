@@ -1,6 +1,7 @@
 package skipadvance
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 )
@@ -221,6 +222,30 @@ func skipadvanceSilentAdvanceBeforeAndAfter() {
 		i++
 		if stepErr != nil {
 			continue
+		}
+		i++
+	}
+}
+
+func skipadvanceSilentFreshChan(n int, errs <-chan error) int {
+	i := 0
+	for i < n {
+		if err := <-errs; err != nil {
+			continue
+		}
+		i++
+	}
+	return i
+}
+
+func skipadvanceReportedAttempts(xs []int) {
+	i := 0
+	attempts := 0
+	for i < len(xs) {
+		attempts++
+		fmt.Println(attempts)
+		if err := doStep(xs[i]); err != nil {
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
 		}
 		i++
 	}
