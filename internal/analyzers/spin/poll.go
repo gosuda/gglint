@@ -12,7 +12,7 @@ import (
 
 var pollAnalyzer = &analysis.Analyzer{
 	Name:     "poll",
-	Doc:      "report a for loop whose body is one select with a default that never waits and never leaves; counted loops that keep their counter and Done-only selects are skipped; a call in the default clause is assumed to wait; spin covers five shapes only",
+	Doc:      "report a for loop whose body is one select with a default that never waits and never leaves; counted loops that keep their counter and Done-only selects are skipped; a call in the default clause is assumed to wait, as is a channel operation or a call outside sync/atomic in the condition or the post statement of the loop; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runPoll,
 }
@@ -29,7 +29,7 @@ func checkPoll(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 	if !ok {
 		return
 	}
-	if isCounted(pass.TypesInfo, loop) {
+	if isCounted(pass.TypesInfo, loop) || headerWaits(pass, loop) {
 		return
 	}
 	if defaultSpins(pass, def) {
@@ -42,6 +42,39 @@ func checkPoll(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it")
+}
+
+func headerWaits(pass *analysis.Pass, loop *ast.ForStmt) bool {
+	return headerPartWaits(pass, loop.Cond) || headerPartWaits(pass, loop.Post)
+}
+
+func headerPartWaits(pass *analysis.Pass, part ast.Node) bool {
+	if part == nil {
+		return false
+	}
+	waits := false
+	walkNoLit(part, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && isAtomicCall(pass.TypesInfo, call) {
+			return false
+		}
+		waits = waits || pollNodeWaits(pass, n)
+		return !waits
+	})
+	return waits
+}
+
+func isAtomicCall(info *types.Info, call *ast.CallExpr) bool {
+	var name *ast.Ident
+	switch fun := ast.Unparen(call.Fun).(type) {
+	case *ast.SelectorExpr:
+		name = fun.Sel
+	case *ast.Ident:
+		name = fun
+	default:
+		return false
+	}
+	fn, ok := info.Uses[name].(*types.Func)
+	return ok && fn.Pkg() != nil && fn.Pkg().Path() == "sync/atomic"
 }
 
 func isCounted(info *types.Info, loop *ast.ForStmt) bool {

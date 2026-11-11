@@ -437,3 +437,39 @@ func pollReportedNestedEmptyDefault(ch chan int) {
 		}
 	}
 }
+
+func pollSilentSleepInPost(ctx context.Context, work chan int) int {
+	n := 0
+	for ; ; time.Sleep(time.Second) {
+		select {
+		case <-ctx.Done():
+			return n
+		case <-work:
+			return n
+		default:
+			n++
+		}
+	}
+}
+
+func waitTurn(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(time.Millisecond):
+		return true
+	}
+}
+
+func pollSilentWaitInCond(ctx context.Context, work chan int) int {
+	n := 0
+	for waitTurn(ctx) {
+		select {
+		case <-work:
+			return n
+		default:
+			n++
+		}
+	}
+	return n
+}
