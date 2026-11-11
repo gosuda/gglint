@@ -22,39 +22,32 @@ func overwrittenReadAfter(scope *appendScope, a *types.Var, site readSite) bool 
 		return false
 	}
 	kills := scope.assigns[a]
-	avoid := func(n ast.Node) bool {
-		for _, k := range kills {
-			if n == k {
-				return true
-			}
-		}
-		return false
-	}
-	if scopeIndexHit(scope, a, site, avoid) {
+	if scopeIndexHitStores(scope, a, site, kills) {
 		return true
 	}
-	if scopeSliceHit(scope, a, site, avoid) {
+	if scopeSliceHitStores(scope, a, site, kills) {
 		return true
 	}
-	return scopeWholeHit(scope, a, site, avoid)
+	return scopeWholeHitStores(scope, a, site, kills)
 }
 
-func scopeIndexHit(scope *appendScope, a *types.Var, site readSite, avoid func(ast.Node) bool) bool {
+func scopeIndexHitStores(scope *appendScope, a *types.Var, site readSite, kills []ast.Node) bool {
 	for _, t := range scope.indexReads[a] {
 		if t.Pos() <= site.after {
 			continue
 		}
-		if scopeIndexOutside(scope.info, t, site.bound, site.end) {
+		k, ok := constInt(scope.info, t.Index)
+		if !ok || k < site.bound || k >= site.end {
 			continue
 		}
-		if scope.graph.Reaches(site.from, t, avoid) {
+		if scope.graph.Reaches(site.from, t, storeAvoid(scope, a, kills, k)) {
 			return true
 		}
 	}
 	return false
 }
 
-func scopeSliceHit(scope *appendScope, a *types.Var, site readSite, avoid func(ast.Node) bool) bool {
+func scopeSliceHitStores(scope *appendScope, a *types.Var, site readSite, kills []ast.Node) bool {
 	for _, t := range scope.sliceReads[a] {
 		if t.Pos() <= site.after {
 			continue
@@ -62,31 +55,120 @@ func scopeSliceHit(scope *appendScope, a *types.Var, site readSite, avoid func(a
 		if scopeSliceOutside(scope.info, t, site.bound, site.end) {
 			continue
 		}
-		if scope.graph.Reaches(site.from, t, avoid) {
+		if sliceHasLiveIndex(scope, a, site, kills, t) {
 			return true
 		}
 	}
 	return false
 }
 
-func scopeWholeHit(scope *appendScope, a *types.Var, site readSite, avoid func(ast.Node) bool) bool {
+func scopeWholeHitStores(scope *appendScope, a *types.Var, site readSite, kills []ast.Node) bool {
 	for _, id := range scope.wholeReads[a] {
 		if id.Pos() <= site.after {
 			continue
 		}
-		if scope.graph.Reaches(site.from, id, avoid) {
+		if wholeHasLiveIndex(scope, a, site, kills, id) {
 			return true
 		}
 	}
 	return false
 }
 
-func scopeIndexOutside(info *types.Info, idx *ast.IndexExpr, bound, end int) bool {
-	k, ok := constInt(info, idx.Index)
-	if !ok {
-		return true
+func storeAvoid(scope *appendScope, a *types.Var, kills []ast.Node, k int) func(ast.Node) bool {
+	return func(n ast.Node) bool {
+		for _, e := range kills {
+			if n == e {
+				return true
+			}
+		}
+		return isElementStoreTo(scope.info, scope, n, a, k)
 	}
-	return k < bound || k >= end
+}
+
+func sliceHasLiveIndex(scope *appendScope, a *types.Var, site readSite, kills []ast.Node, t *ast.SliceExpr) bool {
+	if site.end-site.bound > 64 {
+		return scope.graph.Reaches(site.from, t, wholeAvoid(kills))
+	}
+	for k := site.bound; k < site.end; k++ {
+		if !sliceCovers(scope.info, t, k) {
+			continue
+		}
+		if scope.graph.Reaches(site.from, t, storeAvoid(scope, a, kills, k)) {
+			return true
+		}
+	}
+	return false
+}
+
+func wholeHasLiveIndex(scope *appendScope, a *types.Var, site readSite, kills []ast.Node, id *ast.Ident) bool {
+	if site.end-site.bound > 64 {
+		return scope.graph.Reaches(site.from, id, wholeAvoid(kills))
+	}
+	for k := site.bound; k < site.end; k++ {
+		if scope.graph.Reaches(site.from, id, storeAvoid(scope, a, kills, k)) {
+			return true
+		}
+	}
+	return false
+}
+
+func wholeAvoid(kills []ast.Node) func(ast.Node) bool {
+	return func(n ast.Node) bool {
+		for _, e := range kills {
+			if n == e {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func sliceCovers(info *types.Info, s *ast.SliceExpr, k int) bool {
+	low := 0
+	if s.Low != nil {
+		v, ok := constInt(info, s.Low)
+		if !ok {
+			return true
+		}
+		low = v
+	}
+	if k < low {
+		return false
+	}
+	if s.High != nil {
+		h, ok := constInt(info, s.High)
+		if !ok {
+			return true
+		}
+		return k < h
+	}
+	return true
+}
+
+func isElementStoreTo(info *types.Info, scope *appendScope, n ast.Node, a *types.Var, k int) bool {
+	st, ok := n.(*ast.AssignStmt)
+	if !ok || st.Tok != token.ASSIGN {
+		return false
+	}
+	for _, lhs := range st.Lhs {
+		if lhsStoreToK(info, scope, lhs, a, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func lhsStoreToK(info *types.Info, scope *appendScope, lhs ast.Expr, a *types.Var, k int) bool {
+	idx, ok := ast.Unparen(lhs).(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	v, _, ok := resolveIndexBase(info, scope.wanted, scope.ptrs, idx.X)
+	if !ok || v != a {
+		return false
+	}
+	c, ok := constInt(info, idx.Index)
+	return ok && c == k
 }
 
 func scopeSliceOutside(info *types.Info, s *ast.SliceExpr, bound, end int) bool {

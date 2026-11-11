@@ -164,7 +164,10 @@ func skipUntrackedSlice(scope *appendScope, def sliceDef, st *ast.AssignStmt) bo
 	if scope.untracked[def.a] {
 		return true
 	}
-	return addrExposedBetween(scope.info, scope.fn, def.a, def.pos, st.Pos())
+	if addrExposedBetween(scope.info, scope.fn, def.a, def.pos, st.Pos()) {
+		return true
+	}
+	return addrTakenReachesAppend(scope, def.a, st)
 }
 
 func addrExposedBetween(info *types.Info, fn ast.Node, a *types.Var, from, to token.Pos) bool {
@@ -278,7 +281,7 @@ func allKnown(caps []capResult) bool {
 }
 
 func knownCapProven(scope *appendScope, def sliceDef, st *ast.AssignStmt, appended int) bool {
-	return overwrittenReadAfter(scope, def.a, readSite{from: st, after: st.End(), bound: def.high, end: clobberEnd(scope, st, def.high, appended)})
+	return overwrittenReadAfter(scope, def.a, readSite{from: st, after: st.End(), bound: def.high, end: clobberEnd(scope, st, def, appended)})
 }
 
 type capResult struct {
@@ -299,8 +302,12 @@ func reachingCaps(scope *appendScope, a *types.Var, slicePos token.Pos) []capRes
 		if !reachesForCapCached(scope, a, from, to) {
 			continue
 		}
-		c, ok := capOfAssignment(scope.info, from, a)
-		out = append(out, capResult{cap: c, known: ok})
+		if st, ok := from.(*ast.AssignStmt); ok {
+			c, ok := capOfAssignment(scope.info, st, a)
+			out = append(out, capResult{cap: c, known: ok})
+			continue
+		}
+		out = append(out, capResult{cap: 0, known: false})
 	}
 	return out
 }
@@ -337,7 +344,7 @@ func capOfAssignment(info *types.Info, st *ast.AssignStmt, a *types.Var) (int, b
 
 func tryUnknownCap(scope *appendScope, st *ast.AssignStmt, b *types.Var, def sliceDef, call *ast.CallExpr) {
 	n := len(call.Args) - 1
-	end := clobberEnd(scope, st, def.high, n)
+	end := clobberEnd(scope, st, def, n)
 	if leng, ok := provenLen(scope.info, scope.fn, def.a, def.pos); ok && def.high+n <= leng {
 		if overwrittenReadAfter(scope, def.a, readSite{from: st, after: st.End(), bound: def.high, end: end}) {
 			reportClobber(scope.pass, call, b, def.a)
@@ -423,6 +430,9 @@ type lenTrack struct {
 }
 
 func provenLen(info *types.Info, fn ast.Node, a *types.Var, before token.Pos) (int, bool) {
+	if nestedAssignBefore(info, fn, a, before) {
+		return 0, false
+	}
 	tr := &lenTrack{}
 	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
 		return visitLenNode(info, n, a, before, tr)
@@ -433,9 +443,73 @@ func provenLen(info *types.Info, fn ast.Node, a *types.Var, before token.Pos) (i
 	return tr.cur, tr.known
 }
 
+func nestedAssignBefore(info *types.Info, fn ast.Node, a *types.Var, before token.Pos) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	found := false
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if isNestedAssign(info, n, a, before, stack) {
+			found = true
+			return false
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return found
+}
+
+func isNestedAssign(info *types.Info, n ast.Node, a *types.Var, before token.Pos, stack []ast.Node) bool {
+	if !assignsBefore(info, n, a, before) {
+		return false
+	}
+	return insideNestedBlock(stack, before)
+}
+
+func assignsBefore(info *types.Info, n ast.Node, a *types.Var, before token.Pos) bool {
+	if st, ok := n.(*ast.AssignStmt); ok {
+		return st.Pos() < before && assignsVar(info, st, a)
+	}
+	if t, ok := n.(*ast.RangeStmt); ok {
+		return t.Pos() < before && rangeAssignsVar(info, t, a)
+	}
+	return false
+}
+
+func insideNestedBlock(stack []ast.Node, before token.Pos) bool {
+	for i := len(stack) - 1; i >= 0; i-- {
+		switch t := stack[i].(type) {
+		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt, *ast.LabeledStmt:
+			if before < t.Pos() || before >= t.End() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func visitLenNode(info *types.Info, n ast.Node, a *types.Var, before token.Pos, tr *lenTrack) bool {
 	if _, ok := n.(*ast.FuncLit); ok {
 		return false
+	}
+	if t, ok := n.(*ast.RangeStmt); ok {
+		if t.Pos() < before && rangeAssignsVar(info, t, a) {
+			tr.seen = true
+			tr.known = false
+		}
+		return true
 	}
 	st, ok := n.(*ast.AssignStmt)
 	if !ok || st.Pos() >= before || !assignsVar(info, st, a) {
@@ -443,6 +517,23 @@ func visitLenNode(info *types.Info, n ast.Node, a *types.Var, before token.Pos, 
 	}
 	applyLenStmt(info, st, a, tr)
 	return true
+}
+
+func rangeAssignsVar(info *types.Info, t *ast.RangeStmt, a *types.Var) bool {
+	if t.Tok != token.ASSIGN {
+		return false
+	}
+	if id, ok := ast.Unparen(rangeAssignKey(t)).(*ast.Ident); ok {
+		if v, ok := varOf(info, id); ok && v == a {
+			return true
+		}
+	}
+	if id, ok := ast.Unparen(rangeAssignValue(t)).(*ast.Ident); ok {
+		if v, ok := varOf(info, id); ok && v == a {
+			return true
+		}
+	}
+	return false
 }
 
 func applyLenStmt(info *types.Info, st *ast.AssignStmt, a *types.Var, tr *lenTrack) {

@@ -391,3 +391,68 @@ func starStoredDirectly(stack []ast.Node, star *ast.StarExpr, starIdx int) bool 
 	}
 	return false
 }
+
+func ptrElementStored(info *types.Info, fn ast.Node, p *types.Var) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if isElementStoreNode(info, n, p) {
+			found = true
+			return false
+		}
+		return !isFuncLit(n)
+	})
+	return found
+}
+
+func isFuncLit(n ast.Node) bool {
+	_, ok := n.(*ast.FuncLit)
+	return ok
+}
+
+func isElementStoreNode(info *types.Info, n ast.Node, p *types.Var) bool {
+	if st, ok := n.(*ast.AssignStmt); ok {
+		return assignElementStored(info, st, p)
+	}
+	if st, ok := n.(*ast.IncDecStmt); ok {
+		return incdecElementStored(info, st, p)
+	}
+	return false
+}
+
+func assignElementStored(info *types.Info, st *ast.AssignStmt, p *types.Var) bool {
+	for _, lhs := range st.Lhs {
+		if idx, ok := ast.Unparen(lhs).(*ast.IndexExpr); ok {
+			if isStarOf(info, idx.X, p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func incdecElementStored(info *types.Info, st *ast.IncDecStmt, p *types.Var) bool {
+	if idx, ok := ast.Unparen(st.X).(*ast.IndexExpr); ok {
+		return isStarOf(info, idx.X, p)
+	}
+	return false
+}
+
+func isStarOf(info *types.Info, e ast.Expr, p *types.Var) bool {
+	star, ok := ast.Unparen(e).(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	id, ok := ast.Unparen(star.X).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	v, ok := varOf(info, id)
+	return ok && v == p
+}

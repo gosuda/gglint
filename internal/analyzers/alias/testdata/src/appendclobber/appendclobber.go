@@ -460,7 +460,7 @@ func AppendclobberReportedCaptured() {
 		b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
 		keep = a
 	}
-	_ = f
+	f()
 	_ = keep
 }
 
@@ -584,3 +584,148 @@ func AppendclobberSilentCopyThroughFresh() int {
 	b = concatCopyFresh(b, 9)
 	return a[2]
 }
+
+func AppendclobberSilentLenSlice() int {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	b = append(b, 9)
+	_ = b
+	return len(a[2:])
+}
+
+func AppendclobberSilentRangeAssign(lists [][]int) int {
+	a := make([]int, 3, 10)
+	for _, a = range lists {
+	}
+	b := a[:2]
+	b = append(b, 9, 9)
+	_ = b
+	if len(a) < 3 {
+		return 0
+	}
+	return a[2]
+}
+
+func AppendclobberSilentLengthBranch(big bool) int {
+	a := make([]int, 2, 2)
+	if big {
+		a = make([]int, 9)
+		return len(a)
+	}
+	a = append(a, 7)
+	b := a[:2]
+	b = append(b, 9, 9, 9)
+	_ = b
+	return a[2]
+}
+
+func AppendclobberSilentUnfollowedStore() int {
+	a := []int{1, 2, 3, 4}
+	var p *[]int
+	p = &a
+	b := a[:2]
+	b = append(b, 9)
+	(*p)[2] = 5
+	_ = b
+	return a[2]
+}
+
+var appendclobberGP *[]int
+
+func appendclobberReset() { *appendclobberGP = []int{0, 0, 0, 0} }
+
+func AppendclobberSilentGlobalPointer() int {
+	a := []int{1, 2, 3, 4}
+	appendclobberGP = &a
+	b := a[:2]
+	b = append(b, 9)
+	appendclobberReset()
+	_ = b
+	return a[2]
+}
+
+var appendclobberKept *[]int
+
+func appendclobberKeep(p *[]int) { appendclobberKept = p }
+
+func appendclobberResetKept() { *appendclobberKept = []int{0, 0, 0, 0} }
+
+func AppendclobberSilentEscapeBeforeDef() int {
+	a := []int{1, 2, 3, 4}
+	appendclobberKeep(&a)
+	b := a[:2]
+	b = append(b, 9)
+	appendclobberResetKept()
+	_ = b
+	return a[2]
+}
+
+type appendclobberHolder struct{ p *[]int }
+
+func appendclobberResetHolder(h *appendclobberHolder) { *h.p = []int{0, 0, 0, 0} }
+
+func AppendclobberSilentFieldStoreRead(h *appendclobberHolder) int {
+	a := []int{1, 2, 3, 4}
+	h.p = &a
+	b := a[:2]
+	b = append(b, 9)
+	appendclobberResetHolder(h)
+	_ = b
+	return a[2]
+}
+
+func AppendclobberSilentDirectStore() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	a[2] = 5
+	_ = b
+	return a[2]
+}
+
+func AppendclobberReportedBranchStore(c bool) int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	if c {
+		a[2] = 5
+	}
+	return a[2]
+}
+
+func AppendclobberSilentWholeStored() []int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 9)
+	a[2] = 5
+	_ = b
+	return a
+}
+
+func AppendclobberReportedWholePartial() []int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	b = append(b, 8, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	a[2] = 5
+	_ = b
+	return a
+}
+
+func AppendclobberSilentLoopWindow() int {
+	a := make([]int, 10)
+	b := a[:2]
+	for i := 0; i < 3; i++ {
+		b = append(b, i)
+	}
+	return a[5]
+}
+
+func AppendclobberReportedLoopWindow() int {
+	a := make([]int, 10)
+	b := a[:2]
+	for i := 0; i < 3; i++ {
+		b = append(b, i) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	}
+	return a[2]
+}
+

@@ -16,7 +16,7 @@ type appendScope struct {
 	fn          ast.Node
 	info        *types.Info
 	graph       *flow.Graph
-	assigns     map[*types.Var][]*ast.AssignStmt
+	assigns     map[*types.Var][]ast.Node
 	atPos       map[token.Pos]ast.Node
 	copyDests   map[ast.Node]bool
 	clearSlices map[ast.Node]bool
@@ -45,7 +45,7 @@ func newAppendScope(pass *analysis.Pass, fn ast.Node, defs map[*types.Var]sliceD
 		fn:          fn,
 		info:        info,
 		graph:       flow.NewGraph(pass, fn),
-		assigns:     map[*types.Var][]*ast.AssignStmt{},
+		assigns:     map[*types.Var][]ast.Node{},
 		atPos:       map[token.Pos]ast.Node{},
 		plainStores: map[*types.Var]map[*ast.Ident]bool{},
 		clearArgs:   map[*types.Var]map[*ast.Ident]bool{},
@@ -77,19 +77,21 @@ func collectAssignsAndLoops(s *appendScope, info *types.Info, fn ast.Node) {
 			return false
 		}
 		collectLoopSpan(s, n)
-		st, ok := n.(*ast.AssignStmt)
-		if !ok {
+		if st, ok := n.(*ast.AssignStmt); ok {
+			s.atPos[st.Pos()] = st
+			for _, lhs := range st.Lhs {
+				recordAssignTarget(s, info, lhs, st)
+			}
 			return true
 		}
-		s.atPos[st.Pos()] = st
-		for _, lhs := range st.Lhs {
-			recordAssignTarget(s, info, lhs, st)
+		if t, ok := n.(*ast.RangeStmt); ok {
+			recordRangeTarget(s, info, t)
 		}
 		return true
 	})
 }
 
-func recordAssignTarget(s *appendScope, info *types.Info, lhs ast.Expr, st *ast.AssignStmt) {
+func recordAssignTarget(s *appendScope, info *types.Info, lhs ast.Expr, st ast.Node) {
 	id, ok := ast.Unparen(lhs).(*ast.Ident)
 	if !ok {
 		return
@@ -99,31 +101,191 @@ func recordAssignTarget(s *appendScope, info *types.Info, lhs ast.Expr, st *ast.
 	}
 }
 
+func recordRangeTarget(s *appendScope, info *types.Info, t *ast.RangeStmt) {
+	if t.Tok != token.ASSIGN {
+		return
+	}
+	if id, ok := ast.Unparen(rangeAssignKey(t)).(*ast.Ident); ok {
+		if v, ok := varOf(info, id); ok {
+			s.assigns[v] = append(s.assigns[v], t)
+		}
+	}
+	if id, ok := ast.Unparen(rangeAssignValue(t)).(*ast.Ident); ok {
+		if v, ok := varOf(info, id); ok {
+			s.assigns[v] = append(s.assigns[v], t)
+		}
+	}
+}
+
+func rangeAssignKey(t *ast.RangeStmt) ast.Expr {
+	if t.Key == nil {
+		return nil
+	}
+	return t.Key
+}
+
+func rangeAssignValue(t *ast.RangeStmt) ast.Expr {
+	if t.Value == nil {
+		return nil
+	}
+	return t.Value
+}
+
 func untrackedSlices(info *types.Info, fn ast.Node, wanted map[*types.Var]bool, ptrs map[*types.Var]*types.Var) map[*types.Var]bool {
 	out := map[*types.Var]bool{}
+	markClosureTouch(info, fn, wanted, out)
+	markFollowedStore(info, fn, ptrs, out)
+	maps.DeleteFunc(ptrs, func(_ *types.Var, a *types.Var) bool { return out[a] })
+	markAddrDefStore(info, fn, wanted, ptrs, out)
+	return out
+}
+
+func markClosureTouch(info *types.Info, fn ast.Node, wanted, out map[*types.Var]bool) {
 	for a := range wanted {
 		if closureTouchesSlice(info, fn, a) {
 			out[a] = true
 		}
 	}
+}
+
+func markFollowedStore(info *types.Info, fn ast.Node, ptrs map[*types.Var]*types.Var, out map[*types.Var]bool) {
 	for p, a := range ptrs {
 		if !ptrReadOnly(info, fn, p) {
 			out[a] = true
 		}
 	}
-	maps.DeleteFunc(ptrs, func(_ *types.Var, a *types.Var) bool { return out[a] })
+}
+
+func markAddrDefStore(info *types.Info, fn ast.Node, wanted map[*types.Var]bool, ptrs map[*types.Var]*types.Var, out map[*types.Var]bool) {
 	for p, as := range ptrAddrDefs(info, fn, wanted) {
 		if _, ok := ptrs[p]; ok {
 			continue
 		}
-		if ptrReadOnly(info, fn, p) {
+		if addrDefClean(info, fn, p) {
 			continue
 		}
 		for a := range as {
 			out[a] = true
 		}
 	}
-	return out
+}
+
+func addrDefClean(info *types.Info, fn ast.Node, p *types.Var) bool {
+	return ptrReadOnly(info, fn, p) && !ptrElementStored(info, fn, p)
+}
+
+func addrTakenReachesAppend(s *appendScope, a *types.Var, st *ast.AssignStmt) bool {
+	body := flow.Body(s.fn)
+	if body == nil || s.graph == nil {
+		return false
+	}
+	found := false
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if found {
+			return false
+		}
+		if isAddrReachesNode(s, stack, n, a, st) {
+			found = true
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return found
+}
+
+func isAddrReachesNode(s *appendScope, stack []ast.Node, n ast.Node, a *types.Var, st *ast.AssignStmt) bool {
+	u, ok := n.(*ast.UnaryExpr)
+	if !ok || u.Op != token.AND || !identIsVar(s.info, u.X, a) {
+		return false
+	}
+	return addrDisallowedReaches(s, stack, u, a, st)
+}
+
+func addrDisallowedReaches(s *appendScope, stack []ast.Node, u *ast.UnaryExpr, a *types.Var, st *ast.AssignStmt) bool {
+	if addrAllowedFollowed(s, stack, u, a) {
+		return false
+	}
+	return s.graph.Reaches(u, st, nil)
+}
+
+func addrAllowedFollowed(s *appendScope, stack []ast.Node, u *ast.UnaryExpr, a *types.Var) bool {
+	if len(stack) == 0 {
+		return false
+	}
+	top := stack[len(stack)-1]
+	if st, ok := top.(*ast.AssignStmt); ok {
+		return assignAddrFollowed(s, st, u, a)
+	}
+	if spec, ok := top.(*ast.ValueSpec); ok {
+		return valueAddrFollowed(s, spec, u, a)
+	}
+	return false
+}
+
+func assignAddrFollowed(s *appendScope, st *ast.AssignStmt, u *ast.UnaryExpr, a *types.Var) bool {
+	p, ok := assignLHSPointer(s, st, u)
+	if !ok {
+		return false
+	}
+	if p == nil {
+		return true
+	}
+	if q, ok := s.ptrs[p]; ok && q == a && st.Tok == token.DEFINE {
+		return true
+	}
+	return isBodyLocal(s.fn, p) && addrDefClean(s.info, s.fn, p)
+}
+
+func assignLHSPointer(s *appendScope, st *ast.AssignStmt, u *ast.UnaryExpr) (*types.Var, bool) {
+	if !assignShapeMatches(st, u) {
+		return nil, false
+	}
+	if isBlankAssign(st) {
+		return nil, true
+	}
+	id, ok := ast.Unparen(st.Lhs[0]).(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	return varOf(s.info, id)
+}
+
+func assignShapeMatches(st *ast.AssignStmt, u *ast.UnaryExpr) bool {
+	if len(st.Lhs) != 1 || len(st.Rhs) != 1 {
+		return false
+	}
+	return ast.Unparen(st.Rhs[0]) == ast.Node(u)
+}
+
+func isBlankAssign(st *ast.AssignStmt) bool {
+	id, ok := ast.Unparen(st.Lhs[0]).(*ast.Ident)
+	return ok && id.Name == "_"
+}
+
+func valueAddrFollowed(s *appendScope, spec *ast.ValueSpec, u *ast.UnaryExpr, a *types.Var) bool {
+	if len(spec.Names) != 1 || len(spec.Values) != 1 {
+		return false
+	}
+	if ast.Unparen(spec.Values[0]) != ast.Node(u) {
+		return false
+	}
+	p, ok := varOf(s.info, spec.Names[0])
+	if !ok {
+		return false
+	}
+	if q, ok := s.ptrs[p]; ok && q == a {
+		return true
+	}
+	return isBodyLocal(s.fn, p) && addrDefClean(s.info, s.fn, p)
 }
 
 func closureTouchesSlice(info *types.Info, fn ast.Node, a *types.Var) bool {
@@ -202,7 +364,12 @@ func collectLoopSpan(s *appendScope, n ast.Node) {
 }
 
 func collectScopeReads(s *appendScope, wanted map[*types.Var]bool) {
+	var stack []ast.Node
 	ast.Inspect(flow.Body(s.fn), func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -210,12 +377,31 @@ func collectScopeReads(s *appendScope, wanted map[*types.Var]bool) {
 		case *ast.IndexExpr:
 			collectScopeIndex(s, wanted, t)
 		case *ast.SliceExpr:
-			collectScopeSlice(s, wanted, t)
+			if !isDirectLenCapArg(s, stack, t) {
+				collectScopeSlice(s, wanted, t)
+			}
 		default:
 			collectScopeWhole(s, wanted, n)
 		}
+		stack = append(stack, n)
 		return true
 	})
+}
+
+func isDirectLenCapArg(s *appendScope, stack []ast.Node, t *ast.SliceExpr) bool {
+	if len(stack) == 0 {
+		return false
+	}
+	call, ok := stack[len(stack)-1].(*ast.CallExpr)
+	if !ok || !isLenCapCall(s.info, call) {
+		return false
+	}
+	for _, arg := range call.Args {
+		if ast.Unparen(arg) == ast.Node(t) {
+			return true
+		}
+	}
+	return false
 }
 
 func collectScopeIndex(s *appendScope, wanted map[*types.Var]bool, t *ast.IndexExpr) {
@@ -478,9 +664,48 @@ func enclosingLoopCached(s *appendScope, target *ast.AssignStmt) ast.Node {
 	return best
 }
 
-func clobberEnd(scope *appendScope, st *ast.AssignStmt, bound, appended int) int {
-	if enclosingLoopCached(scope, st) != nil {
+func clobberEnd(scope *appendScope, st *ast.AssignStmt, def sliceDef, appended int) int {
+	loop := enclosingLoopCached(scope, st)
+	if loop == nil {
+		return def.high + appended
+	}
+	if rangeOverSlice(scope.info, loop, def.a) {
 		return 1 << 30
 	}
-	return bound + appended
+	if forCondLenOf(scope.info, loop, def.a) {
+		return 1 << 30
+	}
+	return def.high + appended
+}
+
+func rangeOverSlice(info *types.Info, loop ast.Node, a *types.Var) bool {
+	t, ok := loop.(*ast.RangeStmt)
+	if !ok || t.X == nil {
+		return false
+	}
+	v, ok := identVar(info, t.X)
+	return ok && v == a
+}
+
+func forCondLenOf(info *types.Info, loop ast.Node, a *types.Var) bool {
+	t, ok := loop.(*ast.ForStmt)
+	if !ok || t.Cond == nil {
+		return false
+	}
+	return condMentionsLen(info, t.Cond, a)
+}
+
+func condMentionsLen(info *types.Info, cond ast.Expr, a *types.Var) bool {
+	found := false
+	ast.Inspect(cond, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if e, ok := n.(ast.Expr); ok && isLenOf(info, e, a) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
