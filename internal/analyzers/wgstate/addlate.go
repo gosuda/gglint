@@ -20,7 +20,7 @@ import (
 
 var addlateAnalyzer = &analysis.Analyzer{
 	Name:     "addlate",
-	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable that can hold it at that call; an Add in a go statement never counts as earlier, and an Add in a defer statement in the function itself does not, while a defer inside a called literal does; a literal that receives or sends, ranges over a channel, or locks or waits is not reported, because that wait can order the Add; the check cannot know the capacity of every channel, so it stays silent for a buffered channel too; a call to another package or through a function value is assumed not to wait; a call passed the WaitGroup counts unless it is a same-package function whose body neither Adds on the receiving parameter nor hands it on",
+	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable that can hold it at that call; an Add in a go statement never counts as earlier, and an Add in a defer statement in the function itself does not, while a defer inside a called literal does; a literal that receives or sends, ranges over a channel, or locks or waits is not reported, because that wait can order the Add; the check cannot know the capacity of every channel, so it stays silent for a buffered channel too; a call to another package or through a function value is assumed not to wait; a call passed the WaitGroup counts unless it is a same-package function whose body neither Adds on the receiving parameter directly, through an alias, or inside a literal, nor hands it on",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runAddlate,
 }
@@ -524,28 +524,27 @@ func calleeUsesParamForAdd(pass *analysis.Pass, decl *ast.FuncDecl, call *ast.Ca
 		if !ok || rk != k {
 			continue
 		}
-		if paramAddsOrHandsOff(pass, decl.Body, pv) {
+		if paramAddsOrHandsOff(pass, decl, pv) {
 			return true
 		}
 	}
 	return false
 }
 
-func paramAddsOrHandsOff(pass *analysis.Pass, body *ast.BlockStmt, pv *types.Var) bool {
+func paramAddsOrHandsOff(pass *analysis.Pass, decl *ast.FuncDecl, pv *types.Var) bool {
 	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		switch n.(type) {
-		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
+		if _, ok := n.(*ast.GoStmt); ok {
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if addsOnParam(pass, call, pv) || passesParam(pass, call, pv) {
+		if addsOnParam(pass, decl, call, pv) || passesParam(pass, call, pv) {
 			found = true
 			return false
 		}
@@ -554,9 +553,109 @@ func paramAddsOrHandsOff(pass *analysis.Pass, body *ast.BlockStmt, pv *types.Var
 	return found
 }
 
-func addsOnParam(pass *analysis.Pass, call *ast.CallExpr, pv *types.Var) bool {
+func addsOnParam(pass *analysis.Pass, decl *ast.FuncDecl, call *ast.CallExpr, pv *types.Var) bool {
 	ak, _, ok := wgKey(pass.TypesInfo, call, "Add")
-	return ok && ak.Root == pv
+	if !ok {
+		return false
+	}
+	if ak.Root == pv {
+		return true
+	}
+	v, ok := ak.Root.(*types.Var)
+	return ok && aliasesParam(pass, decl, v, pv, call.Pos()) && isWGPointer(v.Type()) && isWGPointer(pv.Type())
+}
+
+func isWGPointer(typ types.Type) bool {
+	ptr, ok := typ.(*types.Pointer)
+	if !ok {
+		return false
+	}
+	named, ok := ptr.Elem().(*types.Named)
+	return ok && named.Obj().Name() == "WaitGroup" && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == "sync"
+}
+
+func aliasesParam(pass *analysis.Pass, decl *ast.FuncDecl, v, pv *types.Var, usePos token.Pos) bool {
+	seen := map[*types.Var]bool{}
+	cur := v
+	before := usePos
+	for cur != nil && !seen[cur] {
+		seen[cur] = true
+		r := latestInitKeyBefore(pass, decl, cur, before)
+		if !r.found {
+			return false
+		}
+		if r.key.Root == pv {
+			return true
+		}
+		next, ok := r.key.Root.(*types.Var)
+		if !ok || !flow.IsLocal(pass.TypesInfo, decl, next) {
+			return false
+		}
+		cur, before = next, r.pos
+	}
+	return false
+}
+
+type initResult struct {
+	key   flow.Key
+	pos   token.Pos
+	found bool
+}
+
+type initScanner struct {
+	pass   *analysis.Pass
+	target *types.Var
+	before token.Pos
+	best   initResult
+}
+
+func (s *initScanner) step(n ast.Node) bool {
+	if _, ok := n.(*ast.GoStmt); ok {
+		return false
+	}
+	if stmt, ok := n.(*ast.AssignStmt); ok {
+		s.take(assignInitBefore(s.pass, stmt, s.target, s.before))
+		return true
+	}
+	if spec, ok := n.(*ast.ValueSpec); ok {
+		s.take(valueInitBefore(s.pass, spec, s.target, s.before))
+	}
+	return true
+}
+
+func (s *initScanner) take(r initResult) {
+	if r.found && (!s.best.found || r.pos > s.best.pos) {
+		s.best = r
+	}
+}
+
+func latestInitKeyBefore(pass *analysis.Pass, decl *ast.FuncDecl, v *types.Var, before token.Pos) initResult {
+	scanner := &initScanner{pass: pass, target: v, before: before}
+	ast.Inspect(decl.Body, scanner.step)
+	return scanner.best
+}
+
+func assignInitBefore(pass *analysis.Pass, s *ast.AssignStmt, v *types.Var, before token.Pos) initResult {
+	if len(s.Lhs) != 1 || len(s.Rhs) != 1 || s.Pos() >= before {
+		return initResult{}
+	}
+	id, ok := s.Lhs[0].(*ast.Ident)
+	if !ok || pass.TypesInfo.ObjectOf(id) != v {
+		return initResult{}
+	}
+	k, ok := flow.KeyOf(pass.TypesInfo, s.Rhs[0])
+	return initResult{key: k, pos: s.Pos(), found: ok}
+}
+
+func valueInitBefore(pass *analysis.Pass, s *ast.ValueSpec, v *types.Var, before token.Pos) initResult {
+	if len(s.Names) != 1 || len(s.Values) != 1 || s.Pos() >= before {
+		return initResult{}
+	}
+	if pass.TypesInfo.ObjectOf(s.Names[0]) != v {
+		return initResult{}
+	}
+	k, ok := flow.KeyOf(pass.TypesInfo, s.Values[0])
+	return initResult{key: k, pos: s.Pos(), found: ok}
 }
 
 func passesParam(pass *analysis.Pass, call *ast.CallExpr, pv *types.Var) bool {
