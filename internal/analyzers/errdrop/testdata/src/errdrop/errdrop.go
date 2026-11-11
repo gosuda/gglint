@@ -992,3 +992,25 @@ func outSilentFieldStoreOnly(b []byte) error {
 	c.Port = 80
 	return nil
 }
+
+func outReportedPointerFieldStore(b []byte) error {
+	var p *Config
+	json.Unmarshal(b, &p) // want "p is read after the error of json.Unmarshal is dropped"
+	p.Port = 80
+	return nil
+}
+
+type errdropInner struct {
+	X int
+}
+
+type errdropOuter struct {
+	In *errdropInner
+}
+
+func outReportedNestedPointerFieldStore(b []byte) error {
+	var o errdropOuter
+	json.Unmarshal(b, &o) // want "o is read after the error of json.Unmarshal is dropped"
+	o.In.X = 1
+	return nil
+}

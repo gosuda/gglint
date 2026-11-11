@@ -18,6 +18,7 @@ type indexedUse struct {
 }
 
 type funcIndex struct {
+	info       *types.Info
 	uses       map[*types.Var][]indexedUse
 	assigns    map[*types.Var][]token.Pos
 	pathWrites map[*types.Var][]token.Pos
@@ -26,6 +27,7 @@ type funcIndex struct {
 
 func buildFuncIndex(pass *analysis.Pass, fn inspector.Cursor) *funcIndex {
 	idx := &funcIndex{
+		info:       pass.TypesInfo,
 		uses:       map[*types.Var][]indexedUse{},
 		assigns:    map[*types.Var][]token.Pos{},
 		pathWrites: map[*types.Var][]token.Pos{},
@@ -241,14 +243,27 @@ func (idx *funcIndex) firstRead(v *types.Var, after token.Pos) (inspector.Cursor
 	list := idx.uses[v]
 	start := sort.Search(len(list), func(i int) bool { return list[i].pos > after })
 	for i := start; i < len(list); i++ {
-		if !isFieldStore(list[i].cur) {
+		if !isFieldStore(idx.info, v, list[i].cur) {
 			return list[i].cur, true
 		}
 	}
 	return inspector.Cursor{}, false
 }
 
-func isFieldStore(cur inspector.Cursor) bool {
+func rootIsPointer(v *types.Var) bool {
+	_, ok := types.Unalias(v.Type()).Underlying().(*types.Pointer)
+	return ok
+}
+
+func isDirectField(info *types.Info, sel *ast.SelectorExpr) bool {
+	s, ok := info.Selections[sel]
+	return ok && !s.Indirect()
+}
+
+func isFieldStore(info *types.Info, v *types.Var, cur inspector.Cursor) bool {
+	if rootIsPointer(v) {
+		return false
+	}
 	child := cur.Node()
 	up := cur
 	seen := false
@@ -256,6 +271,9 @@ func isFieldStore(cur inspector.Cursor) bool {
 		parent := skipParens(up.Parent())
 		if sel, ok := parent.Node().(*ast.SelectorExpr); ok {
 			if ast.Unparen(sel.X) != child {
+				return false
+			}
+			if !isDirectField(info, sel) {
 				return false
 			}
 			seen = true
