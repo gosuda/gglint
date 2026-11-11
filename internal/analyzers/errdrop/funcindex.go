@@ -240,37 +240,53 @@ func (idx *funcIndex) firstUse(v *types.Var, after token.Pos) (inspector.Cursor,
 	return list[i].cur, true
 }
 
-type freshPaths map[string]bool
+type freshMark struct {
+	path  string
+	end   token.Pos
+	block ast.Node
+}
 
-func (f freshPaths) covers(path string) bool {
-	if f[""] {
+func pathHasPrefix(path, mark string) bool {
+	if mark == "" {
 		return true
 	}
-	if path == "" {
-		return false
+	return path == mark || strings.HasPrefix(path, mark+".")
+}
+
+func enclosingScope(cur inspector.Cursor) ast.Node {
+	for scope := range cur.Enclosing((*ast.BlockStmt)(nil), (*ast.CaseClause)(nil), (*ast.CommClause)(nil)) {
+		return scope.Node()
 	}
-	current := ""
-	for field := range strings.SplitSeq(path, ".") {
-		if current == "" {
-			current = field
-		} else {
-			current += "." + field
-		}
-		if f[current] {
+	return nil
+}
+
+func scopeEncloses(block ast.Node, cur inspector.Cursor) bool {
+	if block == nil {
+		return true
+	}
+	for scope := range cur.Enclosing((*ast.BlockStmt)(nil), (*ast.CaseClause)(nil), (*ast.CommClause)(nil)) {
+		if scope.Node() == block {
 			return true
 		}
 	}
 	return false
 }
 
-func (f freshPaths) mark(path string) {
-	f[path] = true
+func freshCovers(fresh []freshMark, path string, pos token.Pos, cur inspector.Cursor) bool {
+	for _, m := range fresh {
+		if m.end < pos && scopeEncloses(m.block, cur) && pathHasPrefix(path, m.path) {
+			return true
+		}
+	}
+	return false
 }
 
 type mentionPath struct {
 	path   string
 	derefs []string
 	store  bool
+	end    token.Pos
+	block  ast.Node
 }
 
 func rootIsPointer(v *types.Var) bool {
@@ -312,16 +328,18 @@ func pathOfMention(info *types.Info, root *types.Var, cur inspector.Cursor) ment
 	if rootIsPointer(root) && path != "" {
 		derefs = append(derefs, "")
 	}
-	store := false
-	if as, ok := skipParens(up.Parent()).Node().(*ast.AssignStmt); ok {
-		store = lhsStoresField(as, child)
+	mention := mentionPath{path: path, derefs: derefs}
+	if as, ok := skipParens(up.Parent()).Node().(*ast.AssignStmt); ok && lhsStoresField(as, child) {
+		mention.store = true
+		mention.end = as.End()
+		mention.block = enclosingScope(cur)
 	}
-	return mentionPath{path: path, derefs: derefs, store: store}
+	return mention
 }
 
-func storeReadsDecode(store mentionPath, fresh freshPaths) bool {
+func storeReadsDecode(store mentionPath, fresh []freshMark, pos token.Pos, cur inspector.Cursor) bool {
 	for _, d := range store.derefs {
-		if !fresh.covers(d) {
+		if !freshCovers(fresh, d, pos, cur) {
 			return true
 		}
 	}
@@ -331,17 +349,17 @@ func storeReadsDecode(store mentionPath, fresh freshPaths) bool {
 func (idx *funcIndex) firstRead(v *types.Var, after token.Pos) (inspector.Cursor, bool) {
 	list := idx.uses[v]
 	start := sort.Search(len(list), func(i int) bool { return list[i].pos > after })
-	fresh := freshPaths{}
+	var fresh []freshMark
 	for i := start; i < len(list); i++ {
 		mention := pathOfMention(idx.info, v, list[i].cur)
 		if mention.store {
-			if storeReadsDecode(mention, fresh) {
+			if storeReadsDecode(mention, fresh, list[i].pos, list[i].cur) {
 				return list[i].cur, true
 			}
-			fresh.mark(mention.path)
+			fresh = append(fresh, freshMark{path: mention.path, end: mention.end, block: mention.block})
 			continue
 		}
-		if fresh.covers(mention.path) {
+		if freshCovers(fresh, mention.path, list[i].pos, list[i].cur) {
 			continue
 		}
 		return list[i].cur, true

@@ -38,13 +38,23 @@ func isNilSafeMethod(pass *analysis.Pass, fn *ast.FuncDecl, obj *types.Func) boo
 	}
 	recv := sig.Recv()
 	if recv.Name() == "" {
-		return false
+		return true
 	}
+	if !bodyDerefsRecv(pass, fn.Body, recv) {
+		return true
+	}
+	return hasNilGuard(pass, fn, recv)
+}
+
+func hasNilGuard(pass *analysis.Pass, fn *ast.FuncDecl, recv *types.Var) bool {
 	guard, ok := firstIf(fn.Body)
 	if !ok {
 		return false
 	}
 	if !endsInReturn(guard.Body) {
+		return false
+	}
+	if guard.Init != nil && nodeDerefsRecv(pass, guard.Init, recv) {
 		return false
 	}
 	if bodyDerefsRecv(pass, guard.Body, recv) {
@@ -88,8 +98,12 @@ func guardsNil(pass *analysis.Pass, cond ast.Expr, recv *types.Var) bool {
 }
 
 func bodyDerefsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+	return nodeDerefsRecv(pass, body, recv)
+}
+
+func nodeDerefsRecv(pass *analysis.Pass, n ast.Node, recv *types.Var) bool {
 	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
+	ast.Inspect(n, func(n ast.Node) bool {
 		if found {
 			return false
 		}

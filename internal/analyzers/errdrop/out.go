@@ -185,6 +185,9 @@ func outCandidate(pass *analysis.Pass, call *ast.CallExpr, memo *outMemo) (found
 }
 
 func decodeTarget(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
+	if isVariadicAny(pass, call, idx) {
+		return isScanOut(pass, call)
+	}
 	pt, ok := callParamType(pass, call, idx)
 	if !ok {
 		return false
@@ -196,6 +199,41 @@ func decodeTarget(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
 		return true
 	}
 	return isWriterInterface(pt)
+}
+
+func isVariadicAny(pass *analysis.Pass, call *ast.CallExpr, idx int) bool {
+	fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fn == nil {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Params() == nil || !sig.Variadic() {
+		return false
+	}
+	n := sig.Params().Len()
+	if idx < n-1 {
+		return false
+	}
+	slice, ok := types.Unalias(sig.Params().At(n - 1).Type()).(*types.Slice)
+	if !ok {
+		return false
+	}
+	return isEmptyInterface(slice.Elem())
+}
+
+func isScanOut(pass *analysis.Pass, call *ast.CallExpr) bool {
+	fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fn == nil || fn.Pkg() == nil {
+		return false
+	}
+	if fn.Pkg().Path() != "fmt" {
+		return false
+	}
+	switch fn.Name() {
+	case "Scan", "Scanf", "Scanln", "Sscan", "Sscanf", "Sscanln", "Fscan", "Fscanf", "Fscanln":
+		return true
+	}
+	return false
 }
 
 func isEmptyInterface(t types.Type) bool {

@@ -17,16 +17,17 @@ import (
 const closeMethodName = "Close"
 
 type durableMemo struct {
-	fn     inspector.Cursor
-	method map[*types.Var][]token.Pos
-	arg    map[*types.Var][]token.Pos
-	opened map[*types.Var]bool
-	stored map[*types.Var]bool
-	used   map[*types.Var]bool
+	fn        inspector.Cursor
+	method    map[*types.Var][]token.Pos
+	arg       map[*types.Var][]token.Pos
+	opened    map[*types.Var]bool
+	storedVar map[*types.Var][]*types.Var
+	called    map[*types.Var]bool
+	used      map[*types.Var]bool
 }
 
 func buildDurableMemo(pass *analysis.Pass, fn inspector.Cursor) *durableMemo {
-	memo := &durableMemo{fn: fn, method: map[*types.Var][]token.Pos{}, arg: map[*types.Var][]token.Pos{}, opened: map[*types.Var]bool{}, stored: map[*types.Var]bool{}, used: map[*types.Var]bool{}}
+	memo := &durableMemo{fn: fn, method: map[*types.Var][]token.Pos{}, arg: map[*types.Var][]token.Pos{}, opened: map[*types.Var]bool{}, storedVar: map[*types.Var][]*types.Var{}, called: map[*types.Var]bool{}, used: map[*types.Var]bool{}}
 	collectDurableCalls(pass, fn, memo)
 	collectDurableAssigns(pass, fn, memo)
 	collectDurableSpecs(pass, fn, memo)
@@ -45,6 +46,7 @@ func collectDurableCalls(pass *analysis.Pass, fn inspector.Cursor, memo *durable
 func noteDurableCall(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, memo *durableMemo) {
 	noteMethodWrite(pass, call, memo)
 	noteArgWrite(pass, call, memo)
+	noteCalledOn(pass, call, memo)
 	noteUsedClose(pass, cur, call, memo)
 }
 
@@ -85,6 +87,20 @@ func noteArgWrite(pass *analysis.Pass, call *ast.CallExpr, memo *durableMemo) {
 			continue
 		}
 		memo.arg[v] = append(memo.arg[v], call.Pos())
+	}
+}
+
+func noteCalledOn(pass *analysis.Pass, call *ast.CallExpr, memo *durableMemo) {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	id, ok := ast.Unparen(sel.X).(*ast.Ident)
+	if !ok {
+		return
+	}
+	if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
+		memo.called[v] = true
 	}
 }
 
@@ -148,8 +164,15 @@ func noteStoredAssign(pass *analysis.Pass, as *ast.AssignStmt, lhs, rhs ast.Expr
 	if !ok {
 		return
 	}
-	if pass.TypesInfo.TypeOf(lhs) != nil && isWriterInterface(pass.TypesInfo.TypeOf(lhs)) {
-		memo.stored[v] = true
+	if pass.TypesInfo.TypeOf(lhs) == nil || !isWriterInterface(pass.TypesInfo.TypeOf(lhs)) {
+		return
+	}
+	wid, ok := ast.Unparen(lhs).(*ast.Ident)
+	if !ok {
+		return
+	}
+	if w, ok := pass.TypesInfo.ObjectOf(wid).(*types.Var); ok {
+		memo.storedVar[v] = append(memo.storedVar[v], w)
 	}
 }
 
@@ -183,7 +206,7 @@ func noteDurableSpec(pass *analysis.Pass, vs *ast.ValueSpec, memo *durableMemo) 
 		if !ok || !isWriterInterface(obj.Type()) {
 			continue
 		}
-		memo.stored[x] = true
+		memo.storedVar[x] = append(memo.storedVar[x], obj)
 	}
 }
 
@@ -276,7 +299,19 @@ func writtenExcept(x *types.Var, ignore *ast.CallExpr, memo *durableMemo) bool {
 	if hasArgWrite(x, ignore, memo) {
 		return true
 	}
-	return memo.opened[x] && memo.stored[x]
+	return storedVarWritten(x, memo)
+}
+
+func storedVarWritten(x *types.Var, memo *durableMemo) bool {
+	if !memo.opened[x] {
+		return false
+	}
+	for _, w := range memo.storedVar[x] {
+		if memo.called[w] || len(memo.arg[w]) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func hasMethodWrite(x *types.Var, ignore *ast.CallExpr, memo *durableMemo) bool {

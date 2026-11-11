@@ -160,7 +160,7 @@ func isDeref(pass *analysis.Pass, cur inspector.Cursor, v *types.Var, safe map[*
 		if !unparenIdentEquals(p.X, id) {
 			return false
 		}
-		if valueRecvNonderef(pass, p) {
+		if methodCallNonderef(pass, p, v) {
 			return false
 		}
 		return !isNilSafeCall(pass, up, p, safe)
@@ -229,6 +229,18 @@ func valueRecvNonderef(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 		return true
 	}
 	return false
+}
+
+func methodCallNonderef(pass *analysis.Pass, sel *ast.SelectorExpr, v *types.Var) bool {
+	return valueRecvNonderef(pass, sel) || valueVarNonderef(v)
+}
+
+func valueVarNonderef(v *types.Var) bool {
+	switch types.Unalias(v.Type()).Underlying().(type) {
+	case *types.Pointer, *types.Interface:
+		return false
+	}
+	return true
 }
 
 func unparenIdentEquals(e ast.Expr, id *ast.Ident) bool {

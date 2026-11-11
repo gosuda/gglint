@@ -1029,3 +1029,158 @@ func outReportedWholeAfterPartialStore(b []byte) errdropOuter {
 	o.In = &errdropInner{}
 	return o
 }
+
+func outReportedSelfRead(b []byte) error {
+	var c Config
+	json.Unmarshal(b, &c) // want "c is read after the error of json.Unmarshal is dropped"
+	c.Port = c.Port + 1
+	return nil
+}
+
+func outReportedReseatSelfRead(b []byte) error {
+	var o errdropOuter
+	json.Unmarshal(b, &o) // want "o is read after the error of json.Unmarshal is dropped"
+	o.In = &errdropInner{X: o.In.X}
+	return nil
+}
+
+func outReportedConditionalReseat(b []byte, bad bool) error {
+	var o errdropOuter
+	json.Unmarshal(b, &o) // want "o is read after the error of json.Unmarshal is dropped"
+	if bad {
+		o.In = &errdropInner{}
+	}
+	o.In.X = 1
+	return nil
+}
+
+type noRecvT struct{ name string }
+
+func (*noRecvT) Kind() string { return "t" }
+
+func kindOfNoRecv(s string) (*noRecvT, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &noRecvT{}, nil
+}
+
+func valueSilentNoRecvTouch(s string) string {
+	t, _ := kindOfNoRecv(s)
+	return t.Kind()
+}
+
+type noTouchT struct{ name string }
+
+func (t *noTouchT) Label() string { return "x" }
+
+func loadNoTouch(s string) (*noTouchT, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &noTouchT{}, nil
+}
+
+func valueSilentNamedNoTouch(s string) string {
+	t, _ := loadNoTouch(s)
+	return t.Label()
+}
+
+type initDerefT struct{ n int }
+
+func (t *initDerefT) Get() int {
+	if n := t.n; t == nil {
+		return n
+	}
+	return t.n
+}
+
+func loadInitDeref(s string) (*initDerefT, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &initDerefT{}, nil
+}
+
+func valueReportedGuardInitDeref(s string) int {
+	t, _ := loadInitDeref(s) // want "t is used after the error of loadInitDeref is dropped"
+	return t.Get()
+}
+
+type errdropSet map[string]struct{}
+
+func (s *errdropSet) Len() int { return len(*s) }
+
+func loadSet(p string) (errdropSet, error) {
+	if p == "" {
+		return nil, errors.New("empty")
+	}
+	return errdropSet{}, nil
+}
+
+func valueSilentMapMethod(p string) int {
+	s, _ := loadSet(p)
+	return s.Len()
+}
+
+func outSilentPrintf(x int) int {
+	var n int
+	fmt.Printf("n lives at %p\n", &n)
+	return n + x
+}
+
+func outReportedSscanf(s string) int {
+	var n int
+	fmt.Sscanf(s, "%d", &n) // want "n is read after the error of fmt.Sscanf is dropped"
+	return n
+}
+
+func durableSilentStoredUnused(p string) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var w io.Writer = f
+	_ = w
+	return nil
+}
+
+func outSilentIncDecBefore(b []byte) Config {
+	var c Config
+	c.Port++
+	json.Unmarshal(b, &c)
+	return c
+}
+
+type indexConfig struct {
+	Ports [2]int
+}
+
+func outSilentArrayIndexBefore(b []byte) indexConfig {
+	var c indexConfig
+	c.Ports[0] = 8080
+	json.Unmarshal(b, &c)
+	return c
+}
+
+type fallthroughT struct{ n int }
+
+func (t *fallthroughT) Get() int {
+	if t == nil {
+		println("nil")
+	}
+	return t.n
+}
+
+func loadFallthrough(s string) (*fallthroughT, error) {
+	if s == "" {
+		return nil, errors.New("empty")
+	}
+	return &fallthroughT{}, nil
+}
+
+func valueReportedGuardFallthrough(s string) int {
+	t, _ := loadFallthrough(s) // want "t is used after the error of loadFallthrough is dropped"
+	return t.Get()
+}
