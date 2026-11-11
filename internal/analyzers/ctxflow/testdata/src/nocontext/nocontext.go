@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"os/exec"
@@ -322,10 +323,29 @@ func nocontextSilentManualCancel(ctx context.Context) error {
 
 func nocontextReportedDoneWithoutTouch(ctx context.Context) error {
 	cmd := exec.Command("sleep", "10") // want "exec\\.Command cannot be cancelled"
+	if err := cmd.Start(); err != nil {
+		return err
+	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}
+
+func nocontextReportedDoneOnlyLogs(ctx context.Context) error {
+	cmd := exec.Command("sleep", "10") // want "exec\\.Command cannot be cancelled"
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-ctx.Done():
+		log.Println("cancelled", cmd.Path)
 		return ctx.Err()
 	case err := <-done:
 		return err

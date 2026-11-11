@@ -86,14 +86,14 @@ func resultInDoneClause(pass *analysis.Pass, fn inspector.Cursor, target flow.Ke
 		if !ok {
 			continue
 		}
-		if selectMentionsResult(pass, stmt, target) {
+		if selectStopsWork(pass, stmt, target) {
 			return true
 		}
 	}
 	return false
 }
 
-func selectMentionsResult(pass *analysis.Pass, stmt *ast.SelectStmt, target flow.Key) bool {
+func selectStopsWork(pass *analysis.Pass, stmt *ast.SelectStmt, target flow.Key) bool {
 	for _, s := range stmt.Body.List {
 		clause, ok := s.(*ast.CommClause)
 		if !ok || clause.Comm == nil {
@@ -102,40 +102,57 @@ func selectMentionsResult(pass *analysis.Pass, stmt *ast.SelectStmt, target flow
 		if !receivesDone(pass.TypesInfo, clause.Comm) {
 			continue
 		}
-		if mentionsResultKey(pass.TypesInfo, clause.Body, target) {
+		if doneClauseStopsWork(pass.TypesInfo, clause.Body, target) {
 			return true
 		}
 	}
 	return false
 }
 
-type resultKeySearch struct {
+type resultStopSearch struct {
 	info   *types.Info
 	target flow.Key
 	found  bool
 }
 
-func (s *resultKeySearch) visit(n ast.Node) bool {
+func (s *resultStopSearch) visit(n ast.Node) bool {
 	if s.found {
 		return false
 	}
-	e, ok := n.(ast.Expr)
+	c, ok := n.(*ast.CallExpr)
 	if !ok {
 		return true
 	}
-	k, ok := flow.KeyOf(s.info, e)
-	if !ok || k.Root != s.target.Root {
-		return true
-	}
-	if s.target.Path == "" || k.Path == s.target.Path || strings.HasPrefix(k.Path, s.target.Path+".") {
+	if s.stopsWork(c) {
 		s.found = true
 		return false
 	}
 	return true
 }
 
-func mentionsResultKey(info *types.Info, body []ast.Stmt, target flow.Key) bool {
-	s := &resultKeySearch{info: info, target: target}
+func (s *resultStopSearch) stopsWork(c *ast.CallExpr) bool {
+	if sel, ok := stripParens(c.Fun).(*ast.SelectorExpr); ok {
+		if k, ok := flow.KeyOf(s.info, sel.X); ok && keyBelowOrEqual(k, s.target) {
+			return true
+		}
+	}
+	for _, arg := range c.Args {
+		if k, ok := flow.KeyOf(s.info, arg); ok && k == s.target {
+			return true
+		}
+	}
+	return false
+}
+
+func keyBelowOrEqual(got, target flow.Key) bool {
+	if got.Root != target.Root {
+		return false
+	}
+	return target.Path == "" || got.Path == target.Path || strings.HasPrefix(got.Path, target.Path+".")
+}
+
+func doneClauseStopsWork(info *types.Info, body []ast.Stmt, target flow.Key) bool {
+	s := &resultStopSearch{info: info, target: target}
 	for _, stmt := range body {
 		ast.Inspect(stmt, s.visit)
 		if s.found {
