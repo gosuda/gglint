@@ -408,7 +408,47 @@ func freeTempTarget(pass *analysis.Pass, scope ast.Node, id *ast.Ident, v *types
 	if !ok {
 		return false
 	}
-	return freeConvOf(pass, def, v) || exactVar(pass, def, v)
+	if !freeConvOf(pass, def, v) && !exactVar(pass, def, v) {
+		return false
+	}
+	return !tempSourceReassigned(pass, scope, def, v)
+}
+
+func tempSourceReassigned(pass *analysis.Pass, scope ast.Node, def ast.Expr, v *types.Var) bool {
+	s := &tempReassignScan{pass: pass, scope: scope, def: def, v: v}
+	ast.Inspect(scope, s.visit)
+	return s.reassigned
+}
+
+type tempReassignScan struct {
+	pass       *analysis.Pass
+	scope      ast.Node
+	def        ast.Expr
+	v          *types.Var
+	reassigned bool
+}
+
+func (s *tempReassignScan) visit(n ast.Node) bool {
+	if s.reassigned || freeTempSkip(n, s.scope) {
+		return false
+	}
+	if tempWritesAfter(s.pass, n, s.def, s.v) {
+		s.reassigned = true
+	}
+	return !s.reassigned
+}
+
+func tempWritesAfter(pass *analysis.Pass, n ast.Node, def ast.Expr, v *types.Var) bool {
+	if n == nil || n.Pos() <= def.Pos() {
+		return false
+	}
+	if as, ok := n.(*ast.AssignStmt); ok {
+		return lhsAssigns(pass, as.Lhs, v)
+	}
+	if r, ok := n.(*ast.RangeStmt); ok {
+		return rangeWritesVar(pass, r, v)
+	}
+	return false
 }
 
 type freeTempCache struct {
@@ -430,24 +470,38 @@ func (c *freeTempCache) forScope(scope ast.Node) map[*types.Var]ast.Expr {
 }
 
 func buildFreeTempIndex(pass *analysis.Pass, scope ast.Node) map[*types.Var]ast.Expr {
-	rhsOf := map[*types.Var]ast.Expr{}
-	bad := map[*types.Var]bool{}
-	ast.Inspect(scope, func(n ast.Node) bool {
-		if freeTempSkip(n, scope) {
-			return false
-		}
-		as, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		if as.Tok == token.DEFINE && len(as.Rhs) == 1 {
-			recordFreeTempSingle(pass, as, rhsOf, bad)
-		} else {
-			markFreeTempBad(pass, as, rhsOf, bad)
+	s := &tempIndexScan{pass: pass, scope: scope, rhsOf: map[*types.Var]ast.Expr{}, bad: map[*types.Var]bool{}}
+	ast.Inspect(scope, s.visit)
+	return s.rhsOf
+}
+
+type tempIndexScan struct {
+	pass  *analysis.Pass
+	scope ast.Node
+	rhsOf map[*types.Var]ast.Expr
+	bad   map[*types.Var]bool
+}
+
+func (s *tempIndexScan) visit(n ast.Node) bool {
+	if freeTempSkip(n, s.scope) {
+		return false
+	}
+	if r, ok := n.(*ast.RangeStmt); ok {
+		if r.Tok == token.ASSIGN {
+			markFreeTempRange(s.pass, r, s.rhsOf, s.bad)
 		}
 		return true
-	})
-	return rhsOf
+	}
+	as, ok := n.(*ast.AssignStmt)
+	if !ok {
+		return true
+	}
+	if as.Tok == token.DEFINE && len(as.Rhs) == 1 {
+		recordFreeTempSingle(s.pass, as, s.rhsOf, s.bad)
+	} else {
+		markFreeTempBad(s.pass, as, s.rhsOf, s.bad)
+	}
+	return true
 }
 
 func recordFreeTempSingle(pass *analysis.Pass, as *ast.AssignStmt, rhsOf map[*types.Var]ast.Expr, bad map[*types.Var]bool) {
@@ -477,6 +531,21 @@ func markFreeTempBad(pass *analysis.Pass, as *ast.AssignStmt, rhsOf map[*types.V
 		}
 		tv := boundTempVar(pass, as, lid)
 		if tv == nil {
+			continue
+		}
+		delete(rhsOf, tv)
+		bad[tv] = true
+	}
+}
+
+func markFreeTempRange(pass *analysis.Pass, r *ast.RangeStmt, rhsOf map[*types.Var]ast.Expr, bad map[*types.Var]bool) {
+	for _, e := range []ast.Expr{r.Key, r.Value} {
+		lid, ok := ast.Unparen(e).(*ast.Ident)
+		if !ok || lid == nil {
+			continue
+		}
+		tv, ok := pass.TypesInfo.Uses[lid].(*types.Var)
+		if !ok {
 			continue
 		}
 		delete(rhsOf, tv)

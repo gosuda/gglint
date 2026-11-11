@@ -140,3 +140,15 @@ func useafterputReportedVarDecl() {
 	_ = z
 	_ = b.n // want "was returned to the pool"
 }
+
+func useafterputSilentRefillInPlace() {
+	b := resPool.Get().(*resBuf)
+	resPool.Put(b)
+	tries := 0
+	func() {
+		b = resPool.Get().(*resBuf)
+		tries = 0
+	}()
+	_ = b.n
+	_ = tries
+}

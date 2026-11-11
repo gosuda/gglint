@@ -202,3 +202,37 @@ func useafterfreeSilentTopReassign() int {
 	syscall.Munmap(b)
 	return v
 }
+
+func useafterfreeSilentRemappedAlias() (byte, error) {
+	a, err := syscall.Mmap(-1, 0, 4096, syscall.PROT_READ, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return 0, err
+	}
+	old := a
+	a, err = syscall.Mmap(-1, 0, 4096, syscall.PROT_READ, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return 0, err
+	}
+	syscall.Munmap(old)
+	return a[0], nil
+}
+
+func useafterfreeSilentRangeTempOverwrite() byte {
+	a := make([]byte, 4096)
+	old := a
+	chunks := [][]byte{make([]byte, 4096)}
+	for _, old = range chunks {
+	}
+	syscall.Munmap(old)
+	return a[0]
+}
+
+func useafterfreeReportedInPlaceUse() (byte, error) {
+	b, err := syscall.Mmap(-1, 0, 4096, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err != nil {
+		return 0, err
+	}
+	syscall.Munmap(b)
+	func() { b[0] = 1 }() // want "is used after it was freed"
+	return 0, nil
+}

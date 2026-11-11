@@ -24,14 +24,14 @@ func Analyzers() []*analysis.Analyzer {
 
 var useaftercloseAnalyzer = &analysis.Analyzer{
 	Name:     "useafterclose",
-	Doc:      "reports Read, Write, Seek, and similar methods on os, net, or net/http values after Close on every path",
+	Doc:      "reports Read, Write, Seek, and similar methods on os, net, or net/http values after Close on every path; a use inside a function literal is not checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUseafterclose,
 }
 
 var useafterputAnalyzer = &analysis.Analyzer{
 	Name:     "useafterput",
-	Doc:      "reports uses of pointer, slice, or map values after they are passed to Put on every path",
+	Doc:      "reports uses of pointer, slice, or map values after they are passed to Put on every path; a use inside a function literal is not checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runUseafterput,
 }
@@ -45,7 +45,7 @@ var useafterfreeAnalyzer = &analysis.Analyzer{
 
 var viewescapeAnalyzer = &analysis.Analyzer{
 	Name:     "viewescape",
-	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them; a receiver declared in the loop body is checked against later iterations only when it names a variable, field, or constant-index element from outside the loop",
+	Doc:      "reports Scanner.Bytes, Buffer.Bytes, Reader.Peek, ReadSlice views kept past a call that may overwrite them; a receiver declared in the loop body is checked against later iterations only when it names a variable, field, or constant-index element from outside the loop that the body does not reassign before the declaration; a view variable that a function literal assigns is not tracked; a call counts only when the receiver is not assigned between the view and the call",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runViewescape,
 }
@@ -406,6 +406,9 @@ func freeVar(pass *analysis.Pass, fn ast.Node, g *flow.Graph, v *types.Var, cach
 }
 
 func closeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) ostate {
+	if stmtLitWrites(pass, n, v) {
+		return stUnknown
+	}
 	if hasCloseRelease(pass, n, v) {
 		return stReleased
 	}
@@ -419,6 +422,9 @@ func closeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) 
 }
 
 func putTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate) ostate {
+	if stmtLitWrites(pass, n, v) {
+		return stUnknown
+	}
 	if hasPutRelease(pass, n, v) {
 		return stReleased
 	}
@@ -542,6 +548,44 @@ func visitInPlaceFree(t *freeTrack, n ast.Node, lit *ast.FuncLit, s ostate) {
 	if freeLitReleasesHeld(t, lit, s) {
 		t.pass.Reportf(mentionPos(t.pass, n, t.v), "%s is used after it was freed: set it to nil after the free and do not use it again", t.v.Name())
 	}
+	reportUsesInLit(t, lit, s)
+}
+
+func reportUsesInLit(t *freeTrack, lit *ast.FuncLit, s ostate) {
+	if !flatLit(lit) {
+		return
+	}
+	cur := s
+	for _, sb := range lit.Body.List {
+		if inner, ok := inPlaceLit(sb); ok {
+			reportUsesInLit(t, inner, cur)
+			cur = freeLitState(t, inner, cur)
+			continue
+		}
+		if cur == stReleased && freedUseAt(t, lit, sb) {
+			t.pass.Reportf(mentionPos(t.pass, sb, t.v), "%s is used after it was freed: set it to nil after the free and do not use it again", t.v.Name())
+		}
+		cur = freeStep(t, lit, sb, cur)
+	}
+}
+
+func freedUseAt(t *freeTrack, scope ast.Node, sb ast.Stmt) bool {
+	if hasFreeRelease(t.pass, scope, sb, t.v, t.cache) {
+		return false
+	}
+	if nilAssign(t.pass, sb, t.v) {
+		return false
+	}
+	if selfAssign(t.pass, sb, t.v) {
+		return false
+	}
+	if takesAddr(t.pass, sb, t.v) {
+		return false
+	}
+	if redefinesVar(t.pass, t.fn, sb, t.v) {
+		return false
+	}
+	return mentionsVar(t.pass, sb, t.v)
 }
 
 func reportFreedUse(pass *analysis.Pass, fn, n ast.Node, v *types.Var, cache *freeTempCache) {

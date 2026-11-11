@@ -146,3 +146,18 @@ func useaftercloseSilentBranchClose(done bool, p string, b []byte) {
 		f.Close()
 	}
 }
+
+func useaftercloseSilentReopenInPlace(p, q string, b []byte) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	func() { f, err = os.Open(q) }()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Read(b)
+	return err
+}
