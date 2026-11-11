@@ -194,3 +194,23 @@ func rootReportedLandElse(ctx context.Context, flag bool) {
 	}
 	use(ctx)
 }
+
+func rootReportedOtherTarget(ctx context.Context) error {
+	var c context.Context
+	if c == nil {
+		c, ctx = nil, context.Background() // want "a context is in scope, and this root context drops its cancellation and deadline"
+	}
+	if err := workOn(c); err != nil {
+		return err
+	}
+	return workOn(ctx)
+}
+
+func rootReportedLiveAfterGuard(ctx, parent context.Context) error {
+	if ctx != nil {
+		return workOn(ctx)
+	}
+	ctx = parent
+	ctx = context.Background() // want "a context is in scope, and this root context drops its cancellation and deadline"
+	return workOn(ctx)
+}

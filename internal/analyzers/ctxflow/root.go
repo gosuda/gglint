@@ -114,7 +114,7 @@ func nilGuarded(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr) b
 	if as == nil {
 		return false
 	}
-	v := assignedContextVar(pass, as)
+	v := assignedContextVar(pass, as, call)
 	if v == nil {
 		return false
 	}
@@ -149,18 +149,85 @@ func afterGuardReturn(pass *analysis.Pass, cur inspector.Cursor, v *types.Var, a
 }
 
 func guardReturnBefore(pass *analysis.Pass, block *ast.BlockStmt, as *ast.AssignStmt, v *types.Var) bool {
-	for i, st := range block.List {
-		if st != as {
-			continue
-		}
-		for _, prev := range block.List[:i] {
-			if guardReturnsOnLive(pass, prev, v) {
-				return true
-			}
-		}
+	idx := assignIndex(block, as)
+	if idx < 0 {
 		return false
 	}
+	for g, prev := range block.List[:idx] {
+		if !guardReturnsOnLive(pass, prev, v) {
+			continue
+		}
+		if !clobbersBetween(pass, block.List[g+1:idx], v) {
+			return true
+		}
+	}
 	return false
+}
+
+func assignIndex(block *ast.BlockStmt, as *ast.AssignStmt) int {
+	for i, st := range block.List {
+		if st == as {
+			return i
+		}
+	}
+	return -1
+}
+
+func clobbersBetween(pass *analysis.Pass, stmts []ast.Stmt, v *types.Var) bool {
+	for _, st := range stmts {
+		if stmtClobbers(pass, st, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtClobbers(pass *analysis.Pass, st ast.Stmt, v *types.Var) bool {
+	found := false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if nodeClobbers(pass, n, v) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func nodeClobbers(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	switch n := n.(type) {
+	case *ast.AssignStmt:
+		return lhsAssignsVar(pass, n, v)
+	case *ast.IncDecStmt:
+		return identResolvesTo(pass.TypesInfo, n.X, v)
+	case *ast.RangeStmt:
+		return rangeAssignsVar(pass, n, v)
+	case *ast.UnaryExpr:
+		return n.Op == token.AND && identResolvesTo(pass.TypesInfo, n.X, v)
+	}
+	return false
+}
+
+func lhsAssignsVar(pass *analysis.Pass, as *ast.AssignStmt, v *types.Var) bool {
+	for _, lhs := range as.Lhs {
+		if identResolvesTo(pass.TypesInfo, lhs, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func rangeAssignsVar(pass *analysis.Pass, r *ast.RangeStmt, v *types.Var) bool {
+	if r.Tok != token.ASSIGN && r.Tok != token.DEFINE {
+		return false
+	}
+	if r.Key != nil && identResolvesTo(pass.TypesInfo, r.Key, v) {
+		return true
+	}
+	return r.Value != nil && identResolvesTo(pass.TypesInfo, r.Value, v)
 }
 
 func guardReturnsOnLive(pass *analysis.Pass, st ast.Stmt, v *types.Var) bool {
@@ -257,18 +324,29 @@ func inRHS(as *ast.AssignStmt, call *ast.CallExpr) bool {
 	return call.Pos() >= start && call.End() <= end
 }
 
-func assignedContextVar(pass *analysis.Pass, as *ast.AssignStmt) *types.Var {
-	for _, lhs := range as.Lhs {
-		id, ok := stripParens(lhs).(*ast.Ident)
-		if !ok {
-			continue
-		}
-		v := varOf(pass.TypesInfo, id)
-		if v != nil && isContextVarType(v.Type()) {
-			return v
-		}
+func assignedContextVar(pass *analysis.Pass, as *ast.AssignStmt, call *ast.CallExpr) *types.Var {
+	idx := rhsIndexOf(as, call)
+	if idx < 0 || len(as.Lhs) != len(as.Rhs) {
+		return nil
+	}
+	id, ok := stripParens(as.Lhs[idx]).(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	v := varOf(pass.TypesInfo, id)
+	if v != nil && isContextVarType(v.Type()) {
+		return v
 	}
 	return nil
+}
+
+func rhsIndexOf(as *ast.AssignStmt, call *ast.CallExpr) int {
+	for i, r := range as.Rhs {
+		if call.Pos() >= r.Pos() && call.End() <= r.End() {
+			return i
+		}
+	}
+	return -1
 }
 
 func isContextVarType(t types.Type) bool {
