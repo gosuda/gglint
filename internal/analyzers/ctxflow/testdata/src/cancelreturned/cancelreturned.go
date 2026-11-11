@@ -245,3 +245,26 @@ func cancelreturnedSilentNestedReturn() {
 	f := func() context.Context { return ctx }
 	useAny(f)
 }
+
+func fetchForRedeclare(ctx context.Context) (context.Context, error) { return ctx, nil }
+
+func cancelreturnedSilentRedeclared(parent context.Context) (context.Context, error) {
+	c, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	c, err := fetchForRedeclare(parent)
+	return c, err
+}
+
+func cancelreturnedSilentLiteralAssign(parent context.Context) context.Context {
+	c, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	reset := func() { c = context.Background() }
+	reset()
+	return c
+}
+
+func cancelreturnedReportedBareReturn(parent context.Context) (ctx context.Context, err error) {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	return
+}

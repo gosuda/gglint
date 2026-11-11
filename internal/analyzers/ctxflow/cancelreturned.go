@@ -54,14 +54,16 @@ func summarizeCancel(pass *analysis.Pass, fn inspector.Cursor) cancelSummary {
 		reassigned: map[*types.Var]bool{},
 	}
 	for cur := range fn.Preorder((*ast.DeferStmt)(nil), (*ast.ReturnStmt)(nil), (*ast.AssignStmt)(nil)) {
-		if ownerOf(cur) != fn {
-			continue
+		if _, isAssign := cur.Node().(*ast.AssignStmt); !isAssign {
+			if ownerOf(cur) != fn {
+				continue
+			}
 		}
 		switch n := cur.Node().(type) {
 		case *ast.DeferStmt:
 			s.recordDefer(pass, n)
 		case *ast.ReturnStmt:
-			s.recordReturn(pass, n)
+			s.recordReturn(pass, fn, n)
 		case *ast.AssignStmt:
 			s.recordAssign(pass, n)
 		}
@@ -80,19 +82,38 @@ func (s cancelSummary) recordDefer(pass *analysis.Pass, d *ast.DeferStmt) {
 	s.defers[v] = d
 }
 
-func (s cancelSummary) recordReturn(pass *analysis.Pass, r *ast.ReturnStmt) {
+func (s cancelSummary) recordReturn(pass *analysis.Pass, fn inspector.Cursor, r *ast.ReturnStmt) {
+	if len(r.Results) == 0 {
+		ft := funcTypeOf(fn.Node())
+		if ft == nil || ft.Results == nil {
+			return
+		}
+		for _, field := range ft.Results.List {
+			for _, name := range field.Names {
+				if v := varOf(pass.TypesInfo, name); v != nil {
+					s.returned[v] = true
+				}
+			}
+		}
+		return
+	}
 	for _, res := range r.Results {
 		collectReturnedVars(pass.TypesInfo, res, s.returned)
 	}
 }
 
 func (s cancelSummary) recordAssign(pass *analysis.Pass, as *ast.AssignStmt) {
-	if as.Tok != token.ASSIGN {
-		return
+	if len(as.Lhs) == 2 && len(as.Rhs) == 1 {
+		if call, ok := stripParens(as.Rhs[0]).(*ast.CallExpr); ok && isWithCall(pass.TypesInfo, call) {
+			return
+		}
 	}
 	for _, lhs := range as.Lhs {
 		id, ok := stripParens(lhs).(*ast.Ident)
 		if !ok {
+			continue
+		}
+		if _, isDef := pass.TypesInfo.Defs[id]; isDef {
 			continue
 		}
 		if v := varOf(pass.TypesInfo, id); v != nil {
