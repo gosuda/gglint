@@ -17,7 +17,7 @@ import (
 
 var addlateAnalyzer = &analysis.Analyzer{
 	Name:     "addlate",
-	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable, even when that variable may hold another function by then; an Add in a go or defer statement does not; a literal that receives, ranges over a channel, or locks or waits is not reported, because that wait can order the Add",
+	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable that can hold it at that call; an Add in a go or defer statement does not; a literal that receives, ranges over a channel, or locks or waits is not reported, because that wait can order the Add",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runAddlate,
 }
@@ -132,101 +132,221 @@ func mergeVarLitAdds(pass *analysis.Pass, fn ast.Node, body *ast.BlockStmt, out 
 	applyVarLits(pass, fn, set, out)
 }
 
+type varAssign struct {
+	lit   *ast.FuncLit
+	pos   token.Pos
+	inLit bool
+	loops []ast.Node
+}
+
+type varCall struct {
+	pos   token.Pos
+	loops []ast.Node
+}
+
 type varLitSet struct {
-	lits  map[*types.Var][]*ast.FuncLit
-	calls map[*types.Var]token.Pos
+	assigns map[*types.Var][]varAssign
+	calls   map[*types.Var][]varCall
 }
 
 func newVarLitSet() *varLitSet {
-	return &varLitSet{lits: map[*types.Var][]*ast.FuncLit{}, calls: map[*types.Var]token.Pos{}}
+	return &varLitSet{assigns: map[*types.Var][]varAssign{}, calls: map[*types.Var][]varCall{}}
 }
 
-func collectVarLits(info *types.Info, body *ast.BlockStmt, set *varLitSet) {
+type scopeView struct {
+	loops  []ast.Node
+	lits   []*ast.FuncLit
+	blocks []ast.Node
+}
+
+func containsNode(outer ast.Node, pos, end token.Pos) bool {
+	return outer.Pos() < pos && end <= outer.End()
+}
+
+func enclosingLoops(pos, end token.Pos, loops []ast.Node) []ast.Node {
+	var out []ast.Node
+	for _, l := range loops {
+		if containsNode(l, pos, end) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func insideLits(pos, end token.Pos, lits []*ast.FuncLit) bool {
+	for _, f := range lits {
+		if containsNode(f, pos, end) {
+			return true
+		}
+	}
+	return false
+}
+
+func insideSkips(pos, end token.Pos, view scopeView) bool {
+	if insideLits(pos, end, view.lits) {
+		return true
+	}
+	for _, b := range view.blocks {
+		if containsNode(b, pos, end) {
+			return true
+		}
+	}
+	return false
+}
+
+func sharesLoop(a, b []ast.Node) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func canInvoke(a varAssign, c varCall) bool {
+	if a.pos < c.pos {
+		return true
+	}
+	if a.inLit {
+		return true
+	}
+	return sharesLoop(a.loops, c.loops)
+}
+
+func scopeViewOf(body *ast.BlockStmt) scopeView {
+	var view scopeView
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch n := n.(type) {
-		case *ast.AssignStmt:
-			noteAssignLit(info, n, set)
-		case *ast.ValueSpec:
-			noteValueLit(info, n, set)
+		case *ast.ForStmt:
+			view.loops = append(view.loops, n)
+		case *ast.RangeStmt:
+			view.loops = append(view.loops, n)
+		case *ast.FuncLit:
+			view.lits = append(view.lits, n)
+		case *ast.GoStmt:
+			view.blocks = append(view.blocks, n)
+		case *ast.DeferStmt:
+			view.blocks = append(view.blocks, n)
 		}
 		return true
 	})
+	return view
+}
+
+func recordAssignLits(info *types.Info, body *ast.BlockStmt, set *varLitSet, view scopeView) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			noteAssignLit(info, n, set, view)
+		case *ast.ValueSpec:
+			noteValueLit(info, n, set, view)
+		}
+		return true
+	})
+}
+
+func recordVarCalls(info *types.Info, body *ast.BlockStmt, set *varLitSet, view scopeView) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.FuncLit, *ast.GoStmt, *ast.DeferStmt:
 			return false
 		case *ast.CallExpr:
-			noteVarCall(info, n, set.calls)
-			return true
+			noteVarCall(info, n, set, view)
 		}
 		return true
 	})
 }
 
+func collectVarLits(info *types.Info, body *ast.BlockStmt, set *varLitSet) {
+	view := scopeViewOf(body)
+	recordAssignLits(info, body, set, view)
+	recordVarCalls(info, body, set, view)
+}
+
 func applyVarLits(pass *analysis.Pass, fn ast.Node, set *varLitSet, out map[flow.Key]token.Pos) {
-	for v, lits := range set.lits {
-		applyOneVarLit(pass, fn, v, lits, set, out)
+	for v := range set.assigns {
+		applyOneVarLit(pass, fn, v, set, out)
 	}
 }
 
-func applyOneVarLit(pass *analysis.Pass, fn ast.Node, v *types.Var, lits []*ast.FuncLit, set *varLitSet, out map[flow.Key]token.Pos) {
+func recordEarliest(out map[flow.Key]token.Pos, keys []flow.Key, pos token.Pos) {
+	for _, k := range keys {
+		if p, dup := out[k]; !dup || pos < p {
+			out[k] = pos
+		}
+	}
+}
+
+func applyOneVarLit(pass *analysis.Pass, fn ast.Node, v *types.Var, set *varLitSet, out map[flow.Key]token.Pos) {
 	if !flow.IsLocal(pass.TypesInfo, fn, v) {
 		return
 	}
-	cp, ok := set.calls[v]
+	assigns, ok := set.assigns[v]
 	if !ok {
 		return
 	}
-	seen := map[flow.Key]bool{}
-	for _, lit := range lits {
-		for _, k := range litAddKeys(pass, lit) {
-			if seen[k] {
-				continue
-			}
-			seen[k] = true
-			if p, dup := out[k]; !dup || cp < p {
-				out[k] = cp
-			}
-		}
-	}
-}
-
-func noteAssignLit(info *types.Info, s *ast.AssignStmt, set *varLitSet) {
-	for i, lhs := range s.Lhs {
-		id, ok := lhs.(*ast.Ident)
-		if !ok {
-			continue
-		}
-		v, ok := info.ObjectOf(id).(*types.Var)
-		if !ok {
-			continue
-		}
-		if len(s.Lhs) == 1 && len(s.Rhs) == 1 && i == 0 {
-			if lit, ok := ast.Unparen(s.Rhs[0]).(*ast.FuncLit); ok {
-				set.lits[v] = append(set.lits[v], lit)
-			}
-		}
-	}
-}
-
-func noteValueLit(info *types.Info, s *ast.ValueSpec, set *varLitSet) {
-	if len(s.Values) == 0 {
+	calls, ok := set.calls[v]
+	if !ok {
 		return
 	}
-	for i, name := range s.Names {
-		v, ok := info.ObjectOf(name).(*types.Var)
-		if !ok {
-			continue
-		}
-		if len(s.Names) == 1 && len(s.Values) == 1 && i == 0 {
-			if lit, ok := ast.Unparen(s.Values[0]).(*ast.FuncLit); ok {
-				set.lits[v] = append(set.lits[v], lit)
+	for _, a := range assigns {
+		keys := litAddKeys(pass, a.lit)
+		for _, c := range calls {
+			if !canInvoke(a, c) {
+				continue
 			}
+			recordEarliest(out, keys, c.pos)
 		}
 	}
 }
 
-func noteVarCall(info *types.Info, call *ast.CallExpr, calls map[*types.Var]token.Pos) {
+func noteAssignLit(info *types.Info, s *ast.AssignStmt, set *varLitSet, view scopeView) {
+	if len(s.Lhs) != 1 || len(s.Rhs) != 1 {
+		return
+	}
+	id, ok := s.Lhs[0].(*ast.Ident)
+	if !ok {
+		return
+	}
+	v, ok := info.ObjectOf(id).(*types.Var)
+	if !ok {
+		return
+	}
+	lit, ok := ast.Unparen(s.Rhs[0]).(*ast.FuncLit)
+	if !ok {
+		return
+	}
+	set.assigns[v] = append(set.assigns[v], varAssign{
+		lit:   lit,
+		pos:   s.Pos(),
+		inLit: insideLits(s.Pos(), s.End(), view.lits),
+		loops: enclosingLoops(s.Pos(), s.End(), view.loops),
+	})
+}
+
+func noteValueLit(info *types.Info, s *ast.ValueSpec, set *varLitSet, view scopeView) {
+	if len(s.Names) != 1 || len(s.Values) != 1 {
+		return
+	}
+	v, ok := info.ObjectOf(s.Names[0]).(*types.Var)
+	if !ok {
+		return
+	}
+	lit, ok := ast.Unparen(s.Values[0]).(*ast.FuncLit)
+	if !ok {
+		return
+	}
+	set.assigns[v] = append(set.assigns[v], varAssign{
+		lit:   lit,
+		pos:   s.Pos(),
+		inLit: insideLits(s.Pos(), s.End(), view.lits),
+		loops: enclosingLoops(s.Pos(), s.End(), view.loops),
+	})
+}
+
+func noteVarCall(info *types.Info, call *ast.CallExpr, set *varLitSet, view scopeView) {
 	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
 	if !ok {
 		return
@@ -235,9 +355,13 @@ func noteVarCall(info *types.Info, call *ast.CallExpr, calls map[*types.Var]toke
 	if !ok {
 		return
 	}
-	if p, dup := calls[v]; !dup || call.Pos() < p {
-		calls[v] = call.Pos()
+	if insideSkips(call.Pos(), call.End(), view) {
+		return
 	}
+	set.calls[v] = append(set.calls[v], varCall{
+		pos:   call.Pos(),
+		loops: enclosingLoops(call.Pos(), call.End(), view.loops),
+	})
 }
 
 func checkGoAddlate(pass *analysis.Pass, g *ast.GoStmt, list []ast.Stmt, goIdx int, seen map[token.Pos]bool, first map[flow.Key]token.Pos) {

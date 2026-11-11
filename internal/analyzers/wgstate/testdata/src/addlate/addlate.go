@@ -304,3 +304,17 @@ func addlateReportedDirectGoDeferNoOrder() {
 	wg.Add(1) // want "negative WaitGroup counter"
 	wg.Wait()
 }
+
+func addlateReportedVarLitAssignedAfterCall() {
+	var wg sync.WaitGroup
+	var step func()
+	step = func() {}
+	step()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	step = func() { wg.Add(1) }
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
