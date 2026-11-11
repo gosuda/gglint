@@ -1218,6 +1218,9 @@ func valueMapWrite(p string) {
 type errdropRows struct{ err error }
 
 func (r errdropRows) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
 	if len(dest) == 0 {
 		return errors.New("no dest")
 	}
@@ -1229,7 +1232,7 @@ func (r errdropRows) Scan(dest ...any) error {
 	if len(dest) > 1 {
 		return errors.New("one only")
 	}
-	return r.err
+	return nil
 }
 
 func outReportedLocalScan(rows errdropRows) int {
@@ -1381,6 +1384,43 @@ func durableReportedNestedFieldPassed(addr, p string) error {
 	cfg.TLS = &tls.Config{}
 	cfg.TLS.KeyLogWriter = f
 	conn, err := tls.Dial("tcp", addr, cfg.TLS)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return nil
+}
+
+type errdropDeadGuardSet map[string]struct{}
+
+func (s *errdropDeadGuardSet) Add(k string) {
+	if s == nil {
+		*s = errdropDeadGuardSet{}
+	}
+	(*s)[k] = struct{}{}
+}
+
+func loadDeadGuardSet(p string) (errdropDeadGuardSet, error) {
+	if p == "" {
+		return nil, errors.New("empty")
+	}
+	return errdropDeadGuardSet{}, nil
+}
+
+func valueDeadGuardWrite(p string) {
+	s, _ := loadDeadGuardSet(p) // want "s is used after the error of loadDeadGuardSet is dropped"
+	s.Add("x")
+}
+
+func durableReportedSliceFieldPassed(addr, p string) error {
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close() // want "f is written in this function and the error of f.Close is dropped"
+	cfgs := []*tls.Config{{}}
+	cfgs[0].KeyLogWriter = f
+	conn, err := tls.Dial("tcp", addr, cfgs[0])
 	if err != nil {
 		return err
 	}

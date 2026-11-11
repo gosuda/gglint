@@ -140,15 +140,17 @@ func rootFieldPath(pass *analysis.Pass, lhs ast.Expr) (*types.Var, string, bool)
 	var fields []string
 	cur := ast.Unparen(lhs)
 	for {
-		sel, ok := cur.(*ast.SelectorExpr)
+		if sel, ok := cur.(*ast.SelectorExpr); ok {
+			fields = append([]string{sel.Sel.Name}, fields...)
+		}
+		child, ok := pathStep(cur)
 		if !ok {
 			break
 		}
-		fields = append([]string{sel.Sel.Name}, fields...)
-		cur = ast.Unparen(sel.X)
+		cur = ast.Unparen(child)
 	}
 	id, ok := cur.(*ast.Ident)
-	if !ok || len(fields) == 0 {
+	if !ok {
 		return nil, "", false
 	}
 	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)

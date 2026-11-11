@@ -303,7 +303,18 @@ func isNilAndRecv(pass *analysis.Pass, side, other ast.Expr, recv *types.Var) bo
 	if !isNilIdent(pass.TypesInfo, side) {
 		return false
 	}
-	return isRecvIdent(pass, other, recv) || isStarRecv(pass, other, recv)
+	if isStarRecv(pass, other, recv) {
+		return true
+	}
+	return isMapValueRecv(recv) && isRecvIdent(pass, other, recv)
+}
+
+func isMapValueRecv(recv *types.Var) bool {
+	if _, isPtr := types.Unalias(recv.Type()).(*types.Pointer); isPtr {
+		return false
+	}
+	_, isMap := types.Unalias(recv.Type()).Underlying().(*types.Map)
+	return isMap
 }
 
 func isStarRecv(pass *analysis.Pass, e ast.Expr, recv *types.Var) bool {
@@ -312,24 +323,18 @@ func isStarRecv(pass *analysis.Pass, e ast.Expr, recv *types.Var) bool {
 }
 
 func blockAssignsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		as, ok := n.(*ast.AssignStmt)
+	for _, stmt := range body.List {
+		as, ok := stmt.(*ast.AssignStmt)
 		if !ok {
-			return true
+			continue
 		}
 		for _, lhs := range as.Lhs {
 			if star, ok := ast.Unparen(lhs).(*ast.StarExpr); ok && isRecvIdent(pass, star.X, recv) {
-				found = true
-				return false
+				return true
 			}
 		}
-		return true
-	})
-	return found
+	}
+	return false
 }
 
 func valueVarNonderef(v *types.Var) bool {
