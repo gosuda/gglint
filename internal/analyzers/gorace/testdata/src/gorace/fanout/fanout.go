@@ -444,8 +444,11 @@ func fanoutCondSemReported(xs []int) int {
 	return out
 }
 
-func fanoutParamSemSilent(sem chan struct{}, xs []int) int {
+func fanoutNewSem() chan struct{} { return make(chan struct{}, 1) }
+
+func fanoutCallSemSilent(xs []int) int {
 	total := 0
+	sem := fanoutNewSem()
 	var wg sync.WaitGroup
 	for _, x := range xs {
 		wg.Add(1)
@@ -458,4 +461,37 @@ func fanoutParamSemSilent(sem chan struct{}, xs []int) int {
 	}
 	wg.Wait()
 	return total
+}
+
+func fanoutEnclosingSemReported(xs []int) int {
+	sem := make(chan struct{}, 2)
+	total := 0
+	work := func() {
+		var wg sync.WaitGroup
+		for _, x := range xs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				total += x // want `total is written by every goroutine this loop starts, so the writes race when two of them overlap: collect results through a channel, or guard the write with a mutex`
+				<-sem
+			}()
+		}
+		wg.Wait()
+	}
+	work()
+	return total
+}
+
+func fanoutLiteralSemReported() int {
+	n := 0
+	for i := range 2 {
+		go func() {
+			sem := make(chan struct{}, 2)
+			sem <- struct{}{}
+			n += i // want `n is written by every goroutine this loop starts, so the writes race when two of them overlap: collect results through a channel, or guard the write with a mutex`
+			<-sem
+		}()
+	}
+	return n
 }

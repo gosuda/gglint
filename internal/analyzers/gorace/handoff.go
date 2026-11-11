@@ -146,21 +146,55 @@ func sendAfterUnbuffered(o litOrder, buffered map[flow.Key]bool) bool {
 	return false
 }
 
-func chanCapIsOne(pass *analysis.Pass, fn ast.Node, k flow.Key) bool {
-	body := flow.Body(fn)
+func chanCapIsOne(pass *analysis.Pass, k flow.Key) bool {
+	v, ok := k.Root.(*types.Var)
+	if !ok {
+		return true
+	}
+	body := scopeBody(pass, v)
 	if body == nil {
 		return true
 	}
-	seen, one := scanMakeCap(pass, body, fn, k)
+	seen, one := scanScopeCap(pass, body, k)
 	return !seen || one
 }
 
-func scanMakeCap(pass *analysis.Pass, body, fn ast.Node, k flow.Key) (seen, one bool) {
+func scopeBody(pass *analysis.Pass, v *types.Var) *ast.BlockStmt {
+	if v == nil || !v.Pos().IsValid() {
+		return nil
+	}
+	var best *ast.BlockStmt
+	for _, f := range pass.Files {
+		if v.Pos() < f.Pos() || v.Pos() >= f.End() {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.FuncLit); ok {
+				best = scopeAt(best, lit.Body, v.Pos())
+			}
+			if decl, ok := n.(*ast.FuncDecl); ok {
+				best = scopeAt(best, decl.Body, v.Pos())
+			}
+			return true
+		})
+	}
+	return best
+}
+
+func scopeAt(best, body *ast.BlockStmt, pos token.Pos) *ast.BlockStmt {
+	if containsPos(body, pos) {
+		return body
+	}
+	return best
+}
+
+func containsPos(body *ast.BlockStmt, pos token.Pos) bool {
+	return body != nil && pos >= body.Pos() && pos < body.End()
+}
+
+func scanScopeCap(pass *analysis.Pass, body *ast.BlockStmt, k flow.Key) (seen, one bool) {
 	ast.Inspect(body, func(n ast.Node) bool {
 		if one {
-			return false
-		}
-		if foreignLit(n, fn) {
 			return false
 		}
 		if !makesKey(pass.TypesInfo, n, k) {
@@ -174,18 +208,6 @@ func scanMakeCap(pass *analysis.Pass, body, fn ast.Node, k flow.Key) (seen, one 
 		return true
 	})
 	return seen, one
-}
-
-func foreignLit(n, fn ast.Node) bool {
-	lit, ok := n.(*ast.FuncLit)
-	if !ok {
-		return false
-	}
-	fnLit, isLit := fn.(*ast.FuncLit)
-	if ast.Node(lit.Body) == flow.Body(fn) {
-		return false
-	}
-	return !isLit || lit != fnLit
 }
 
 func makesKey(info *types.Info, n ast.Node, k flow.Key) bool {
@@ -207,14 +229,14 @@ func makesKey(info *types.Info, n ast.Node, k flow.Key) bool {
 	return flow.Key{Root: id} == k
 }
 
-func semaphoreKeys(pass *analysis.Pass, fn ast.Node, s flow.Spawn, pos token.Pos) []flow.Key {
+func semaphoreKeys(pass *analysis.Pass, s flow.Spawn, pos token.Pos) []flow.Key {
 	if s.Body == nil {
 		return nil
 	}
 	o := mappedOrder(pass, s, scanLitOrder(pass, s.Body, pos))
 	var keys []flow.Key
 	for _, k := range o.sendBeforeKeys {
-		if slices.Contains(o.recvAfterKeys, k) && chanCapIsOne(pass, fn, k) && straightSendAcquire(pass, s.Body, k, pos) {
+		if slices.Contains(o.recvAfterKeys, k) && chanCapIsOne(pass, k) && straightSendAcquire(pass, s.Body, k, pos) {
 			keys = append(keys, k)
 		}
 	}

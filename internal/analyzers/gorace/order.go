@@ -211,7 +211,7 @@ func mappedOrder(pass *analysis.Pass, s flow.Spawn, o litOrder) litOrder {
 	return o
 }
 
-func fanoutOrdered(pass *analysis.Pass, fn ast.Node, s flow.Spawn, accessPos token.Pos, buffered map[flow.Key]bool) bool {
+func fanoutOrdered(pass *analysis.Pass, s flow.Spawn, accessPos token.Pos, buffered map[flow.Key]bool) bool {
 	if s.Body == nil {
 		return false
 	}
@@ -222,21 +222,21 @@ func fanoutOrdered(pass *analysis.Pass, fn ast.Node, s flow.Spawn, accessPos tok
 	if recvBeforeUnbuffered(o, buffered) && sendAfterUnbuffered(o, buffered) {
 		return true
 	}
-	return capSemaphoreOrders(pass, fn, s, o, accessPos) || capTokenOrders(pass, fn, s, o, accessPos)
+	return capSemaphoreOrders(pass, s, o, accessPos) || capTokenOrders(pass, s, o, accessPos)
 }
 
-func capSemaphoreOrders(pass *analysis.Pass, fn ast.Node, s flow.Spawn, o litOrder, accessPos token.Pos) bool {
+func capSemaphoreOrders(pass *analysis.Pass, s flow.Spawn, o litOrder, accessPos token.Pos) bool {
 	for _, k := range o.sendBeforeKeys {
-		if slices.Contains(o.recvAfterKeys, k) && chanCapIsOne(pass, fn, k) && straightSendAcquire(pass, s.Body, k, accessPos) {
+		if slices.Contains(o.recvAfterKeys, k) && chanCapIsOne(pass, k) && straightSendAcquire(pass, s.Body, k, accessPos) {
 			return true
 		}
 	}
 	return false
 }
 
-func capTokenOrders(pass *analysis.Pass, fn ast.Node, s flow.Spawn, o litOrder, accessPos token.Pos) bool {
+func capTokenOrders(pass *analysis.Pass, s flow.Spawn, o litOrder, accessPos token.Pos) bool {
 	for _, k := range o.recvBeforeKeys {
-		if slices.Contains(o.sendAfterKeys, k) && chanCapIsOne(pass, fn, k) && straightTokenAcquire(pass, s.Body, k, accessPos) {
+		if slices.Contains(o.sendAfterKeys, k) && chanCapIsOne(pass, k) && straightTokenAcquire(pass, s.Body, k, accessPos) {
 			return true
 		}
 	}
@@ -601,6 +601,9 @@ func boundCallOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn, n ast.Node) []
 }
 
 func nodeContains(outer, inner ast.Node) bool {
+	if outer == nil || inner == nil {
+		return false
+	}
 	return outer.Pos() <= inner.Pos() && inner.End() <= outer.End()
 }
 
@@ -620,13 +623,27 @@ func crosses(graph *flow.Graph, from, to ast.Node, waits []syncOp) bool {
 }
 
 func entryOrdered(s waitSide, waits []syncOp) bool {
-	if s.root == nil || len(s.root.List) == 0 {
+	body := s.root
+	if body == nil || len(body.List) == 0 {
 		return false
 	}
-	first := s.root.List[0]
+	first := body.List[0]
 	for _, w := range waits {
-		if nodeContains(first, w.node) {
+		if isWaitStmt(first, w.node) {
 			return true
+		}
+	}
+	return false
+}
+
+func isWaitStmt(stmt, op ast.Node) bool {
+	switch st := stmt.(type) {
+	case *ast.SendStmt:
+		return nodeContains(st, op)
+	case *ast.ExprStmt:
+		switch ast.Unparen(st.X).(type) {
+		case *ast.UnaryExpr, *ast.CallExpr:
+			return nodeContains(st, op)
 		}
 	}
 	return false
@@ -915,12 +932,45 @@ func selectEscapes(sel *ast.SelectStmt, waits []syncOp) bool {
 		if clauseHasWaitComm(clause, waits) {
 			continue
 		}
+		if bodyWaits(clause, waits) {
+			continue
+		}
 		if flow.EndsInReturn(clause.Body) {
 			continue
 		}
 		return true
 	}
 	return false
+}
+
+func bodyWaits(clause *ast.CommClause, waits []syncOp) bool {
+	for _, st := range clause.Body {
+		if stmtHoldsWait(st, waits) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtHoldsWait(st ast.Node, waits []syncOp) bool {
+	found := false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if found || n == nil {
+			return false
+		}
+		switch n.(type) {
+		case *ast.FuncLit, *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+			return false
+		}
+		for _, w := range waits {
+			if nodeContains(n, w.node) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 func holdsWaitComm(sel *ast.SelectStmt, waits []syncOp) bool {

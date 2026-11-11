@@ -36,6 +36,14 @@ type sharedScope struct {
 	fn          ast.Node
 	parent      []varAccess
 	hasWaitCall bool
+	held        func(ast.Node) []flow.Key
+}
+
+func (m *sharedScope) heldAt() func(ast.Node) []flow.Key {
+	if m.held == nil {
+		m.held = flow.HeldAt(m.pass, m.graph)
+	}
+	return m.held
 }
 
 func writesInStmt(info *types.Info, stmt ast.Stmt) []varAccess {
@@ -114,7 +122,7 @@ func appendDeleteWrite(info *types.Info, n *ast.CallExpr, stmt ast.Stmt, out []v
 		return out
 	}
 	if k, ok := flow.KeyOf(info, n.Args[0]); ok {
-		out = append(out, varAccess{key: k, stmt: stmt, write: true, del: !clr, clr: clr, isMap: isMapType(info.TypeOf(n.Args[0]))})
+		out = append(out, varAccess{key: k, stmt: stmt, write: true, del: !clr, clr: clr, isMap: !clr || isMapType(info.TypeOf(n.Args[0]))})
 	}
 	return out
 }
@@ -499,11 +507,14 @@ func checkMap(pass *analysis.Pass, fn ast.Node) {
 	if passesMutex(info, fn) || flow.Body(fn) == nil {
 		return
 	}
+	spawns := flow.Spawns(pass, fn)
+	if !hasMapSpawn(spawns) {
+		return
+	}
 	g := flow.NewGraph(pass, fn)
 	if g == nil {
 		return
 	}
-	spawns := flow.Spawns(pass, fn)
 	sites := map[ast.Node]bool{}
 	for _, s := range spawns {
 		sites[s.Site] = true
@@ -514,11 +525,15 @@ func checkMap(pass *analysis.Pass, fn ast.Node) {
 			scope.lits[s.Body] = collectLit(info, s.Body)
 		}
 	}
+	scope.checkSpawns(spawns)
+}
+
+func (m *mapScope) checkSpawns(spawns []flow.Spawn) {
 	for _, s := range spawns {
 		if s.Body == nil {
 			continue
 		}
-		scope.checkSpawn(s, spawns)
+		m.checkSpawn(s, spawns)
 	}
 }
 
@@ -549,7 +564,7 @@ func (m *mapScope) litUnguarded(s flow.Spawn, a varAccess) bool {
 	if len(m.litHeld(s.Body, a.stmt)) > 0 {
 		return false
 	}
-	return len(semaphoreKeys(m.pass, m.fn, s, a.stmt.Pos())) == 0
+	return len(semaphoreKeys(m.pass, s, a.stmt.Pos())) == 0
 }
 
 func (m *mapScope) parentMapOp(a varAccess) bool {
@@ -630,7 +645,7 @@ func (m *mapScope) litLockShared(s flow.Spawn, aAt ast.Node, o flow.Spawn, bAt a
 	if commonKey(m.litHeld(s.Body, aAt), m.litHeld(o.Body, bAt)) {
 		return true
 	}
-	return commonKey(semaphoreKeys(m.pass, m.fn, s, aAt.Pos()), semaphoreKeys(m.pass, m.fn, o, bAt.Pos()))
+	return commonKey(semaphoreKeys(m.pass, s, aAt.Pos()), semaphoreKeys(m.pass, o, bAt.Pos()))
 }
 
 func siblingJoined(pass *analysis.Pass, g *flow.Graph, s, o flow.Spawn) bool {
@@ -651,6 +666,7 @@ func runFanout(pass *analysis.Pass) (any, error) {
 type fanoutCtx struct {
 	loops    []loopNest
 	buffered map[flow.Key]bool
+	locks    map[*ast.FuncLit]*holder
 }
 
 func checkFanout(pass *analysis.Pass, fn ast.Node) {
@@ -658,43 +674,64 @@ func checkFanout(pass *analysis.Pass, fn ast.Node) {
 	if passesMutex(info, fn) || flow.Body(fn) == nil {
 		return
 	}
-	ctx := fanoutCtx{loops: collectLoops(fn), buffered: bufferedChanKeys(pass, fn)}
-	for _, s := range flow.Spawns(pass, fn) {
-		if !s.InLoop || s.Body == nil || passesMutex(info, s.Body) || exitsListAfter(fn, s.Site) {
+	spawns := flow.Spawns(pass, fn)
+	if !hasFanoutSpawn(spawns) {
+		return
+	}
+	ctx := fanoutCtx{loops: collectLoops(fn), buffered: bufferedChanKeys(pass, fn), locks: map[*ast.FuncLit]*holder{}}
+	for _, s := range spawns {
+		if !fanoutUsable(fn, info, s) {
 			continue
 		}
 		for _, a := range collectLit(info, s.Body) {
-			reportFanoutWrite(pass, fn, ctx, s, a)
+			reportFanoutWrite(pass, ctx, s, a)
 		}
 	}
 }
 
-func reportFanoutWrite(pass *analysis.Pass, fn ast.Node, ctx fanoutCtx, s flow.Spawn, a varAccess) {
-	if !fanoutReportable(pass, fn, ctx, s, a) {
+func fanoutUsable(fn ast.Node, info *types.Info, s flow.Spawn) bool {
+	return s.InLoop && s.Body != nil && !passesMutex(info, s.Body) && !exitsListAfter(fn, s.Site)
+}
+
+func sharedUsable(s flow.Spawn) bool {
+	return !s.InLoop && s.Body != nil
+}
+
+func fanoutHeld(pass *analysis.Pass, ctx fanoutCtx, lit *ast.FuncLit, stmt ast.Node) []flow.Key {
+	if lit == nil || stmt == nil {
+		return nil
+	}
+	h, ok := ctx.locks[lit]
+	if !ok {
+		h = newHolder(pass, lit)
+		ctx.locks[lit] = h
+	}
+	return rootedKeys(h.at(stmt), lit)
+}
+
+func reportFanoutWrite(pass *analysis.Pass, ctx fanoutCtx, s flow.Spawn, a varAccess) {
+	if !fanoutReportable(pass, ctx, s, a) {
 		return
 	}
 	pass.Reportf(a.stmt.Pos(), "%s is written by every goroutine this loop starts, so the writes race when two of them overlap: collect results through a channel, or guard the write with a mutex", keyText(pass, a.key))
 }
 
-func fanoutReportable(pass *analysis.Pass, fn ast.Node, ctx fanoutCtx, s flow.Spawn, a varAccess) bool {
+func fanoutReportable(pass *analysis.Pass, ctx fanoutCtx, s flow.Spawn, a varAccess) bool {
 	if !a.write || a.index || a.del || a.clr {
 		return false
 	}
-	v, ok := a.key.Root.(*types.Var)
-	if !ok {
-		return false
-	}
-	return fanoutVarReportable(pass, fn, ctx, s, v, a)
+	return fanoutVarReportable(pass, ctx, s, a)
 }
 
-func fanoutVarReportable(pass *analysis.Pass, fn ast.Node, ctx fanoutCtx, s flow.Spawn, v *types.Var, a varAccess) bool {
-	if !outsideLit(v, s.Body) || isSyncType(v.Type()) || !declaredOutsideLoop(pass.TypesInfo, ctx.loops, v, s.Site) {
+func fanoutVarReportable(pass *analysis.Pass, ctx fanoutCtx, s flow.Spawn, a varAccess) bool {
+	v, ok := a.key.Root.(*types.Var)
+	if !ok || !outsideLit(v, s.Body) || isSyncType(v.Type()) || !declaredOutsideLoop(pass.TypesInfo, ctx.loops, v, s.Site) {
 		return false
 	}
-	if len(heldOutside(pass, s.Body, lockNodeFor(a))) != 0 {
+	if len(fanoutHeld(pass, ctx, s.Body, lockNodeFor(a))) != 0 {
 		return false
 	}
-	return !fanoutOrdered(pass, fn, s, a.stmt.Pos(), ctx.buffered)
+	return !fanoutOrdered(pass, s, a.stmt.Pos(), ctx.buffered)
 }
 
 func runShared(pass *analysis.Pass) (any, error) {
@@ -709,18 +746,21 @@ func checkShared(pass *analysis.Pass, fn ast.Node) {
 	if passesMutex(info, fn) || flow.Body(fn) == nil {
 		return
 	}
+	spawns := flow.Spawns(pass, fn)
+	if !hasSharedSpawn(spawns) {
+		return
+	}
 	g := flow.NewGraph(pass, fn)
 	if g == nil {
 		return
 	}
-	spawns := flow.Spawns(pass, fn)
 	sites := map[ast.Node]bool{}
 	for _, s := range spawns {
 		sites[s.Site] = true
 	}
 	scope := &sharedScope{guardScope: newGuardScope(pass, fn), graph: g, fn: fn, parent: collectParent(info, fn, sites), hasWaitCall: isSynctestWait(pass, flow.Body(fn))}
 	for _, s := range spawns {
-		if s.InLoop || s.Body == nil {
+		if !sharedUsable(s) {
 			continue
 		}
 		scope.checkSpawn(s)
@@ -743,7 +783,7 @@ func (m *sharedScope) buildEnv(s flow.Spawn) orderEnv {
 	litGraph := flow.NewGraph(m.pass, s.Body)
 	buffered := bufferedSet(m.pass, m.fn)
 	heldMap := map[syncOpKey]bool{}
-	for _, k := range flow.HeldAt(m.pass, m.graph)(s.Site) {
+	for _, k := range m.heldAt()(s.Site) {
 		heldMap[syncOpKey{root: k.Root, path: k.Path}] = true
 	}
 	return orderEnv{pass: m.pass, fn: m.fn, graph: m.graph, litGraph: litGraph, spawn: s, litOps: litOps, parentOps: parentOps, buffered: buffered, heldAtGo: heldMap}

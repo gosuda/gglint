@@ -702,4 +702,46 @@ func sharedGoArgBoundCallWaitsSilent() int {
 	go sharedSink(wait())
 	return x
 }
+func sharedSelectBodyWaitSilent(other chan int) int {
+	x := 0
+	sig := make(chan struct{})
+	go func() {
+		x = 1
+		close(sig)
+		_ = 0
+	}()
+	select {
+	case <-sig:
+	case v := <-other:
+		_ = v
+		<-sig
+	}
+	return x
+}
+
+func sharedCondEntryWaitReported(c bool) {
+	x := 0
+	_ = x
+	sig := make(chan struct{})
+	go func() { // want `x is written by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		if c {
+			<-sig
+		}
+		x = 1
+	}()
+	x = 2
+	close(sig)
+}
+
+func sharedPreGoWaitReported(c bool, sig chan struct{}) int {
+	if c {
+		<-sig
+	}
+	x := 0
+	go func() { // want `x is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		x = 1
+		close(sig)
+	}()
+	return x
+}
 

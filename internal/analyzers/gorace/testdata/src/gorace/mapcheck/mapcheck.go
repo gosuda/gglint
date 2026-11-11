@@ -294,19 +294,18 @@ func mapBothGuardedSilent(m map[int]int, mu *sync.Mutex) {
 
 func mapVarReadSilent() map[int]int {
 	m := map[int]int{}
-	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
+		defer wg.Done()
 		m[0] = 1
-		close(done)
 	}()
-	<-done
-	done2 := make(chan struct{})
 	go func() {
+		defer wg.Done()
 		v := m
 		_ = v
-		close(done2)
 	}()
-	<-done2
+	wg.Wait()
 	return m
 }
 
@@ -364,4 +363,25 @@ func mapSharedFieldReported() {
 		r.m[1] = 1
 	}()
 	_ = r.m[2]
+}
+
+func mapLiteralSemReported() map[int]int {
+	m := map[int]int{}
+	for i := range 8 {
+		go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
+			sem := make(chan struct{}, 4)
+			sem <- struct{}{}
+			m[i] = i
+			<-sem
+		}()
+	}
+	return m
+}
+
+func mapGenericDeleteReported[M ~map[int]int](m M, keys []int) {
+	for _, k := range keys {
+		go func() { // want `m is a map written by this goroutine and accessed concurrently, which can crash the process: guard every access with one mutex`
+			delete(m, k)
+		}()
+	}
 }
