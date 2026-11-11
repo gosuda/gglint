@@ -515,3 +515,15 @@ func addlateSilentHelperAlias(work func()) {
 	go func() { defer wg.Done(); work() }()
 	wg.Wait()
 }
+
+func addlateSilentReadySignal() {
+	var wg sync.WaitGroup
+	ready := make(chan struct{})
+	go func() {
+		<-ready
+		wg.Done()
+	}()
+	wg.Add(1)
+	close(ready)
+	wg.Wait()
+}
