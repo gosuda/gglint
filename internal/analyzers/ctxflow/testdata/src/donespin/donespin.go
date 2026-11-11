@@ -461,3 +461,13 @@ func donespinSilentAdvanceBlock(ctx context.Context, i, n int) {
 		}
 	}
 }
+
+func donespinSilentRangeChan(ctx context.Context, ch <-chan int) {
+	for range ch {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+}
