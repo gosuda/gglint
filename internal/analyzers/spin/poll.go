@@ -164,13 +164,32 @@ func pollLeaves(pass *analysis.Pass, cur inspector.Cursor, stmt ast.Stmt) bool {
 		return pollBlockTailLeaves(pass, cur, t)
 	case *ast.IfStmt:
 		return pollIfLeaves(pass, cur, t)
-	case *ast.SwitchStmt, *ast.TypeSwitchStmt:
-		return pollCaseLeaves(pass, cur, switchBody(stmt))
-	case *ast.LabeledStmt:
-		return pollLeaves(pass, cur, t.Stmt)
 	default:
-		return false
+		return pollStructuredLeaves(pass, cur, stmt)
 	}
+}
+
+func pollStructuredLeaves(pass *analysis.Pass, cur inspector.Cursor, stmt ast.Stmt) bool {
+	if body, label, ok := switchLabel(stmt); ok {
+		return pollCaseLeaves(pass, cur, body, label)
+	}
+	if lab, ok := stmt.(*ast.LabeledStmt); ok {
+		return pollLeaves(pass, cur, lab.Stmt)
+	}
+	return false
+}
+
+func switchLabel(stmt ast.Stmt) (*ast.BlockStmt, string, bool) {
+	if lab, ok := stmt.(*ast.LabeledStmt); ok {
+		if body := switchBody(lab.Stmt); body != nil {
+			return body, lab.Label.Name, true
+		}
+		return nil, "", false
+	}
+	if body := switchBody(stmt); body != nil {
+		return body, "", true
+	}
+	return nil, "", false
 }
 
 func switchBody(stmt ast.Stmt) *ast.BlockStmt {
@@ -186,22 +205,85 @@ func switchBody(stmt ast.Stmt) *ast.BlockStmt {
 
 func pollBranchLeaves(pass *analysis.Pass, cur inspector.Cursor, t *ast.BranchStmt) bool {
 	if t.Tok == token.GOTO {
-		return true
+		return pollGotoLeaves(pass, cur, t.Label)
 	}
 	if t.Tok == token.BREAK && t.Label != nil {
-		return !breaksSelect(pass, cur, t.Label)
+		return pollBreakLeaves(pass, cur, t.Label)
 	}
 	if t.Tok == token.CONTINUE && t.Label != nil {
-		return t.Label.Name != pollLoopLabel(cur)
+		return !pollOwnLabelNames(cur)[t.Label.Name]
 	}
 	return false
 }
 
-func pollLoopLabel(cur inspector.Cursor) string {
-	if labeled, ok := cur.Parent().Node().(*ast.LabeledStmt); ok {
-		return labeled.Label.Name
+func pollBreakLeaves(pass *analysis.Pass, cur inspector.Cursor, label *ast.Ident) bool {
+	loop, ok := cur.Node().(*ast.ForStmt)
+	if !ok {
+		return false
 	}
-	return ""
+	target := findPollLabel(pass, cur, label)
+	if target == nil {
+		return false
+	}
+	return target.Pos() <= loop.Pos() && loop.End() <= target.End()
+}
+
+func pollGotoLeaves(pass *analysis.Pass, cur inspector.Cursor, label *ast.Ident) bool {
+	if label == nil {
+		return false
+	}
+	loop, ok := cur.Node().(*ast.ForStmt)
+	if !ok || loop.Body == nil {
+		return false
+	}
+	if pollOwnLabelNames(cur)[label.Name] {
+		return false
+	}
+	target := findPollLabel(pass, cur, label)
+	if target == nil {
+		return false
+	}
+	return target.Pos() < loop.Body.Pos() || target.End() > loop.Body.End()
+}
+
+func findPollLabel(pass *analysis.Pass, cur inspector.Cursor, label *ast.Ident) *ast.LabeledStmt {
+	obj := pass.TypesInfo.ObjectOf(label)
+	if obj == nil {
+		return nil
+	}
+	fn := enclosingFunc(cur)
+	if fn == nil {
+		return nil
+	}
+	var found *ast.LabeledStmt
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		lab, ok := n.(*ast.LabeledStmt)
+		if !ok {
+			return true
+		}
+		if pass.TypesInfo.ObjectOf(lab.Label) == obj {
+			found = lab
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func pollOwnLabelNames(cur inspector.Cursor) map[string]bool {
+	out := map[string]bool{}
+	for p := cur; ; {
+		lab, ok := p.Parent().Node().(*ast.LabeledStmt)
+		if !ok {
+			break
+		}
+		out[lab.Label.Name] = true
+		p = p.Parent()
+	}
+	return out
 }
 
 func pollBlockTailLeaves(pass *analysis.Pass, cur inspector.Cursor, t *ast.BlockStmt) bool {
@@ -211,7 +293,7 @@ func pollBlockTailLeaves(pass *analysis.Pass, cur inspector.Cursor, t *ast.Block
 	return pollLeaves(pass, cur, t.List[len(t.List)-1])
 }
 
-func pollCaseLeaves(pass *analysis.Pass, cur inspector.Cursor, body *ast.BlockStmt) bool {
+func pollCaseLeaves(pass *analysis.Pass, cur inspector.Cursor, body *ast.BlockStmt, switchLabel string) bool {
 	if body == nil || len(body.List) == 0 {
 		return false
 	}
@@ -224,14 +306,74 @@ func pollCaseLeaves(pass *analysis.Pass, cur inspector.Cursor, body *ast.BlockSt
 		if clause.List == nil {
 			foundDefault = true
 		}
-		if len(clause.Body) == 0 {
+		if !clauseTailLeaves(pass, cur, clause) {
 			return false
 		}
-		if !pollLeaves(pass, cur, clause.Body[len(clause.Body)-1]) {
+		if clauseHasSwitchBreak(clause.Body, switchLabel) {
 			return false
 		}
 	}
 	return foundDefault
+}
+
+func clauseTailLeaves(pass *analysis.Pass, cur inspector.Cursor, clause *ast.CaseClause) bool {
+	if len(clause.Body) == 0 {
+		return false
+	}
+	return pollLeaves(pass, cur, clause.Body[len(clause.Body)-1])
+}
+
+func clauseHasSwitchBreak(list []ast.Stmt, switchLabel string) bool {
+	for _, s := range list {
+		if stmtHasSwitchBreak(s, switchLabel) {
+			return true
+		}
+	}
+	return false
+}
+
+func stmtHasSwitchBreak(n ast.Node, switchLabel string) bool {
+	switch t := n.(type) {
+	case *ast.BranchStmt:
+		return isSwitchBreak(t, switchLabel)
+	case *ast.BlockStmt:
+		return blockHasSwitchBreak(t.List, switchLabel)
+	case *ast.IfStmt:
+		return ifHasSwitchBreak(t, switchLabel)
+	case *ast.LabeledStmt:
+		return stmtHasSwitchBreak(t.Stmt, switchLabel)
+	default:
+		return false
+	}
+}
+
+func blockHasSwitchBreak(list []ast.Stmt, switchLabel string) bool {
+	for _, s := range list {
+		if stmtHasSwitchBreak(s, switchLabel) {
+			return true
+		}
+	}
+	return false
+}
+
+func ifHasSwitchBreak(check *ast.IfStmt, switchLabel string) bool {
+	if stmtHasSwitchBreak(check.Body, switchLabel) {
+		return true
+	}
+	if check.Else == nil {
+		return false
+	}
+	return stmtHasSwitchBreak(check.Else, switchLabel)
+}
+
+func isSwitchBreak(t *ast.BranchStmt, switchLabel string) bool {
+	if t.Tok != token.BREAK {
+		return false
+	}
+	if t.Label == nil {
+		return true
+	}
+	return switchLabel != "" && t.Label.Name == switchLabel
 }
 
 func pollIfLeaves(pass *analysis.Pass, cur inspector.Cursor, check *ast.IfStmt) bool {
@@ -255,31 +397,6 @@ func pollIfLeaves(pass *analysis.Pass, cur inspector.Cursor, check *ast.IfStmt) 
 	default:
 		return false
 	}
-}
-
-func breaksSelect(pass *analysis.Pass, cur inspector.Cursor, label *ast.Ident) bool {
-	obj := pass.TypesInfo.ObjectOf(label)
-	if obj == nil {
-		return false
-	}
-	fn := enclosingFunc(cur)
-	if fn == nil {
-		return false
-	}
-	selectLabeled := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		labeled, ok := n.(*ast.LabeledStmt)
-		if !ok {
-			return true
-		}
-		if pass.TypesInfo.ObjectOf(labeled.Label) != obj {
-			return true
-		}
-		_, isSelect := labeled.Stmt.(*ast.SelectStmt)
-		selectLabeled = isSelect
-		return false
-	})
-	return selectLabeled
 }
 
 func isPollPanic(info *types.Info, e ast.Expr) bool {

@@ -284,6 +284,42 @@ func pollSilentDefaultLabeled(ch chan int) {
 	}
 }
 
+func pollReportedSwitchBreak(ch <-chan int, n int, quiet bool) {
+	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			switch n {
+			case 0:
+				if quiet {
+					break
+				}
+				return
+			default:
+				return
+			}
+		}
+	}
+}
+
+func pollReportedLabeledSwitch(ch <-chan int, n int) {
+	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+		sw:
+			switch n {
+			case 0:
+				break sw
+			default:
+				break sw
+			}
+		}
+	}
+}
+
 func pollReportedDefaultSelectBreak(ch chan int) {
 	n := 0
 	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
