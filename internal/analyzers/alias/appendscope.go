@@ -60,7 +60,7 @@ func newAppendScope(pass *analysis.Pass, fn ast.Node, defs map[*types.Var]sliceD
 	s.copyDests = copyDestNodes(info, fn)
 	s.clearSlices = clearSliceNodes(info, fn)
 	for a := range seen {
-		s.plainStores[a] = plainStoreBases(info, fn, a)
+		s.plainStores[a] = plainStoreBases(s, a)
 		s.clearArgs[a] = clearArgIdents(info, fn, a)
 	}
 	s.untracked = untrackedSlices(info, fn, seen, s.ptrs)
@@ -114,6 +114,9 @@ func untrackedSlices(info *types.Info, fn ast.Node, wanted map[*types.Var]bool, 
 	maps.DeleteFunc(ptrs, func(_ *types.Var, a *types.Var) bool { return out[a] })
 	for p, as := range ptrAddrDefs(info, fn, wanted) {
 		if _, ok := ptrs[p]; ok {
+			continue
+		}
+		if ptrReadOnly(info, fn, p) {
 			continue
 		}
 		for a := range as {

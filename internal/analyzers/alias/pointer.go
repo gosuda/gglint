@@ -295,7 +295,34 @@ func ptrUseClean(info *types.Info, id *ast.Ident, stack []ast.Node) bool {
 	if isPtrDefIdent(info, id, stack) {
 		return true
 	}
+	if isReassignTarget(id, stack) {
+		return true
+	}
 	return isReadThrough(stack)
+}
+
+func isReassignTarget(id *ast.Ident, stack []ast.Node) bool {
+	idx := len(stack) - 1
+	for idx >= 0 {
+		if _, ok := stack[idx].(*ast.ParenExpr); ok {
+			idx--
+			continue
+		}
+		break
+	}
+	if idx < 0 {
+		return false
+	}
+	st, ok := stack[idx].(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	for _, lhs := range st.Lhs {
+		if ast.Unparen(lhs) == ast.Node(id) {
+			return true
+		}
+	}
+	return false
 }
 
 func isPtrDefIdent(info *types.Info, id *ast.Ident, stack []ast.Node) bool {
@@ -320,24 +347,40 @@ func valueNames(spec *ast.ValueSpec, id *ast.Ident) bool {
 }
 
 func isReadThrough(stack []ast.Node) bool {
-	if len(stack) == 0 {
+	idx := len(stack) - 1
+	for idx >= 0 {
+		if _, ok := stack[idx].(*ast.ParenExpr); ok {
+			idx--
+			continue
+		}
+		break
+	}
+	if idx < 0 {
 		return false
 	}
-	star, ok := stack[len(stack)-1].(*ast.StarExpr)
+	star, ok := stack[idx].(*ast.StarExpr)
 	if !ok {
 		return false
 	}
-	return !starStoredDirectly(stack, star)
+	return !starStoredDirectly(stack, star, idx)
 }
 
-func starStoredDirectly(stack []ast.Node, star *ast.StarExpr) bool {
-	if len(stack) < 2 {
+func starStoredDirectly(stack []ast.Node, star *ast.StarExpr, starIdx int) bool {
+	idx := starIdx - 1
+	for idx >= 0 {
+		if _, ok := stack[idx].(*ast.ParenExpr); ok {
+			idx--
+			continue
+		}
+		break
+	}
+	if idx < 0 {
 		return false
 	}
-	if _, ok := stack[len(stack)-2].(*ast.IncDecStmt); ok {
+	if _, ok := stack[idx].(*ast.IncDecStmt); ok {
 		return true
 	}
-	st, ok := stack[len(stack)-2].(*ast.AssignStmt)
+	st, ok := stack[idx].(*ast.AssignStmt)
 	if !ok {
 		return false
 	}

@@ -19,7 +19,7 @@ func Analyzers() []*analysis.Analyzer {
 
 var appendclobber = &analysis.Analyzer{
 	Name:     "appendclobber",
-	Doc:      "Reports an append through b := a[:n] with constant n and capacity proof that overwrites local a read later or leaving after the append; a slice that a closure or an unread-through pointer can change, or whose address escapes between the two statements, is not tracked.",
+	Doc:      "Reports an append through b := a[:n] with constant n and capacity proof that overwrites local a read later or leaving after the append; a slice that a closure touches, that a pointer with a storing or escaping use can change, or whose address escapes between the two statements, is not tracked.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runAppendclobber,
 }

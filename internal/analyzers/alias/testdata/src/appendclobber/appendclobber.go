@@ -511,3 +511,76 @@ func AppendclobberSilentAddrCallBetween() int {
 	b = append(b, 9)
 	return a[2]
 }
+
+func AppendclobberSilentPointerElementStore() int {
+	a := []int{1, 2, 3, 4}
+	p := &a
+	b := a[:2]
+	b = append(b, 9)
+	(*p)[2] = 5
+	return b[0]
+}
+
+func AppendclobberReportedReassignedPointerDirectRead() int {
+	a := []int{1, 2, 3, 4}
+	p := &a
+	p = &a
+	b := a[:2]
+	b = append(b, 9) // want `b shares its backing array with a, so this append overwrites elements of a that are read later`
+	return a[2] + (*p)[0]
+}
+
+func AppendclobberSilentParenWholeStore() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	p := &a
+	(*p) = make([]int, 4)
+	b = append(b, 9)
+	return a[2]
+}
+
+func AppendclobberSilentBoundedHigh(s []int) int {
+	a := []int{1, 2, 3, 4}
+	m := len(s)%2 + 1
+	b := a[:m]
+	b = append(b, 9)
+	return a[0]
+}
+
+func AppendclobberSilentEmptySpreadGuarded(extra []int) int {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	if len(extra) != 0 {
+		return a[2]
+	}
+	b = append(b, extra...)
+	return a[2]
+}
+
+func AppendclobberSilentInPlaceTailEmptyChecked() []int {
+	xs := []int{1, 2, 3, 4}
+	out := xs[:0]
+	for _, x := range xs {
+		if x%2 == 0 {
+			out = append(out, x)
+			if len(xs[4:]) != 0 {
+				return nil
+			}
+		}
+	}
+	return out
+}
+
+func concatCopyFresh(s []int, v int) []int {
+	out := make([]int, len(s)+1)
+	copy(out, s)
+	out[len(s)] = v
+	return out
+}
+
+func AppendclobberSilentCopyThroughFresh() int {
+	a := []int{1, 2, 3}
+	b := a[:2]
+	b = concatCopyFresh(b, 9)
+	return a[2]
+}

@@ -159,8 +159,8 @@ func clearSliceNodes(info *types.Info, fn ast.Node) map[ast.Node]bool {
 	return out
 }
 
-func plainStoreBases(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
-	scan := storeScan{info: info, fn: fn, target: a, out: map[*ast.Ident]bool{}}
+func plainStoreBases(s *appendScope, a *types.Var) map[*ast.Ident]bool {
+	scan := storeScan{info: s.info, fn: s.fn, target: a, wanted: s.wanted, ptrs: s.ptrs, out: map[*ast.Ident]bool{}}
 	scan.collect()
 	return scan.out
 }
@@ -169,6 +169,8 @@ type storeScan struct {
 	info   *types.Info
 	fn     ast.Node
 	target *types.Var
+	wanted map[*types.Var]bool
+	ptrs   map[*types.Var]*types.Var
 	out    map[*ast.Ident]bool
 }
 
@@ -192,13 +194,11 @@ func (s storeScan) mark(st *ast.AssignStmt) {
 		if !ok {
 			continue
 		}
-		v, ok := identVar(s.info, idx.X)
+		v, id, ok := resolveIndexBase(s.info, s.wanted, s.ptrs, idx.X)
 		if !ok || v != s.target {
 			continue
 		}
-		if id, ok := ast.Unparen(idx.X).(*ast.Ident); ok {
-			s.out[id] = true
-		}
+		s.out[id] = true
 	}
 }
 

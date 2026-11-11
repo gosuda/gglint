@@ -173,3 +173,12 @@ func RangemutateSilentOuterBreak() []int {
 	}
 	return s
 }
+
+func RangemutateSilentRebound() []int {
+	s := []int{1, 2, 3}
+	for _, x := range s {
+		s = nil
+		s = append(s, x)
+	}
+	return s
+}

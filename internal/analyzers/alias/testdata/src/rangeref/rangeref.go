@@ -221,3 +221,24 @@ func RangerefSilentEmbeddedPtr(items []embeddedROuter) []*int {
 	}
 	return out
 }
+
+func RangerefSilentIndexedFilter(items []item) []*item {
+	var ptrs []*item
+	for i, v := range items {
+		if items[i].n > 0 {
+			ptrs = append(ptrs, &v)
+		}
+	}
+	return ptrs
+}
+
+func RangerefSilentLocalThrough(items []item) int {
+	n := 0
+	for _, v := range items {
+		var p *item
+		p = &v
+		p.n = 1
+		n += p.n
+	}
+	return n
+}
