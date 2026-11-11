@@ -49,8 +49,9 @@ func runNilop(pass *analysis.Pass) (any, error) {
 		sel := selectTargets(fn)
 		ctx := newFnCtx(pass.TypesInfo, fn)
 		ranges := chanRanges(pass.TypesInfo, fn)
+		scope := newMachineScope(pass, fn, g, reportNilop, sel)
 		for _, k := range nilLocalsWith(ctx) {
-			machineReport(pass, fn, g, k, reportNilop, sel)
+			scope.reportKey(k)
 			nilRangeReport(pass, ranges, k)
 		}
 	})
@@ -79,8 +80,9 @@ func runDoubleclose(pass *analysis.Pass) (any, error) {
 	each(pass, func(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
 		sel := selectTargets(fn)
 		ctx := newFnCtx(pass.TypesInfo, fn)
+		scope := newMachineScope(pass, fn, g, reportDoubleclose, sel)
 		for _, k := range chanLocalsWith(ctx) {
-			machineReport(pass, fn, g, k, reportDoubleclose, sel)
+			scope.reportKey(k)
 		}
 	})
 	return nil, nil
@@ -96,8 +98,9 @@ func runSendafterclose(pass *analysis.Pass) (any, error) {
 	each(pass, func(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
 		sel := selectTargets(fn)
 		ctx := newFnCtx(pass.TypesInfo, fn)
+		scope := newMachineScope(pass, fn, g, reportSendafterclose, sel)
 		for _, k := range chanLocalsWith(ctx) {
-			machineReport(pass, fn, g, k, reportSendafterclose, sel)
+			scope.reportKey(k)
 		}
 	})
 	return nil, nil
@@ -399,13 +402,29 @@ func each(pass *analysis.Pass, do func(*analysis.Pass, ast.Node, *flow.Graph)) {
 	}
 }
 
-func machineReport(pass *analysis.Pass, fn ast.Node, g *flow.Graph, k flow.Key, report func(*analysis.Pass, chanOp, chanState), sel map[ast.Node]bool) {
-	v := machineVisitor{pass: pass, fn: fn, info: pass.TypesInfo, key: k, report: report, inSelect: sel}
-	flow.Forward(g, stUnknown,
-		func(n ast.Node, s chanState) chanState { return stepNode(v.info, fn, n, k, s) },
-		joinState,
-		v.visitOps,
-	)
+type machineMemo struct {
+	targets map[ast.Node]bool
+	ops     map[ast.Node][]chanOp
+	touched map[ast.Node]bool
+}
+
+type machineScope struct {
+	pass   *analysis.Pass
+	fn     ast.Node
+	graph  *flow.Graph
+	report func(*analysis.Pass, chanOp, chanState)
+	sel    map[ast.Node]bool
+	target map[ast.Node]bool
+}
+
+func newMachineScope(pass *analysis.Pass, fn ast.Node, g *flow.Graph, report func(*analysis.Pass, chanOp, chanState), sel map[ast.Node]bool) *machineScope {
+	return &machineScope{pass: pass, fn: fn, graph: g, report: report, sel: sel, target: rangeAssignTargets(fn)}
+}
+
+func (m *machineScope) reportKey(k flow.Key) {
+	memo := &machineMemo{targets: m.target, ops: map[ast.Node][]chanOp{}, touched: map[ast.Node]bool{}}
+	v := machineVisitor{pass: m.pass, fn: m.fn, info: m.pass.TypesInfo, key: k, report: m.report, inSelect: m.sel, memo: memo}
+	flow.Forward(m.graph, stUnknown, v.step, joinState, v.visitOps)
 }
 
 type machineVisitor struct {
@@ -415,13 +434,14 @@ type machineVisitor struct {
 	key      flow.Key
 	report   func(*analysis.Pass, chanOp, chanState)
 	inSelect map[ast.Node]bool
+	memo     *machineMemo
 }
 
 func (v machineVisitor) visitOps(n ast.Node, s chanState) {
 	if v.visitSpecial(n, s) {
 		return
 	}
-	if literalTouch(v.info, n, v.key) {
+	if touchedNode(v.info, n, v.key, v.memo.touched) {
 		return
 	}
 	v.visitEach(n, s)
@@ -456,7 +476,7 @@ func (v machineVisitor) visitGo(g *ast.GoStmt, s chanState) bool {
 }
 
 func (v machineVisitor) visitEach(n ast.Node, s chanState) {
-	for _, op := range opsOf(v.info, n, v.key) {
+	for _, op := range nodeOps(v.info, n, v.key, v.memo.ops) {
 		if v.inSelect[op.Expr] {
 			op.InSelect = true
 		}

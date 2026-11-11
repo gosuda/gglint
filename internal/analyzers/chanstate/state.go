@@ -24,24 +24,42 @@ func joinState(a, b chanState) chanState {
 	return stUnknown
 }
 
-func stepNode(info *types.Info, fn, n ast.Node, k flow.Key, s chanState) chanState {
-	if defersClose(info, n, k) {
+func (v machineVisitor) step(n ast.Node, s chanState) chanState {
+	if defersClose(v.info, n, v.key) {
 		return s
 	}
-	if goCloses(info, n, k) {
+	if goCloses(v.info, n, v.key) {
 		return stUnknown
 	}
-	if literalTouch(info, n, k) {
+	if touchedNode(v.info, n, v.key, v.memo.touched) {
 		return stUnknown
 	}
-	if isRangeAssignTarget(info, fn, n, k) {
+	if isRangeAssignTarget(v.info, n, v.key, v.memo.targets) {
 		return stUnknown
 	}
 	out := s
-	for _, op := range opsOf(info, n, k) {
+	for _, op := range nodeOps(v.info, n, v.key, v.memo.ops) {
 		out = stepOp(op, out)
 	}
 	return out
+}
+
+func nodeOps(info *types.Info, n ast.Node, k flow.Key, memo map[ast.Node][]chanOp) []chanOp {
+	ops, ok := memo[n]
+	if !ok {
+		ops = opsOf(info, n, k)
+		memo[n] = ops
+	}
+	return ops
+}
+
+func touchedNode(info *types.Info, n ast.Node, k flow.Key, memo map[ast.Node]bool) bool {
+	touched, ok := memo[n]
+	if !ok {
+		touched = literalTouch(info, n, k)
+		memo[n] = touched
+	}
+	return touched
 }
 
 func defersClose(info *types.Info, n ast.Node, k flow.Key) bool {
@@ -62,7 +80,23 @@ func goCloses(info *types.Info, n ast.Node, k flow.Key) bool {
 	return ok && ck == k
 }
 
-func isRangeAssignTarget(info *types.Info, fn, n ast.Node, k flow.Key) bool {
+func rangeAssignTargets(fn ast.Node) map[ast.Node]bool {
+	out := map[ast.Node]bool{}
+	ast.Inspect(fn, func(x ast.Node) bool {
+		if r, ok := x.(*ast.RangeStmt); ok && (r.Tok == token.ASSIGN || r.Tok == token.DEFINE) {
+			if r.Key != nil {
+				out[r.Key] = true
+			}
+			if r.Value != nil {
+				out[r.Value] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+func isRangeAssignTarget(info *types.Info, n ast.Node, k flow.Key, targets map[ast.Node]bool) bool {
 	e, ok := n.(ast.Expr)
 	if !ok {
 		return false
@@ -74,30 +108,7 @@ func isRangeAssignTarget(info *types.Info, fn, n ast.Node, k flow.Key) bool {
 	if kk, ok := keyOfIdent(info, id); !ok || kk != k {
 		return false
 	}
-	return rangeAssignsTarget(fn, n)
-}
-
-func rangeAssignsTarget(fn, n ast.Node) bool {
-	found := false
-	ast.Inspect(fn, func(x ast.Node) bool {
-		if found {
-			return false
-		}
-		found = rangeStmtTargets(x, n)
-		return !found
-	})
-	return found
-}
-
-func rangeStmtTargets(x, n ast.Node) bool {
-	r, ok := x.(*ast.RangeStmt)
-	if !ok {
-		return false
-	}
-	if r.Tok != token.ASSIGN && r.Tok != token.DEFINE {
-		return false
-	}
-	return r.Key == n || r.Value == n
+	return targets[n]
 }
 
 func stepOp(op chanOp, s chanState) chanState {
