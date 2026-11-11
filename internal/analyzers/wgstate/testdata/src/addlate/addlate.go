@@ -492,9 +492,10 @@ func addlateSilentHelperAddsInLiteral(work func()) {
 
 func addOnceDo(wg *sync.WaitGroup, once *sync.Once) { once.Do(func() { wg.Add(1) }) }
 
-func addlateSilentHelperOnceDo(work func(), once *sync.Once) {
+func addlateSilentHelperOnceDo(work func()) {
 	var wg sync.WaitGroup
-	addOnceDo(&wg, once)
+	var once sync.Once
+	addOnceDo(&wg, &once)
 	go func() { defer wg.Done(); work() }()
 	wg.Add(1)
 	go func() { defer wg.Done(); work() }()
