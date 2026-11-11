@@ -159,8 +159,8 @@ func clearSliceNodes(info *types.Info, fn ast.Node) map[ast.Node]bool {
 	return out
 }
 
-func plainStoreBases(info *types.Info, fn ast.Node, a *types.Var, ptrs map[*types.Var]*types.Var) map[*ast.Ident]bool {
-	scan := storeScan{info: info, fn: fn, target: a, ptrs: ptrs, out: map[*ast.Ident]bool{}}
+func plainStoreBases(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
+	scan := storeScan{info: info, fn: fn, target: a, out: map[*ast.Ident]bool{}}
 	scan.collect()
 	return scan.out
 }
@@ -169,7 +169,6 @@ type storeScan struct {
 	info   *types.Info
 	fn     ast.Node
 	target *types.Var
-	ptrs   map[*types.Var]*types.Var
 	out    map[*ast.Ident]bool
 }
 
@@ -193,16 +192,18 @@ func (s storeScan) mark(st *ast.AssignStmt) {
 		if !ok {
 			continue
 		}
-		_, id, ok := resolveIndexBase(s.info, map[*types.Var]bool{s.target: true}, s.ptrs, idx.X)
-		if !ok {
+		v, ok := identVar(s.info, idx.X)
+		if !ok || v != s.target {
 			continue
 		}
-		s.out[id] = true
+		if id, ok := ast.Unparen(idx.X).(*ast.Ident); ok {
+			s.out[id] = true
+		}
 	}
 }
 
-func clearArgIdents(info *types.Info, fn ast.Node, a *types.Var, ptrs map[*types.Var]*types.Var) map[*ast.Ident]bool {
-	scan := clearScan{info: info, fn: fn, target: a, ptrs: ptrs, out: map[*ast.Ident]bool{}}
+func clearArgIdents(info *types.Info, fn ast.Node, a *types.Var) map[*ast.Ident]bool {
+	scan := clearScan{info: info, fn: fn, target: a, out: map[*ast.Ident]bool{}}
 	scan.collect()
 	return scan.out
 }
@@ -211,7 +212,6 @@ type clearScan struct {
 	info   *types.Info
 	fn     ast.Node
 	target *types.Var
-	ptrs   map[*types.Var]*types.Var
 	out    map[*ast.Ident]bool
 }
 
@@ -240,16 +240,10 @@ func (s clearScan) mark(x ast.Node) {
 		return
 	}
 	v, ok := varOf(s.info, id)
-	if !ok {
+	if !ok || v != s.target {
 		return
 	}
-	if v == s.target {
-		s.out[id] = true
-		return
-	}
-	if a, ok := s.ptrs[v]; ok && a == s.target {
-		s.out[id] = true
-	}
+	s.out[id] = true
 }
 
 func isClearCall(info *types.Info, call *ast.CallExpr) bool {

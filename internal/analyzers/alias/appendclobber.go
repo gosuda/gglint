@@ -142,6 +142,9 @@ func checkAppendAssign(scope *appendScope, st *ast.AssignStmt, defs map[*types.V
 	if !def.highKnown || call.Ellipsis.IsValid() {
 		return
 	}
+	if skipUntrackedSlice(scope, def, st) {
+		return
+	}
 	if inPlaceCached(scope, b, def, silent) {
 		return
 	}
@@ -155,6 +158,74 @@ func checkAppendAssign(scope *appendScope, st *ast.AssignStmt, defs map[*types.V
 		return
 	}
 	tryUnknownCap(scope, st, b, def, call)
+}
+
+func skipUntrackedSlice(scope *appendScope, def sliceDef, st *ast.AssignStmt) bool {
+	if scope.untracked[def.a] {
+		return true
+	}
+	return addrExposedBetween(scope.info, scope.fn, def.a, def.pos, st.Pos())
+}
+
+func addrExposedBetween(info *types.Info, fn ast.Node, a *types.Var, from, to token.Pos) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	exposed := false
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if exposed {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if isExposedAddr(info, n, stack, a, from, to) {
+			exposed = true
+			return false
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return exposed
+}
+
+func isExposedAddr(info *types.Info, n ast.Node, stack []ast.Node, a *types.Var, from, to token.Pos) bool {
+	u, ok := n.(*ast.UnaryExpr)
+	if !ok || u.Op != token.AND {
+		return false
+	}
+	return identIsVar(info, u.X, a) && u.Pos() > from && u.Pos() < to && addrUseExposed(info, stack)
+}
+
+func addrUseExposed(info *types.Info, stack []ast.Node) bool {
+	if len(stack) == 0 {
+		return true
+	}
+	switch t := stack[len(stack)-1].(type) {
+	case *ast.AssignStmt:
+		return !isLocalAddrDefine(info, t)
+	case *ast.ValueSpec:
+		return len(t.Names) != 1 || len(t.Values) != 1
+	}
+	return true
+}
+
+func isLocalAddrDefine(info *types.Info, st *ast.AssignStmt) bool {
+	if st.Tok != token.DEFINE || len(st.Lhs) != 1 || len(st.Rhs) != 1 {
+		return false
+	}
+	id, ok := ast.Unparen(st.Lhs[0]).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	_, ok = varOf(info, id)
+	return ok
 }
 
 func inPlaceCached(scope *appendScope, b *types.Var, def sliceDef, silent map[*types.Var]bool) bool {

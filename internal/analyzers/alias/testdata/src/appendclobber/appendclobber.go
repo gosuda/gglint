@@ -473,3 +473,41 @@ func (r ints) clean() int {
 	r = a
 	return len(r)
 }
+
+func AppendclobberSilentStarBeforeDef() []int {
+	a := make([]int, 4)
+	p := &a
+	*p = make([]int, 2)
+	b := a[:2]
+	b = append(b, 9)
+	return *p
+}
+
+func AppendclobberSilentPointerClosureStore() int {
+	a := []int{1, 2, 3, 4}
+	p := &a
+	b := a[:2]
+	reset := func() { *p = make([]int, 4) }
+	reset()
+	b = append(b, 9)
+	return (*p)[2]
+}
+
+func AppendclobberSilentClosureReassign() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	reset := func() { a = make([]int, 4) }
+	reset()
+	b = append(b, 9)
+	return a[2]
+}
+
+func appendRegrowSlice(q *[]int) { *q = make([]int, 4) }
+
+func AppendclobberSilentAddrCallBetween() int {
+	a := []int{1, 2, 3, 4}
+	b := a[:2]
+	appendRegrowSlice(&a)
+	b = append(b, 9)
+	return a[2]
+}

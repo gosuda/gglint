@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 
 	"github.com/gosuda/gglint/internal/flow"
 )
@@ -199,4 +200,151 @@ func resolveIndexBase(info *types.Info, wanted map[*types.Var]bool, ptrs map[*ty
 		return nil, nil, false
 	}
 	return a, inner, true
+}
+
+func ptrAddrDefs(info *types.Info, fn ast.Node, wanted map[*types.Var]bool) map[*types.Var]map[*types.Var]bool {
+	out := map[*types.Var]map[*types.Var]bool{}
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		recordAddrDef(info, n, wanted, out)
+		return true
+	})
+	return out
+}
+
+func recordAddrDef(info *types.Info, n ast.Node, wanted map[*types.Var]bool, out map[*types.Var]map[*types.Var]bool) {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		recordAssignAddrDef(info, t, wanted, out)
+	case *ast.ValueSpec:
+		recordValueAddrDef(info, t, wanted, out)
+	}
+}
+
+func recordAssignAddrDef(info *types.Info, st *ast.AssignStmt, wanted map[*types.Var]bool, out map[*types.Var]map[*types.Var]bool) {
+	if len(st.Lhs) != 1 || len(st.Rhs) != 1 {
+		return
+	}
+	id, ok := ast.Unparen(st.Lhs[0]).(*ast.Ident)
+	if !ok {
+		return
+	}
+	p, ok := varOf(info, id)
+	if !ok {
+		return
+	}
+	if a, ok := addrTarget(info, st.Rhs[0], wanted); ok {
+		addAddrDef(out, p, a)
+	}
+}
+
+func recordValueAddrDef(info *types.Info, spec *ast.ValueSpec, wanted map[*types.Var]bool, out map[*types.Var]map[*types.Var]bool) {
+	if len(spec.Names) != 1 || len(spec.Values) != 1 {
+		return
+	}
+	p, ok := varOf(info, spec.Names[0])
+	if !ok {
+		return
+	}
+	if a, ok := addrTarget(info, spec.Values[0], wanted); ok {
+		addAddrDef(out, p, a)
+	}
+}
+
+func addAddrDef(out map[*types.Var]map[*types.Var]bool, p, a *types.Var) {
+	m, ok := out[p]
+	if !ok {
+		m = map[*types.Var]bool{}
+		out[p] = m
+	}
+	m[a] = true
+}
+
+func ptrReadOnly(info *types.Info, fn ast.Node, p *types.Var) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	clean := true
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if !clean {
+			return false
+		}
+		if id, ok := n.(*ast.Ident); ok {
+			if v, ok := varOf(info, id); ok && v == p && !ptrUseClean(info, id, stack) {
+				clean = false
+				return false
+			}
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return clean
+}
+
+func ptrUseClean(info *types.Info, id *ast.Ident, stack []ast.Node) bool {
+	for _, an := range stack {
+		if _, ok := an.(*ast.FuncLit); ok {
+			return false
+		}
+	}
+	if isPtrDefIdent(info, id, stack) {
+		return true
+	}
+	return isReadThrough(stack)
+}
+
+func isPtrDefIdent(info *types.Info, id *ast.Ident, stack []ast.Node) bool {
+	if len(stack) == 0 || info.Defs[id] == nil {
+		return false
+	}
+	if st, ok := stack[len(stack)-1].(*ast.AssignStmt); ok {
+		return isShortDefine(st, id)
+	}
+	if spec, ok := stack[len(stack)-1].(*ast.ValueSpec); ok {
+		return valueNames(spec, id)
+	}
+	return false
+}
+
+func isShortDefine(st *ast.AssignStmt, id *ast.Ident) bool {
+	return st.Tok == token.DEFINE && len(st.Lhs) == 1 && len(st.Rhs) == 1 && ast.Unparen(st.Lhs[0]) == id
+}
+
+func valueNames(spec *ast.ValueSpec, id *ast.Ident) bool {
+	return slices.Contains(spec.Names, id)
+}
+
+func isReadThrough(stack []ast.Node) bool {
+	if len(stack) == 0 {
+		return false
+	}
+	star, ok := stack[len(stack)-1].(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	return !starStoredDirectly(stack, star)
+}
+
+func starStoredDirectly(stack []ast.Node, star *ast.StarExpr) bool {
+	if len(stack) < 2 {
+		return false
+	}
+	if _, ok := stack[len(stack)-2].(*ast.IncDecStmt); ok {
+		return true
+	}
+	st, ok := stack[len(stack)-2].(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	for _, lhs := range st.Lhs {
+		if ast.Unparen(lhs) == ast.Node(star) {
+			return true
+		}
+	}
+	return false
 }

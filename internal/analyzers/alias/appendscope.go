@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"maps"
 
 	"golang.org/x/tools/go/analysis"
 
@@ -26,6 +27,7 @@ type appendScope struct {
 	wholeReads  map[*types.Var][]*ast.Ident
 	loops       []loopSpan
 	wanted      map[*types.Var]bool
+	untracked   map[*types.Var]bool
 	ptrs        map[*types.Var]*types.Var
 }
 
@@ -58,9 +60,10 @@ func newAppendScope(pass *analysis.Pass, fn ast.Node, defs map[*types.Var]sliceD
 	s.copyDests = copyDestNodes(info, fn)
 	s.clearSlices = clearSliceNodes(info, fn)
 	for a := range seen {
-		s.plainStores[a] = plainStoreBases(info, fn, a, s.ptrs)
-		s.clearArgs[a] = clearArgIdents(info, fn, a, s.ptrs)
+		s.plainStores[a] = plainStoreBases(info, fn, a)
+		s.clearArgs[a] = clearArgIdents(info, fn, a)
 	}
+	s.untracked = untrackedSlices(info, fn, seen, s.ptrs)
 	s.indexReads = map[*types.Var][]*ast.IndexExpr{}
 	s.sliceReads = map[*types.Var][]*ast.SliceExpr{}
 	s.wholeReads = map[*types.Var][]*ast.Ident{}
@@ -87,27 +90,99 @@ func collectAssignsAndLoops(s *appendScope, info *types.Info, fn ast.Node) {
 }
 
 func recordAssignTarget(s *appendScope, info *types.Info, lhs ast.Expr, st *ast.AssignStmt) {
-	if id, ok := ast.Unparen(lhs).(*ast.Ident); ok {
-		if v, ok := varOf(info, id); ok {
-			s.assigns[v] = append(s.assigns[v], st)
+	id, ok := ast.Unparen(lhs).(*ast.Ident)
+	if !ok {
+		return
+	}
+	if v, ok := varOf(info, id); ok {
+		s.assigns[v] = append(s.assigns[v], st)
+	}
+}
+
+func untrackedSlices(info *types.Info, fn ast.Node, wanted map[*types.Var]bool, ptrs map[*types.Var]*types.Var) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	for a := range wanted {
+		if closureTouchesSlice(info, fn, a) {
+			out[a] = true
 		}
-		return
 	}
-	star, ok := ast.Unparen(lhs).(*ast.StarExpr)
+	for p, a := range ptrs {
+		if !ptrReadOnly(info, fn, p) {
+			out[a] = true
+		}
+	}
+	maps.DeleteFunc(ptrs, func(_ *types.Var, a *types.Var) bool { return out[a] })
+	for p, as := range ptrAddrDefs(info, fn, wanted) {
+		if _, ok := ptrs[p]; ok {
+			continue
+		}
+		for a := range as {
+			out[a] = true
+		}
+	}
+	return out
+}
+
+func closureTouchesSlice(info *types.Info, fn ast.Node, a *types.Var) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	touched := false
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if touched {
+			return false
+		}
+		if insideLiteral(stack) && assignsOrTakesAddr(info, n, a) {
+			touched = true
+			return false
+		}
+		stack = append(stack, n)
+		return true
+	})
+	return touched
+}
+
+func insideLiteral(stack []ast.Node) bool {
+	for _, an := range stack {
+		if _, ok := an.(*ast.FuncLit); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func assignsOrTakesAddr(info *types.Info, n ast.Node, a *types.Var) bool {
+	if st, ok := n.(*ast.AssignStmt); ok {
+		return assignWritesVar(info, st, a)
+	}
+	if u, ok := n.(*ast.UnaryExpr); ok {
+		return u.Op == token.AND && identIsVar(info, u.X, a)
+	}
+	return false
+}
+
+func assignWritesVar(info *types.Info, st *ast.AssignStmt, a *types.Var) bool {
+	for _, lhs := range st.Lhs {
+		if id, ok := ast.Unparen(lhs).(*ast.Ident); ok && identIsVar(info, id, a) {
+			return true
+		}
+	}
+	return false
+}
+
+func identIsVar(info *types.Info, e ast.Expr, a *types.Var) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
 	if !ok {
-		return
+		return false
 	}
-	inner, ok := ast.Unparen(star.X).(*ast.Ident)
-	if !ok {
-		return
-	}
-	p, ok := varOf(info, inner)
-	if !ok {
-		return
-	}
-	if a, ok := s.ptrs[p]; ok && s.wanted[a] {
-		s.assigns[a] = append(s.assigns[a], st)
-	}
+	v, ok := varOf(info, id)
+	return ok && v == a
 }
 
 func collectLoopSpan(s *appendScope, n ast.Node) {
