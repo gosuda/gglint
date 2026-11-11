@@ -434,7 +434,7 @@ func collectParentOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn) []syncOp {
 			return false
 		}
 		if gs, ok := n.(*ast.GoStmt); ok {
-			out = append(out, goStmtOps(pass, s, gs)...)
+			out = append(out, goStmtOps(pass, fn, s, gs)...)
 			return false
 		}
 		out = append(out, classifyNode(pass, s, n)...)
@@ -446,16 +446,35 @@ func collectParentOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn) []syncOp {
 	return out
 }
 
-func goStmtOps(pass *analysis.Pass, s flow.Spawn, gs *ast.GoStmt) []syncOp {
+func goStmtOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn, gs *ast.GoStmt) []syncOp {
 	if gs.Call == nil {
 		return nil
 	}
 	var out []syncOp
-	ast.Inspect(gs.Call, func(x ast.Node) bool {
-		if _, ok := x.(*ast.FuncLit); ok {
+	for _, a := range gs.Call.Args {
+		if _, ok := ast.Unparen(a).(*ast.FuncLit); ok {
+			continue
+		}
+		out = append(out, nestedCallOps(pass, fn, s, a)...)
+	}
+	return out
+}
+
+func nestedCallOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn, root ast.Node) []syncOp {
+	var out []syncOp
+	ast.Inspect(root, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		out = append(out, classifyNode(pass, s, x)...)
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			out = append(out, classifyNode(pass, s, n)...)
+			return true
+		}
+		out = append(out, classifyNode(pass, s, call)...)
+		out = append(out, argLitOps(pass, s, call)...)
+		out = append(out, funLitOps(pass, s, call)...)
+		out = append(out, boundCallOps(pass, fn, s, call)...)
 		return true
 	})
 	return out
@@ -499,6 +518,7 @@ func collectLitOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn) []syncOp {
 		}
 		out = append(out, classifyNode(pass, s, n)...)
 		out = append(out, argLitOps(pass, s, n)...)
+		out = append(out, funLitOps(pass, s, n)...)
 		out = append(out, boundCallOps(pass, fn, s, n)...)
 		return true
 	})
@@ -515,6 +535,19 @@ func deferredOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn, call *ast.CallE
 	for _, o := range boundCallOps(pass, fn, s, call) {
 		o.deferred = true
 		out = append(out, o)
+	}
+	if lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit); ok && lit.Body != nil {
+		ast.Inspect(lit.Body, func(x ast.Node) bool {
+			if _, ok := x.(*ast.FuncLit); ok {
+				return false
+			}
+			for _, o := range classifyNode(pass, s, x) {
+				o.deferred = true
+				o.node = ast.Node(call)
+				out = append(out, o)
+			}
+			return true
+		})
 	}
 	return out
 }
@@ -584,6 +617,19 @@ func crosses(graph *flow.Graph, from, to ast.Node, waits []syncOp) bool {
 		return false
 	}
 	return !graph.Reaches(from, to, avoid)
+}
+
+func entryOrdered(s waitSide, waits []syncOp) bool {
+	if s.root == nil || len(s.root.List) == 0 {
+		return false
+	}
+	first := s.root.List[0]
+	for _, w := range waits {
+		if nodeContains(first, w.node) {
+			return true
+		}
+	}
+	return false
 }
 
 type orderEnv struct {
@@ -680,7 +726,7 @@ func mutexBaton(env orderEnv, sig syncOp, waits []syncOp, pa ast.Node) bool {
 		return false
 	}
 	s := parentSide(env, env.spawn.Site, pa)
-	return !escapedIn(s, sig.key, locks)
+	return !escapedIn(s, locks)
 }
 
 func tokenGuard(env orderEnv, ga, pa ast.Node) bool {
@@ -733,14 +779,11 @@ func hasOpAfter(ops []syncOp, graph *flow.Graph, access ast.Node, key syncOpKey)
 }
 
 type waitSide struct {
-	pass  *analysis.Pass
 	graph *flow.Graph
 	from  ast.Node
 	to    ast.Node
-	root  ast.Node
+	root  *ast.BlockStmt
 	keep  func(*ast.SelectStmt) bool
-	fn    ast.Node
-	spawn flow.Spawn
 }
 
 func posOf(n ast.Node) token.Pos {
@@ -761,22 +804,19 @@ func keepBefore(ga ast.Node) func(*ast.SelectStmt) bool {
 }
 
 func parentSide(env orderEnv, from, to ast.Node) waitSide {
-	body := flow.Body(env.fn)
 	return waitSide{
-		pass: env.pass, graph: env.graph, from: from, to: to,
-		root: body, keep: keepBetween(from, to),
+		graph: env.graph, from: from, to: to,
+		root: flow.Body(env.fn), keep: keepBetween(from, to),
 	}
 }
 
 func litSide(env orderEnv, to ast.Node) waitSide {
-	var entry, root ast.Node
-	if env.spawn.Body != nil {
-		entry = flow.Body(env.spawn.Body)
-		root = env.spawn.Body.Body
+	if env.spawn.Body == nil {
+		return waitSide{graph: env.litGraph, from: nil, to: to, keep: keepBefore(to)}
 	}
 	return waitSide{
-		pass: env.pass, graph: env.litGraph, from: entry, to: to,
-		root: root, keep: keepBefore(to), fn: env.fn, spawn: env.spawn,
+		graph: env.litGraph, from: flow.Body(env.spawn.Body), to: to,
+		root: env.spawn.Body.Body, keep: keepBefore(to),
 	}
 }
 
@@ -829,19 +869,15 @@ func checkSide(sig syncOp, waits []syncOp, buf bool, keep func(syncKind) bool, s
 	if len(compat) == 0 {
 		return false
 	}
-	if !crosses(s.graph, s.from, s.to, compat) {
+	if !entryOrdered(s, compat) && !crosses(s.graph, s.from, s.to, compat) {
 		return false
 	}
-	return !escapedIn(s, sig.key, compat)
+	return !escapedIn(s, compat)
 }
 
-func escapedIn(s waitSide, key syncOpKey, waits []syncOp) bool {
-	if s.root == nil {
+func escapedIn(s waitSide, waits []syncOp) bool {
+	if s.root == nil || len(waits) == 0 {
 		return false
-	}
-	kinds := map[syncKind]bool{}
-	for _, w := range waits {
-		kinds[w.kind] = true
 	}
 	found := false
 	ast.Inspect(s.root, func(n ast.Node) bool {
@@ -855,7 +891,10 @@ func escapedIn(s waitSide, key syncOpKey, waits []syncOp) bool {
 		if !ok {
 			return true
 		}
-		if escapeInSelect(s, sel, key, kinds) {
+		if s.keep != nil && !s.keep(sel) {
+			return true
+		}
+		if selectEscapes(sel, waits) {
 			found = true
 			return false
 		}
@@ -864,8 +903,8 @@ func escapedIn(s waitSide, key syncOpKey, waits []syncOp) bool {
 	return found
 }
 
-func escapeInSelect(s waitSide, sel *ast.SelectStmt, key syncOpKey, kinds map[syncKind]bool) bool {
-	if s.keep == nil || !s.keep(sel) {
+func selectEscapes(sel *ast.SelectStmt, waits []syncOp) bool {
+	if !holdsWaitComm(sel, waits) {
 		return false
 	}
 	for _, cc := range sel.Body.List {
@@ -873,59 +912,40 @@ func escapeInSelect(s waitSide, sel *ast.SelectStmt, key syncOpKey, kinds map[sy
 		if !ok {
 			continue
 		}
+		if clauseHasWaitComm(clause, waits) {
+			continue
+		}
 		if flow.EndsInReturn(clause.Body) {
 			continue
 		}
-		if escapeClause(s, clause, key, kinds) {
+		return true
+	}
+	return false
+}
+
+func holdsWaitComm(sel *ast.SelectStmt, waits []syncOp) bool {
+	for _, cc := range sel.Body.List {
+		clause, ok := cc.(*ast.CommClause)
+		if !ok {
 			continue
 		}
-		return true
-	}
-	return false
-}
-
-func escapeClause(s waitSide, clause *ast.CommClause, key syncOpKey, kinds map[syncKind]bool) bool {
-	if clause.Comm != nil && stmtWaits(s, clause.Comm, key, kinds) {
-		return true
-	}
-	for _, st := range clause.Body {
-		if stmtWaits(s, st, key, kinds) {
+		if clauseHasWaitComm(clause, waits) {
 			return true
 		}
 	}
 	return false
 }
 
-func stmtWaits(s waitSide, st ast.Node, key syncOpKey, kinds map[syncKind]bool) bool {
-	found := false
-	ast.Inspect(st, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if nodeWaits(s, n, key, kinds) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func nodeWaits(s waitSide, n ast.Node, key syncOpKey, kinds map[syncKind]bool) bool {
-	for _, o := range callOpsOn(s.pass, s.fn, s.spawn, n) {
-		if o.key.same(key) && kinds[o.kind] {
+func clauseHasWaitComm(clause *ast.CommClause, waits []syncOp) bool {
+	if clause.Comm == nil {
+		return false
+	}
+	for _, w := range waits {
+		if nodeContains(clause.Comm, w.node) {
 			return true
 		}
 	}
 	return false
-}
-
-func callOpsOn(pass *analysis.Pass, fn ast.Node, s flow.Spawn, n ast.Node) []syncOp {
-	var out []syncOp
-	out = append(out, classifyNode(pass, s, n)...)
-	out = append(out, argLitOps(pass, s, n)...)
-	out = append(out, boundCallOps(pass, fn, s, n)...)
-	return out
 }
 
 func bracketedOn(ops []syncOp, s waitSide, key syncOpKey) bool {
@@ -936,7 +956,7 @@ func bracketedOn(ops []syncOp, s waitSide, key syncOpKey) bool {
 	if !crosses(s.graph, s.from, s.to, keyed) {
 		return false
 	}
-	if escapedIn(s, key, keyed) {
+	if escapedIn(s, keyed) {
 		return false
 	}
 	return hasOpAfter(ops, s.graph, s.to, key)

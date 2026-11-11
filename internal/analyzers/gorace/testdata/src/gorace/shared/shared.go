@@ -642,3 +642,64 @@ func sharedGoCallArgWaitReported() int {
 	return x
 }
 
+func sharedWaitFor(f func()) int { f(); return 0 }
+
+func sharedSink(int) {}
+
+func sharedDrainThenWaitSilent() {
+	x := 0
+	sig := make(chan struct{})
+	spare := make(chan int, 1)
+	go func() {
+		select {
+		case <-spare:
+		default:
+		}
+		<-sig
+		x = 2
+	}()
+	x = 1
+	_ = x
+	sig <- struct{}{}
+}
+
+func sharedDeferredSendSilent() {
+	x := 0
+	done := make(chan struct{})
+	go func() {
+		<-done
+		x = 1
+	}()
+	defer func() { done <- struct{}{} }()
+	x = 2
+	_ = x
+}
+
+func sharedInPlaceCloseSilent() int {
+	x := 0
+	done := make(chan struct{})
+	go func() {
+		x = 1
+		func() { close(done) }()
+	}()
+	<-done
+	return x
+}
+
+func sharedGoArgCallWaitsSilent() int {
+	x := 0
+	ready := make(chan struct{})
+	go func() { x = 1; close(ready) }()
+	go sharedSink(sharedWaitFor(func() { <-ready }))
+	return x
+}
+
+func sharedGoArgBoundCallWaitsSilent() int {
+	x := 0
+	done := make(chan struct{})
+	go func() { x = 1; close(done) }()
+	wait := func() int { <-done; return 0 }
+	go sharedSink(wait())
+	return x
+}
+
