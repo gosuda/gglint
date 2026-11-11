@@ -132,9 +132,6 @@ func escapesRange(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, u *ast.Un
 	if !ok {
 		return false
 	}
-	if outerAddressTaken(info, fn, tk) {
-		return false
-	}
 	return writeThrough(pass, fn, store, tk, u)
 }
 
@@ -298,11 +295,25 @@ func writeThrough(pass *analysis.Pass, fn ast.Node, store *ast.AssignStmt, tk fl
 	if g == nil || store == nil {
 		return false
 	}
-	info := pass.TypesInfo
 	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}
+	whole, writes := collectWriteSets(pass.TypesInfo, body, tk, u)
+	if len(writes) == 0 {
+		return false
+	}
+	reporting := reportingFrom(g, store, writes, whole)
+	if len(reporting) == 0 {
+		return false
+	}
+	if addrRedirects(pass.TypesInfo, fn, g, tk, reporting) {
+		return false
+	}
+	return true
+}
+
+func collectWriteSets(info *types.Info, body *ast.BlockStmt, tk flow.Key, u *ast.UnaryExpr) (map[ast.Node]bool, []ast.Node) {
 	whole := map[ast.Node]bool{}
 	var writes []ast.Node
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -316,14 +327,69 @@ func writeThrough(pass *analysis.Pass, fn ast.Node, store *ast.AssignStmt, tk fl
 		collectWholeWrite(info, st, tk, u, whole, &writes)
 		return true
 	})
-	if len(writes) == 0 {
-		return false
-	}
+	return whole, writes
+}
+
+func reportingFrom(g *flow.Graph, store ast.Node, writes []ast.Node, whole map[ast.Node]bool) []ast.Node {
+	var out []ast.Node
 	avoid := func(n ast.Node) bool {
 		return whole[n]
 	}
 	for _, w := range writes {
 		if g.Reaches(store, w, avoid) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func addrRedirects(info *types.Info, fn ast.Node, g *flow.Graph, tk flow.Key, writes []ast.Node) bool {
+	body := flow.Body(fn)
+	if body == nil {
+		return false
+	}
+	addrs := collectAddrs(info, body, tk)
+	if len(addrs) == 0 {
+		return false
+	}
+	lits := collectLits(body)
+	for _, a := range addrs {
+		if unaryInLit(a, lits) {
+			return true
+		}
+	}
+	for _, a := range addrs {
+		for _, w := range writes {
+			if g.Reaches(a, w, nil) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func collectAddrs(info *types.Info, body *ast.BlockStmt, tk flow.Key) []*ast.UnaryExpr {
+	var out []*ast.UnaryExpr
+	ast.Inspect(body, func(n ast.Node) bool {
+		u, ok := n.(*ast.UnaryExpr)
+		if !ok || u.Op != token.AND {
+			return true
+		}
+		k, ok := flow.KeyOf(info, u)
+		if !ok {
+			return true
+		}
+		if k == tk {
+			out = append(out, u)
+		}
+		return true
+	})
+	return out
+}
+
+func unaryInLit(u *ast.UnaryExpr, lits []*ast.FuncLit) bool {
+	for _, l := range lits {
+		if u.Pos() >= l.Pos() && u.End() <= l.End() {
 			return true
 		}
 	}
@@ -399,29 +465,4 @@ func isMapIndex(info *types.Info, x ast.Expr) bool {
 
 func outsideRange(v *types.Var, rs *ast.RangeStmt) bool {
 	return v.Pos() < rs.Pos() || v.Pos() >= rs.End()
-}
-
-func outerAddressTaken(info *types.Info, fn ast.Node, want flow.Key) bool {
-	taken := false
-	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
-		if taken {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		u, ok := n.(*ast.UnaryExpr)
-		if !ok || u.Op != token.AND {
-			return true
-		}
-		k, ok := flow.KeyOf(info, u)
-		if !ok {
-			return true
-		}
-		if k == want {
-			taken = true
-		}
-		return !taken
-	})
-	return taken
 }

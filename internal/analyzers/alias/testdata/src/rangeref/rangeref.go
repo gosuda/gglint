@@ -245,3 +245,15 @@ func RangerefSilentRedirected(items []item) int {
 	p.n = 1
 	return items[0].n
 }
+
+func rangerefSink(pp **item) {}
+
+func RangerefReportedAddressAfterWrite(items []item) int {
+	var p *item
+	for _, v := range items {
+		p = &v // want `this is the address of the per-iteration copy v, not of the slice element, so a write through it does not reach the slice element`
+	}
+	p.n = 1
+	rangerefSink(&p)
+	return items[0].n
+}
