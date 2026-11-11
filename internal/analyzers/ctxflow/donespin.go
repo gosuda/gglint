@@ -16,7 +16,7 @@ const donespinMessage = "this loop polls the context with a default case and nev
 
 var donespinAnalyzer = &analysis.Analyzer{
 	Name:     "donespin",
-	Doc:      "report a for loop with no init or post whose only statement is a select with one context Done receive and a default that neither blocks nor leaves the loop; a default path that can block is not reported and only one communication clause is checked",
+	Doc:      "report a for loop with no init or post whose only statement is a select with one context Done receive and a default that neither blocks nor leaves the loop; a default path that can block is not reported and only one communication clause is checked; a loop whose condition variable the default branch assigns on every pass is not reported",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runDonespin,
 }
@@ -37,7 +37,7 @@ func checkDonespin(pass *analysis.Pass, cur inspector.Cursor) {
 	if !ok || !receivesDone(pass.TypesInfo, comm.Comm) {
 		return
 	}
-	loop, ok := pollingLoop(pass, cur)
+	loop, ok := pollingLoop(pass, cur, dflt)
 	if !ok {
 		return
 	}
@@ -47,7 +47,7 @@ func checkDonespin(pass *analysis.Pass, cur inspector.Cursor) {
 	pass.Report(analysis.Diagnostic{Pos: sel.Pos(), End: sel.End(), Message: donespinMessage})
 }
 
-func pollingLoop(pass *analysis.Pass, cur inspector.Cursor) (*ast.ForStmt, bool) {
+func pollingLoop(pass *analysis.Pass, cur inspector.Cursor, dflt *ast.CommClause) (*ast.ForStmt, bool) {
 	block, ok := cur.Parent().Node().(*ast.BlockStmt)
 	if !ok || len(block.List) != 1 {
 		return nil, false
@@ -56,37 +56,43 @@ func pollingLoop(pass *analysis.Pass, cur inspector.Cursor) (*ast.ForStmt, bool)
 	if !ok || n.Body != block || n.Init != nil || n.Post != nil {
 		return nil, false
 	}
-	if headerCanEnd(pass, n) {
+	if headerCanEnd(pass, n, dflt) {
 		return nil, false
 	}
 	return n, true
 }
 
-func headerCanEnd(pass *analysis.Pass, n *ast.ForStmt) bool {
+func headerCanEnd(pass *analysis.Pass, n *ast.ForStmt, dflt *ast.CommClause) bool {
 	if n.Cond == nil {
 		return false
 	}
-	assigned := assignedVarsIn(pass, n.Body)
+	assigned := everyPassAssigned(pass, n, dflt)
 	return anyVarUsedIn(pass, n.Cond, assigned)
 }
 
-func assignedVarsIn(pass *analysis.Pass, body ast.Node) map[*types.Var]bool {
+func everyPassAssigned(pass *analysis.Pass, n *ast.ForStmt, dflt *ast.CommClause) map[*types.Var]bool {
 	out := map[*types.Var]bool{}
-	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
+	for _, s := range dflt.Body {
+		directAssigned(pass, s, out)
+	}
+	for _, s := range n.Body.List {
+		if _, ok := s.(*ast.SelectStmt); ok {
+			continue
 		}
-		switch s := n.(type) {
-		case *ast.AssignStmt:
-			for _, lhs := range s.Lhs {
-				addAssignedVar(pass, lhs, out)
-			}
-		case *ast.IncDecStmt:
-			addAssignedVar(pass, s.X, out)
-		}
-		return true
-	})
+		directAssigned(pass, s, out)
+	}
 	return out
+}
+
+func directAssigned(pass *analysis.Pass, s ast.Stmt, into map[*types.Var]bool) {
+	switch s := s.(type) {
+	case *ast.AssignStmt:
+		for _, lhs := range s.Lhs {
+			addAssignedVar(pass, lhs, into)
+		}
+	case *ast.IncDecStmt:
+		addAssignedVar(pass, s.X, into)
+	}
 }
 
 func addAssignedVar(pass *analysis.Pass, e ast.Expr, into map[*types.Var]bool) {

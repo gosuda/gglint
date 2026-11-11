@@ -420,3 +420,16 @@ func donespinSilentBodyAdvanced(ctx context.Context, n int) int {
 	}
 	return i
 }
+
+func donespinReportedConditionalAdvance(ctx context.Context, i, n int, step bool) {
+	for i < n {
+		select { // want "this loop polls the context with a default case and never blocks"
+		case <-ctx.Done():
+			return
+		default:
+			if step {
+				i++
+			}
+		}
+	}
+}
