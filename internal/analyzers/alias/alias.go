@@ -19,7 +19,7 @@ func Analyzers() []*analysis.Analyzer {
 
 var appendclobber = &analysis.Analyzer{
 	Name:     "appendclobber",
-	Doc:      "Reports an append through b := a[:n] with constant n and capacity proof that overwrites local a read later or leaving after the append; a slice that a closure touches, that a pointer with a storing or escaping use can change, or whose address escapes between the two statements, is not tracked.",
+	Doc:      "Reports an append through b := a[:n] with constant n and capacity proof that overwrites an element of local a read later, or a leaving after the append; an element stored again before the read is not overwritten, and the length proof needs straight-line assignments; a slice that a closure touches, that a pointer with a storing or escaping use can change, or whose address is taken before the append in any other way, is not tracked.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runAppendclobber,
 }
@@ -40,7 +40,7 @@ var rangemutate = &analysis.Analyzer{
 
 var rangeref = &analysis.Analyzer{
 	Name:     "rangeref",
-	Doc:      "Reports &v of range copy v that escapes by append, send, map store, or written outer store; only local slices.",
+	Doc:      "Reports &v of range copy v that escapes by append, send, map store, or written outer store.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runRangeref,
 }

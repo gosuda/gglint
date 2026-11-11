@@ -132,6 +132,9 @@ func escapesRange(pass *analysis.Pass, fn ast.Node, rs *ast.RangeStmt, u *ast.Un
 	if !ok {
 		return false
 	}
+	if outerAddressTaken(info, fn, tk) {
+		return false
+	}
 	return writeThrough(pass, fn, store, tk, u)
 }
 
@@ -396,4 +399,29 @@ func isMapIndex(info *types.Info, x ast.Expr) bool {
 
 func outsideRange(v *types.Var, rs *ast.RangeStmt) bool {
 	return v.Pos() < rs.Pos() || v.Pos() >= rs.End()
+}
+
+func outerAddressTaken(info *types.Info, fn ast.Node, want flow.Key) bool {
+	taken := false
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if taken {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		u, ok := n.(*ast.UnaryExpr)
+		if !ok || u.Op != token.AND {
+			return true
+		}
+		k, ok := flow.KeyOf(info, u)
+		if !ok {
+			return true
+		}
+		if k == want {
+			taken = true
+		}
+		return !taken
+	})
+	return taken
 }
