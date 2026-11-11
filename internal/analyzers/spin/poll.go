@@ -12,7 +12,7 @@ import (
 
 var pollAnalyzer = &analysis.Analyzer{
 	Name:     "poll",
-	Doc:      "report a for loop whose body is one select with a default that never waits and never leaves; counted loops that keep their counter and Done-only selects are skipped; spin covers five shapes only",
+	Doc:      "report a for loop whose body is one select with a default that never waits and never leaves; counted loops that keep their counter and Done-only selects are skipped; a call in the default clause is assumed to wait; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runPoll,
 }
@@ -164,8 +164,23 @@ func pollLeaves(pass *analysis.Pass, cur inspector.Cursor, stmt ast.Stmt) bool {
 		return pollBlockTailLeaves(pass, cur, t)
 	case *ast.IfStmt:
 		return pollIfLeaves(pass, cur, t)
+	case *ast.SwitchStmt, *ast.TypeSwitchStmt:
+		return pollCaseLeaves(pass, cur, switchBody(stmt))
+	case *ast.LabeledStmt:
+		return pollLeaves(pass, cur, t.Stmt)
 	default:
 		return false
+	}
+}
+
+func switchBody(stmt ast.Stmt) *ast.BlockStmt {
+	switch t := stmt.(type) {
+	case *ast.SwitchStmt:
+		return t.Body
+	case *ast.TypeSwitchStmt:
+		return t.Body
+	default:
+		return nil
 	}
 }
 
@@ -176,7 +191,17 @@ func pollBranchLeaves(pass *analysis.Pass, cur inspector.Cursor, t *ast.BranchSt
 	if t.Tok == token.BREAK && t.Label != nil {
 		return !breaksSelect(pass, cur, t.Label)
 	}
+	if t.Tok == token.CONTINUE && t.Label != nil {
+		return t.Label.Name != pollLoopLabel(cur)
+	}
 	return false
+}
+
+func pollLoopLabel(cur inspector.Cursor) string {
+	if labeled, ok := cur.Parent().Node().(*ast.LabeledStmt); ok {
+		return labeled.Label.Name
+	}
+	return ""
 }
 
 func pollBlockTailLeaves(pass *analysis.Pass, cur inspector.Cursor, t *ast.BlockStmt) bool {
@@ -184,6 +209,29 @@ func pollBlockTailLeaves(pass *analysis.Pass, cur inspector.Cursor, t *ast.Block
 		return false
 	}
 	return pollLeaves(pass, cur, t.List[len(t.List)-1])
+}
+
+func pollCaseLeaves(pass *analysis.Pass, cur inspector.Cursor, body *ast.BlockStmt) bool {
+	if body == nil || len(body.List) == 0 {
+		return false
+	}
+	foundDefault := false
+	for _, stmt := range body.List {
+		clause, ok := stmt.(*ast.CaseClause)
+		if !ok {
+			return false
+		}
+		if clause.List == nil {
+			foundDefault = true
+		}
+		if len(clause.Body) == 0 {
+			return false
+		}
+		if !pollLeaves(pass, cur, clause.Body[len(clause.Body)-1]) {
+			return false
+		}
+	}
+	return foundDefault
 }
 
 func pollIfLeaves(pass *analysis.Pass, cur inspector.Cursor, check *ast.IfStmt) bool {

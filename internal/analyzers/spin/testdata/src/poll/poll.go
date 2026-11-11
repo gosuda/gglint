@@ -222,6 +222,68 @@ Outer:
 	use(n)
 }
 
+func pollSilentContinueOuter(ch chan int, start chan struct{}) {
+	n := 0
+Outer:
+	for range start {
+		for {
+			select {
+			case v := <-ch:
+				use(v)
+			default:
+				n++
+				continue Outer
+			}
+		}
+	}
+	use(n)
+}
+
+func pollSilentDefaultSwitch(ch chan int, n int) {
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			switch n {
+			case 0:
+				return
+			default:
+				return
+			}
+		}
+	}
+}
+
+func pollSilentDefaultTypeSwitch(ch chan int, v any) {
+	for {
+		select {
+		case w := <-ch:
+			use(w)
+		default:
+			switch v.(type) {
+			case int:
+				return
+			default:
+				return
+			}
+		}
+	}
+}
+
+func pollSilentDefaultLabeled(ch chan int) {
+	for {
+		select {
+		case v := <-ch:
+			use(v)
+		default:
+			goto Done
+		Done:
+			return
+		}
+	}
+}
+
 func pollReportedDefaultSelectBreak(ch chan int) {
 	n := 0
 	for { // want `no case blocks and the default case does not wait, so this loop spins: remove the default case, or wait in it`
