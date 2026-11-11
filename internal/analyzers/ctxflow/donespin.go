@@ -16,7 +16,7 @@ const donespinMessage = "this loop polls the context with a default case and nev
 
 var donespinAnalyzer = &analysis.Analyzer{
 	Name:     "donespin",
-	Doc:      "report a for loop with no init or post whose only statement is a select with one context Done receive and a default that neither blocks nor leaves the loop; a default path that can block is not reported and only one communication clause is checked; a loop whose condition variable the default branch assigns on every pass is not reported",
+	Doc:      "report a for loop with no init or post whose only statement is a select with one context Done receive and a default that neither blocks nor leaves the loop; a default path that can block is not reported and only one communication clause is checked; a loop whose condition variable the default branch assigns on every pass is not reported, and a break, continue, or goto before that assignment is not followed",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runDonespin,
 }
