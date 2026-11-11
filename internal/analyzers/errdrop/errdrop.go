@@ -33,7 +33,6 @@ const writeMethodName = "Write"
 
 const nilName = "nil"
 
-// Analyzer reports dropped errors that later code depends on, dropped Close errors of written files, and dropped errors that are followed by return nil.
 var Analyzer = &analysis.Analyzer{
 	Name: "errdrop",
 	Doc: "reports a dropped error when later code depends on the call having succeeded, when the call is the Close of a written file, or when the next statement returns nil\n" +

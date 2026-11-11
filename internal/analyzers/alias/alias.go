@@ -12,7 +12,6 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
-// Analyzers returns the four alias checks.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{appendclobber, mapcopy, rangemutate, rangeref}
 }

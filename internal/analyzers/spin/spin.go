@@ -10,7 +10,6 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
-// Analyzers returns the five spin checks; spin covers these five shapes only.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{
 		pollAnalyzer,

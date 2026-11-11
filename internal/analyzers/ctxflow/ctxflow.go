@@ -14,7 +14,6 @@ const (
 	contextName = "Context"
 )
 
-// Analyzers returns the four context checks of this package.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{rootAnalyzer, cancelAnalyzer, nocontextAnalyzer, donespinAnalyzer}
 }

@@ -10,7 +10,6 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
-// Spawn describes one goroutine creation site in a function.
 type Spawn struct {
 	Site   ast.Node     // *ast.GoStmt, or the Go/TryGo call expression
 	Body   *ast.FuncLit // nil when the spawned function is not a literal

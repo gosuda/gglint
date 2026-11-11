@@ -7,7 +7,6 @@ import (
 	"slices"
 )
 
-// EndsInReturn reports whether the last statement of list is a return.
 func EndsInReturn(list []ast.Stmt) bool {
 	if len(list) == 0 {
 		return false

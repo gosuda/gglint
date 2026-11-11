@@ -1,4 +1,3 @@
-// Package flow shares control-flow queries used by the gglint analyzers.
 package flow
 
 import (
@@ -25,7 +24,6 @@ func (k Key) zero() bool {
 
 const closeFun = "close"
 
-// KeyOf resolves e to the variable or field path it denotes.
 func KeyOf(info *types.Info, e ast.Expr) (Key, bool) {
 	if info == nil {
 		return Key{}, false
@@ -107,7 +105,6 @@ func promotionNames(sel *types.Selection, fallback string) string {
 	return out
 }
 
-// Graph is the control-flow graph of one function with a node index.
 type Graph struct {
 	fn          ast.Node
 	blocks      []*cfg.Block

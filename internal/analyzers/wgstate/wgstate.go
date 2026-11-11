@@ -11,7 +11,6 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
-// Analyzers returns the four wgstate checks.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{addlateAnalyzer, doneskipAnalyzer, selfwaitAnalyzer, groupwaitAnalyzer}
 }
