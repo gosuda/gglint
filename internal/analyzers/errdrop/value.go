@@ -288,7 +288,50 @@ func isNilGuardedAlloc(pass *analysis.Pass, stmt ast.Stmt, recv *types.Var) bool
 	if !isRecvNilTest(pass, guard.Cond, recv) {
 		return false
 	}
-	return blockAssignsRecv(pass, guard.Body, recv)
+	return guardBodyAllocates(pass, guard.Body, recv)
+}
+
+func guardBodyAllocates(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+	allocated := false
+	store := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if store {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		allocates, stores := guardNodeEffect(pass, n, recv)
+		allocated = allocated || allocates
+		if stores {
+			store = true
+			return false
+		}
+		return true
+	})
+	return allocated && !store
+}
+
+func guardNodeEffect(pass *analysis.Pass, n ast.Node, recv *types.Var) (allocates, stores bool) {
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		return assignStmtEffect(pass, t, recv)
+	case *ast.IncDecStmt:
+		return false, indexOnRecv(pass, t.X, recv)
+	}
+	return false, false
+}
+
+func assignStmtEffect(pass *analysis.Pass, t *ast.AssignStmt, recv *types.Var) (allocates, stores bool) {
+	for _, lhs := range t.Lhs {
+		if star, ok := ast.Unparen(lhs).(*ast.StarExpr); ok && isRecvIdent(pass, star.X, recv) {
+			allocates = true
+		}
+		if indexOnRecv(pass, lhs, recv) {
+			return allocates, true
+		}
+	}
+	return allocates, false
 }
 
 func isRecvNilTest(pass *analysis.Pass, cond ast.Expr, recv *types.Var) bool {
@@ -303,38 +346,12 @@ func isNilAndRecv(pass *analysis.Pass, side, other ast.Expr, recv *types.Var) bo
 	if !isNilIdent(pass.TypesInfo, side) {
 		return false
 	}
-	if isStarRecv(pass, other, recv) {
-		return true
-	}
-	return isMapValueRecv(recv) && isRecvIdent(pass, other, recv)
-}
-
-func isMapValueRecv(recv *types.Var) bool {
-	if _, isPtr := types.Unalias(recv.Type()).(*types.Pointer); isPtr {
-		return false
-	}
-	_, isMap := types.Unalias(recv.Type()).Underlying().(*types.Map)
-	return isMap
+	return isStarRecv(pass, other, recv)
 }
 
 func isStarRecv(pass *analysis.Pass, e ast.Expr, recv *types.Var) bool {
 	star, ok := ast.Unparen(e).(*ast.StarExpr)
 	return ok && isRecvIdent(pass, star.X, recv)
-}
-
-func blockAssignsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
-	for _, stmt := range body.List {
-		as, ok := stmt.(*ast.AssignStmt)
-		if !ok {
-			continue
-		}
-		for _, lhs := range as.Lhs {
-			if star, ok := ast.Unparen(lhs).(*ast.StarExpr); ok && isRecvIdent(pass, star.X, recv) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func valueVarNonderef(v *types.Var) bool {

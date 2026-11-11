@@ -1427,3 +1427,50 @@ func durableReportedSliceFieldPassed(addr, p string) error {
 	defer conn.Close()
 	return nil
 }
+
+type errdropNestedLazySet map[string]struct{}
+
+func (s *errdropNestedLazySet) Add(k string) {
+	if *s == nil {
+		if k == "" {
+			return
+		}
+		*s = errdropNestedLazySet{}
+	}
+	(*s)[k] = struct{}{}
+}
+
+func loadNestedLazySet(p string) (errdropNestedLazySet, error) {
+	if p == "" {
+		return nil, errors.New("empty")
+	}
+	return errdropNestedLazySet{}, nil
+}
+
+func valueSilentNestedLazyAlloc(p string) {
+	s, _ := loadNestedLazySet(p)
+	s.Add("x")
+}
+
+type errdropNestCondSet map[string]struct{}
+
+func (s *errdropNestCondSet) Add(k string) {
+	if *s == nil {
+		if k == "" {
+			*s = errdropNestCondSet{}
+		}
+		(*s)[k] = struct{}{}
+	}
+}
+
+func loadNestCondSet(p string) (errdropNestCondSet, error) {
+	if p == "" {
+		return nil, errors.New("empty")
+	}
+	return errdropNestCondSet{}, nil
+}
+
+func valueReportedNestCondWrite(p string) {
+	s, _ := loadNestCondSet(p) // want "s is used after the error of loadNestCondSet is dropped"
+	s.Add("x")
+}
