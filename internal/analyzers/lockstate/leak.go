@@ -10,6 +10,15 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
+type leakCheck struct {
+	pass     *analysis.Pass
+	fn       ast.Node
+	graph    *flow.Graph
+	facts    *fnFacts
+	deferred map[flow.Key]bool
+	hc       *helperCache
+}
+
 type leakCtx struct {
 	pass        *analysis.Pass
 	graph       *flow.Graph
@@ -41,57 +50,63 @@ func checkLeak(pass *analysis.Pass, fn ast.Node, hc *helperCache) {
 	if g == nil {
 		return
 	}
-	facts := collectFacts(pass.TypesInfo, fn)
-	deferred := deferredKeys(pass.TypesInfo, fn)
+	c := &leakCheck{
+		pass:     pass,
+		fn:       fn,
+		graph:    g,
+		facts:    collectFacts(pass.TypesInfo, fn),
+		deferred: deferredKeys(pass.TypesInfo, fn),
+		hc:       hc,
+	}
 	for _, key := range keys {
-		checkLeakKey(pass, g, fn, key, facts, deferred, hc)
+		c.checkLeakKey(key)
 	}
 }
 
-func checkLeakKey(pass *analysis.Pass, g *flow.Graph, fn ast.Node, key flow.Key, facts *fnFacts, deferred map[flow.Key]bool, hc *helperCache) {
-	info := pass.TypesInfo
-	if facts.storedAddress(key) {
+func (c *leakCheck) checkLeakKey(key flow.Key) {
+	info := c.pass.TypesInfo
+	if c.facts.storedAddress(key) {
 		return
 	}
-	if deferred[key] {
+	if c.deferred[key] {
 		return
 	}
-	if hc.hasDeferredRelease(fn, key) {
+	if c.hc.hasDeferredRelease(c.fn, key) {
 		return
 	}
-	if localNeverShared(info, fn, key) {
+	if localNeverShared(info, c.fn, key) {
 		return
 	}
-	entry := facts.entryState(fn, key)
+	entry := c.facts.entryState(c.fn, key)
 	tr := func(n ast.Node, s state) state {
-		if !facts.mentions(n, key.Root) {
+		if !c.facts.mentions(n, key.Root) {
 			return s
 		}
-		return applyNode(info, key, n, s, hc)
+		return applyNode(info, key, n, s, c.hc)
 	}
-	pre, order := collectPre(g, entry, tr)
-	rets := returnsIn(fn)
+	pre, order := collectPre(c.graph, entry, tr)
+	rets := returnsIn(c.fn)
 	if len(rets) == 0 {
 		return
 	}
-	holders := unlockHolders(order, info, key, facts)
+	holders := unlockHolders(order, info, key, c.facts)
 	if len(holders) == 0 {
 		return
 	}
-	c := &leakCtx{
-		pass:        pass,
-		graph:       g,
+	lc := &leakCtx{
+		pass:        c.pass,
+		graph:       c.graph,
 		before:      pre,
 		returns:     rets,
 		holders:     holders,
 		reachedMemo: map[ast.Node]bool{},
-		endFree:     leakEndFree(info, fn, key, pre),
-		recv:        lockRecv(info, fn, key),
+		endFree:     leakEndFree(info, c.fn, key, pre),
+		recv:        lockRecv(info, c.fn, key),
 		info:        info,
 		key:         key,
-		hc:          hc,
+		hc:          c.hc,
 	}
-	c.report()
+	lc.report()
 }
 
 func localNeverShared(info *types.Info, fn ast.Node, key flow.Key) bool {
