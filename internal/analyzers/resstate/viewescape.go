@@ -371,7 +371,7 @@ func pathAffectsTarget(pass *analysis.Pass, e ast.Expr, full []string, root *typ
 	}
 	lc, ok := pathChain(pass, e, root)
 	if !ok {
-		return mentionsRootVar(pass, e, root)
+		return targetBaseIsRoot(pass, e, root)
 	}
 	for i, s := range lc {
 		if i >= len(full) {
@@ -470,26 +470,33 @@ func structOf(t types.Type) (*types.Struct, bool) {
 	return st, ok
 }
 
-func mentionsRootVar(pass *analysis.Pass, e ast.Expr, root *types.Var) bool {
-	if e == nil {
+func targetBaseIsRoot(pass *analysis.Pass, e ast.Expr, root *types.Var) bool {
+	v, ok := targetBaseVar(pass, e)
+	if !ok {
 		return false
 	}
-	found := false
-	ast.Inspect(e, func(n ast.Node) bool {
-		if found {
-			return false
+	return v == root
+}
+
+func targetBaseVar(pass *analysis.Pass, e ast.Expr) (*types.Var, bool) {
+	for {
+		e = ast.Unparen(e)
+		switch x := e.(type) {
+		case *ast.Ident:
+			v, ok := pass.TypesInfo.Uses[x].(*types.Var)
+			return v, ok
+		case *ast.SelectorExpr:
+			e = x.X
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.SliceExpr:
+			e = x.X
+		case *ast.StarExpr:
+			e = x.X
+		default:
+			return nil, false
 		}
-		id, ok := n.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if v, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && v == root {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
+	}
 }
 
 func stripAddr(e ast.Expr) ast.Expr {
