@@ -608,4 +608,37 @@ func sharedStartGateReorderedReported() int {
 	x = 1
 	return x
 }
+func sharedWaitInOtherGoroutineReported() int {
+	x := 0
+	done := make(chan struct{})
+	go func() { // want `x is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		x = 1
+		close(done)
+	}()
+	go func() { <-done }()
+	return x
+}
+
+func sharedStoredWaitReported() int {
+	x := 0
+	done := make(chan struct{})
+	go func() { // want `x is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		x = 1
+		close(done)
+	}()
+	wait := func() { <-done }
+	_ = wait
+	return x
+}
+
+func sharedGoCallArgWaitReported() int {
+	x := 0
+	done := make(chan struct{})
+	go func() { // want `x is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		x = 1
+		close(done)
+	}()
+	go sharedCall(func() { <-done })
+	return x
+}
 

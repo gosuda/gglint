@@ -132,16 +132,6 @@ func isSyncObject(info *types.Info, k flow.Key) bool {
 	return isSyncPrimitive(t) || structHasSync(t)
 }
 
-func spawnedLits(pass *analysis.Pass, fn ast.Node) map[*ast.FuncLit]bool {
-	out := map[*ast.FuncLit]bool{}
-	for _, s := range flow.Spawns(pass, fn) {
-		if s.Body != nil {
-			out[s.Body] = true
-		}
-	}
-	return out
-}
-
 func boundLitSync(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr) *ast.FuncLit {
 	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
 	if !ok {

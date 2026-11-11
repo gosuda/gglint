@@ -424,19 +424,61 @@ func collectParentOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn) []syncOp {
 	if body == nil {
 		return nil
 	}
-	spawned := spawnedLits(pass, fn)
 	var out []syncOp
 	ast.Inspect(body, func(n ast.Node) bool {
-		if lit, ok := n.(*ast.FuncLit); ok && n != ast.Node(body) && spawned[lit] {
+		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		if d, ok := n.(*ast.DeferStmt); ok {
 			out = append(out, deferredOps(pass, fn, s, d.Call)...)
 			return false
 		}
+		if gs, ok := n.(*ast.GoStmt); ok {
+			out = append(out, goStmtOps(pass, s, gs)...)
+			return false
+		}
 		out = append(out, classifyNode(pass, s, n)...)
 		out = append(out, argLitOps(pass, s, n)...)
+		out = append(out, funLitOps(pass, s, n)...)
 		out = append(out, boundCallOps(pass, fn, s, n)...)
+		return true
+	})
+	return out
+}
+
+func goStmtOps(pass *analysis.Pass, s flow.Spawn, gs *ast.GoStmt) []syncOp {
+	if gs.Call == nil {
+		return nil
+	}
+	var out []syncOp
+	ast.Inspect(gs.Call, func(x ast.Node) bool {
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		out = append(out, classifyNode(pass, s, x)...)
+		return true
+	})
+	return out
+}
+
+func funLitOps(pass *analysis.Pass, s flow.Spawn, n ast.Node) []syncOp {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	lit, ok := ast.Unparen(call.Fun).(*ast.FuncLit)
+	if !ok || lit.Body == nil {
+		return nil
+	}
+	var out []syncOp
+	ast.Inspect(lit.Body, func(x ast.Node) bool {
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
+		}
+		for _, o := range classifyNode(pass, s, x) {
+			o.node = ast.Node(call)
+			out = append(out, o)
+		}
 		return true
 	})
 	return out
@@ -468,10 +510,6 @@ func deferredOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn, call *ast.CallE
 	for _, o := range classifyCall(pass, s, call) {
 		o.deferred = true
 		o.node = ast.Node(call)
-		out = append(out, o)
-	}
-	for _, o := range argLitOps(pass, s, call) {
-		o.deferred = true
 		out = append(out, o)
 	}
 	for _, o := range boundCallOps(pass, fn, s, call) {
