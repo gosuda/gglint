@@ -593,16 +593,14 @@ func AppendclobberSilentLenSlice() int {
 	return len(a[2:])
 }
 
-func AppendclobberSilentRangeAssign(lists [][]int) int {
+func AppendclobberSilentRangeAssign() int {
+	lists := [][]int{make([]int, 3, 3), make([]int, 3, 3)}
 	a := make([]int, 3, 10)
 	for _, a = range lists {
 	}
 	b := a[:2]
 	b = append(b, 9, 9)
 	_ = b
-	if len(a) < 3 {
-		return 0
-	}
 	return a[2]
 }
 
