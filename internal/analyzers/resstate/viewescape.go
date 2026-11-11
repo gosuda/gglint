@@ -88,13 +88,63 @@ func viewLoop(pass *analysis.Pass, ctx loopCtx, seen map[token.Pos]bool, views m
 		if tryPoolReport(pass, ctx, poolNeed{s: s, view: v, recv: recvExpr, key: recvKey}, seen) {
 			continue
 		}
-		method, found := invalidOther(invalid[recvKey], viewMethod)
+		method, found := reachMethodName(pass, ctx, s.expr, recvKey, viewMethod)
 		if !found || seen[s.expr.Pos()] {
 			continue
 		}
 		seen[s.expr.Pos()] = true
 		pass.Reportf(s.expr.Pos(), "%s points into the buffer of %s, and a later %s call may overwrite it: store a copy made with bytes.Clone", types.ExprString(v), types.ExprString(recvExpr), method)
 	}
+}
+
+func reachMethodName(pass *analysis.Pass, ctx loopCtx, view ast.Expr, recvKey flow.Key, viewMethod string) (string, bool) {
+	g := viewCachedGraph(pass, ctx)
+	if g == nil {
+		return "", false
+	}
+	calls := viewCachedInvalid(pass, ctx, recvKey, viewMethod)
+	ordered := append([]*ast.CallExpr(nil), calls...)
+	slices.SortFunc(ordered, func(a, b *ast.CallExpr) int {
+		return int(a.Pos() - b.Pos())
+	})
+	avoid := assignAvoid(pass, recvKey)
+	if name, ok := laterReachableName(pass, g, ordered, view, avoid, viewMethod); ok {
+		return name, true
+	}
+	return firstReachableName(pass, g, ordered, view, avoid, viewMethod)
+}
+
+func laterReachableName(pass *analysis.Pass, g *flow.Graph, calls []*ast.CallExpr, view ast.Expr, avoid func(ast.Node) bool, viewMethod string) (string, bool) {
+	for _, k := range calls {
+		if k.Pos() <= view.Pos() {
+			continue
+		}
+		if g.Reaches(view, k, avoid) {
+			if name, ok := invalidName(pass, k, viewMethod); ok {
+				return name, true
+			}
+		}
+	}
+	return "", false
+}
+
+func firstReachableName(pass *analysis.Pass, g *flow.Graph, calls []*ast.CallExpr, view ast.Expr, avoid func(ast.Node) bool, viewMethod string) (string, bool) {
+	for _, k := range calls {
+		if g.Reaches(view, k, avoid) {
+			if name, ok := invalidName(pass, k, viewMethod); ok {
+				return name, true
+			}
+		}
+	}
+	return "", false
+}
+
+func invalidName(pass *analysis.Pass, call *ast.CallExpr, viewMethod string) (string, bool) {
+	name := viewInvalidName(pass, call)
+	if name == "" || name == viewMethod {
+		return "", false
+	}
+	return name, true
 }
 
 type poolNeed struct {
@@ -169,12 +219,52 @@ func invalidAfter(pass *analysis.Pass, ctx loopCtx, from ast.Node, recvKey flow.
 	if g == nil {
 		return false
 	}
+	avoid := assignAvoid(pass, recvKey)
 	for _, k := range nearestCalls(viewCachedInvalid(pass, ctx, recvKey, viewMethod), from.Pos()) {
-		if g.Reaches(from, k, nil) {
+		if g.Reaches(from, k, avoid) {
 			return true
 		}
 	}
 	return false
+}
+
+func assignAvoid(pass *analysis.Pass, recvKey flow.Key) func(ast.Node) bool {
+	v, ok := recvKey.Root.(*types.Var)
+	if !ok {
+		return nil
+	}
+	return func(n ast.Node) bool {
+		return assignsRoot(pass, n, v)
+	}
+}
+
+func assignsRoot(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	switch x := n.(type) {
+	case *ast.AssignStmt:
+		return lhsAssigns(pass, x.Lhs, v)
+	case *ast.IncDecStmt:
+		return incAssigns(pass, x.X, v)
+	case *ast.RangeStmt:
+		return viewRangeBinds(pass, x, v)
+	}
+	return false
+}
+
+func reassignAvoid(pass *analysis.Pass, recvKey flow.Key) func(ast.Node) bool {
+	v, ok := recvKey.Root.(*types.Var)
+	if !ok {
+		return nil
+	}
+	return func(n ast.Node) bool {
+		return reassignsRoot(pass, n, v)
+	}
+}
+
+func reassignsRoot(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	if declaresVar(pass, n, v) {
+		return true
+	}
+	return assignsRoot(pass, n, v)
 }
 
 func freshReceiver(pass *analysis.Pass, loop, body ast.Node, k flow.Key) bool {
@@ -201,10 +291,106 @@ func sameOutsideBuffer(pass *analysis.Pass, loop, body ast.Node, rhs ast.Expr) b
 	if !ok {
 		return false
 	}
-	if !isOuterVar(pass, body, root) {
+	if !isOuterVar(pass, loop, body, root) {
 		return false
 	}
-	return !indexMentionsLoopVar(pass, loop, r)
+	if indexMentionsLoopVar(pass, loop, r) {
+		return false
+	}
+	w, ok := pass.TypesInfo.Uses[root].(*types.Var)
+	if !ok {
+		return false
+	}
+	return !assignsAlongPath(pass, body, r, w)
+}
+
+func assignsAlongPath(pass *analysis.Pass, body ast.Node, path ast.Expr, root *types.Var) bool {
+	hit := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if hit {
+			return false
+		}
+		if stmtAssignsPath(pass, n, path, root) {
+			hit = true
+			return false
+		}
+		return true
+	})
+	return hit
+}
+
+func stmtAssignsPath(pass *analysis.Pass, n ast.Node, path ast.Expr, root *types.Var) bool {
+	switch x := n.(type) {
+	case *ast.AssignStmt:
+		return lhsHitsPath(pass, x.Lhs, path, root)
+	case *ast.IncDecStmt:
+		return pathAffectsTarget(pass, x.X, path, root)
+	case *ast.RangeStmt:
+		return pathAffectsTarget(pass, x.Key, path, root) || pathAffectsTarget(pass, x.Value, path, root)
+	}
+	return false
+}
+
+func lhsHitsPath(pass *analysis.Pass, lhs []ast.Expr, path ast.Expr, root *types.Var) bool {
+	for _, l := range lhs {
+		if pathAffectsTarget(pass, l, path, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathAffectsTarget(pass *analysis.Pass, e, path ast.Expr, root *types.Var) bool {
+	if e == nil {
+		return false
+	}
+	lc, ok := pathChain(pass, e, root)
+	if !ok {
+		return false
+	}
+	pc, ok := pathChain(pass, path, root)
+	if !ok {
+		return false
+	}
+	n := len(lc)
+	if len(pc) < n {
+		n = len(pc)
+	}
+	for i, s := range lc[:n] {
+		if s != pc[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func pathChain(pass *analysis.Pass, e ast.Expr, root *types.Var) ([]string, bool) {
+	switch x := ast.Unparen(e).(type) {
+	case *ast.Ident:
+		if pass.TypesInfo.Uses[x] == root {
+			return []string{}, true
+		}
+		return nil, false
+	case *ast.SelectorExpr:
+		steps, ok := pathChain(pass, x.X, root)
+		if !ok {
+			return nil, false
+		}
+		return append(steps, x.Sel.Name), true
+	case *ast.IndexExpr:
+		steps, ok := pathChain(pass, x.X, root)
+		if !ok {
+			return nil, false
+		}
+		return append(steps, ""), true
+	case *ast.SliceExpr:
+		steps, ok := pathChain(pass, x.X, root)
+		if !ok {
+			return nil, false
+		}
+		return append(steps, ""), true
+	}
+	return nil, false
 }
 
 func stripAddr(e ast.Expr) ast.Expr {
@@ -247,9 +433,12 @@ func pathRoot(e ast.Expr) (*ast.Ident, bool) {
 	return nil, false
 }
 
-func isOuterVar(pass *analysis.Pass, body ast.Node, id *ast.Ident) bool {
+func isOuterVar(pass *analysis.Pass, loop, body ast.Node, id *ast.Ident) bool {
 	w, ok := pass.TypesInfo.Uses[id].(*types.Var)
 	if !ok {
+		return false
+	}
+	if loopVarSet(pass, loop)[w] {
 		return false
 	}
 	return w.Pos() < body.Pos() || w.Pos() > body.End()
@@ -422,17 +611,11 @@ func defineOutcome(pass *analysis.Pass, x *ast.AssignStmt, v *types.Var) declOut
 }
 
 func freshInvalidAfter(pass *analysis.Pass, ctx loopCtx, view ast.Expr, recvKey flow.Key, viewMethod string) bool {
-	v, ok := recvKey.Root.(*types.Var)
-	if !ok {
-		return false
-	}
 	g := viewCachedGraph(pass, ctx)
 	if g == nil {
 		return false
 	}
-	avoid := func(n ast.Node) bool {
-		return declaresVar(pass, n, v)
-	}
+	avoid := reassignAvoid(pass, recvKey)
 	for _, k := range nearestCalls(viewCachedInvalid(pass, ctx, recvKey, viewMethod), view.Pos()) {
 		if g.Reaches(view, k, avoid) {
 			return true
@@ -489,15 +672,6 @@ func definesGenDecl(pass *analysis.Pass, d ast.Decl, v *types.Var) bool {
 		}
 	}
 	return false
-}
-
-func invalidOther(methods []string, viewMethod string) (string, bool) {
-	for _, m := range methods {
-		if m != viewMethod {
-			return m, true
-		}
-	}
-	return "", false
 }
 
 func invalidReceivers(pass *analysis.Pass, loop ast.Node) map[flow.Key][]string {
@@ -724,6 +898,9 @@ func viewDefineOne(pass *analysis.Pass, out map[*types.Var]viewSrc, defPos map[*
 }
 
 func viewReassigned(pass *analysis.Pass, fn ast.Node, v *types.Var, after token.Pos) bool {
+	if litReassignsView(pass, fn, v) {
+		return true
+	}
 	reassigned := false
 	ast.Inspect(fn, func(n ast.Node) bool {
 		if reassigned {
@@ -740,14 +917,56 @@ func viewReassigned(pass *analysis.Pass, fn ast.Node, v *types.Var, after token.
 	return reassigned
 }
 
+func litReassignsView(pass *analysis.Pass, fn ast.Node, v *types.Var) bool {
+	assigned := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		if assigned {
+			return false
+		}
+		lit, ok := n.(*ast.FuncLit)
+		if !ok || lit == fn {
+			return true
+		}
+		ast.Inspect(lit.Body, func(m ast.Node) bool {
+			if assigned {
+				return false
+			}
+			if viewAssignsNode(pass, m, v) {
+				assigned = true
+				return false
+			}
+			return true
+		})
+		return !assigned
+	})
+	return assigned
+}
+
+func viewAssignsNode(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	switch x := n.(type) {
+	case *ast.AssignStmt:
+		return viewAssigns(pass, x.Lhs, v)
+	case *ast.IncDecStmt:
+		return viewTargetIs(pass, x.X, v)
+	}
+	return false
+}
+
 func viewReassignsAt(pass *analysis.Pass, n ast.Node, v *types.Var, after token.Pos) bool {
 	switch x := n.(type) {
 	case *ast.AssignStmt:
 		return x.Pos() > after && viewAssigns(pass, x.Lhs, v)
 	case *ast.IncDecStmt:
 		return x.Pos() > after && viewTargetIs(pass, x.X, v)
-	case *ast.RangeStmt:
-		return false
+	}
+	return false
+}
+
+func viewRangeBinds(pass *analysis.Pass, x *ast.RangeStmt, v *types.Var) bool {
+	for _, e := range []ast.Expr{x.Key, x.Value} {
+		if viewTargetIs(pass, e, v) {
+			return true
+		}
 	}
 	return false
 }

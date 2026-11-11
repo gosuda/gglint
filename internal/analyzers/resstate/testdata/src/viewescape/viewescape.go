@@ -3,6 +3,7 @@ package viewescape
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"sync"
 )
 
@@ -607,4 +608,73 @@ func viewescapeReportedLocalDeferredPut(sc *bufio.Scanner, pool *sync.Pool) []by
 		return buf.Bytes() // want "hands it to the pool"
 	}
 	return nil
+}
+
+func viewescapeSilentClosureReassign(sc *bufio.Scanner) [][]byte {
+	var out [][]byte
+	var v []byte
+	keep := func() { v = append([]byte(nil), v...) }
+	for sc.Scan() {
+		v = sc.Bytes()
+		keep()
+		out = append(out, v)
+	}
+	return out
+}
+
+func viewescapeSilentReboundElement(in []string, out [][]byte) [][]byte {
+	bufs := []*bytes.Buffer{new(bytes.Buffer)}
+	for _, s := range in {
+		bufs[0] = new(bytes.Buffer)
+		b := bufs[0]
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes())
+	}
+	return out
+}
+
+type viewLoopHolder struct{ buf bytes.Buffer }
+
+func viewescapeSilentRangeHolder(hs []*viewLoopHolder) [][]byte {
+	var out [][]byte
+	for _, h := range hs {
+		b := &h.buf
+		_, _ = b.WriteString("x")
+		out = append(out, b.Bytes())
+	}
+	return out
+}
+
+func viewescapeSilentReleaseFunc(sc *bufio.Scanner, pool *sync.Pool) ([]byte, func()) {
+	buf := pool.Get().(*bytes.Buffer)
+	release := func() { defer pool.Put(buf) }
+	for sc.Scan() {
+		buf.Write(sc.Bytes())
+		return buf.Bytes(), release
+	}
+	release()
+	return nil, func() {}
+}
+
+func viewescapeSilentScannerPerReader(rs []io.Reader) [][]byte {
+	var lines [][]byte
+	var sc *bufio.Scanner
+	for _, r := range rs {
+		sc = bufio.NewScanner(r)
+		if sc.Scan() {
+			lines = append(lines, sc.Bytes())
+		}
+	}
+	return lines
+}
+
+func viewescapeReportedPeekRead(r *bufio.Reader, buf []byte, out [][]byte) [][]byte {
+	for {
+		_, _ = r.Discard(1)
+		p, _ := r.Peek(1)
+		out = append(out, p) // want "a later Read call"
+		_, _ = r.Read(buf)
+		break
+	}
+	return out
 }

@@ -15,6 +15,9 @@ func deferredPoolPut(pass *analysis.Pass, fn ast.Node, recvKey flow.Key) (ast.Ex
 		if found {
 			return false
 		}
+		if lit, ok := n.(*ast.FuncLit); ok && lit != fn {
+			return false
+		}
 		d, ok := n.(*ast.DeferStmt)
 		if !ok {
 			return true
