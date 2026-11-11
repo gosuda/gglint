@@ -66,41 +66,22 @@ func headerCanEnd(pass *analysis.Pass, n *ast.ForStmt, dflt *ast.CommClause) boo
 	if n.Cond == nil {
 		return false
 	}
-	assigned := everyPassAssigned(pass, dflt)
+	assigned := everyPassAssigned(pass, n, dflt)
 	return anyVarUsedIn(pass, n.Cond, assigned)
 }
 
-func everyPassAssigned(pass *analysis.Pass, dflt *ast.CommClause) map[*types.Var]bool {
+func everyPassAssigned(pass *analysis.Pass, n *ast.ForStmt, dflt *ast.CommClause) map[*types.Var]bool {
 	out := map[*types.Var]bool{}
-	addListEveryPass(pass, dflt.Body, out)
-	return out
-}
-
-func addListEveryPass(pass *analysis.Pass, list []ast.Stmt, into map[*types.Var]bool) {
-	for _, s := range list {
-		if hasJump(s) {
-			return
-		}
-		addEveryPass(pass, s, into)
+	for _, s := range dflt.Body {
+		addEveryPass(pass, s, out)
 	}
-}
-
-func hasJump(s ast.Stmt) bool {
-	found := false
-	ast.Inspect(s, func(n ast.Node) bool {
-		if found {
-			return false
+	for _, s := range n.Body.List {
+		if _, ok := s.(*ast.SelectStmt); ok {
+			continue
 		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		if b, ok := n.(*ast.BranchStmt); ok && b.Tok != token.FALLTHROUGH {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
+		addEveryPass(pass, s, out)
+	}
+	return out
 }
 
 func addEveryPass(pass *analysis.Pass, s ast.Stmt, into map[*types.Var]bool) {
@@ -112,7 +93,9 @@ func addEveryPass(pass *analysis.Pass, s ast.Stmt, into map[*types.Var]bool) {
 	case *ast.IncDecStmt:
 		addAssignedVar(pass, s.X, into)
 	case *ast.BlockStmt:
-		addListEveryPass(pass, s.List, into)
+		for _, inner := range s.List {
+			addEveryPass(pass, inner, into)
+		}
 	case *ast.IfStmt:
 		addBothBranches(pass, s, into)
 	}
@@ -123,7 +106,9 @@ func addBothBranches(pass *analysis.Pass, s *ast.IfStmt, into map[*types.Var]boo
 		return
 	}
 	then := map[*types.Var]bool{}
-	addListEveryPass(pass, s.Body.List, then)
+	for _, t := range s.Body.List {
+		addEveryPass(pass, t, then)
+	}
 	els := map[*types.Var]bool{}
 	addElseBranch(pass, s.Else, els)
 	for v := range then {
@@ -136,7 +121,9 @@ func addBothBranches(pass *analysis.Pass, s *ast.IfStmt, into map[*types.Var]boo
 func addElseBranch(pass *analysis.Pass, e ast.Stmt, into map[*types.Var]bool) {
 	switch e := e.(type) {
 	case *ast.BlockStmt:
-		addListEveryPass(pass, e.List, into)
+		for _, t := range e.List {
+			addEveryPass(pass, t, into)
+		}
 	case *ast.IfStmt:
 		addBothBranches(pass, e, into)
 	}
