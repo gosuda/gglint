@@ -245,14 +245,10 @@ func (idx *funcIndex) firstUse(v *types.Var, after token.Pos) (inspector.Cursor,
 
 type freshMark struct {
 	path string
-	end  token.Pos
 	stmt ast.Node
 }
 
 func pathHasPrefix(path, mark string) bool {
-	if mark == "" {
-		return true
-	}
 	return path == mark || strings.HasPrefix(path, mark+".")
 }
 
@@ -263,13 +259,12 @@ func avoidStmt(stmt ast.Node) func(ast.Node) bool {
 type coverQuery struct {
 	graph *flow.Graph
 	call  ast.Node
-	pos   token.Pos
 	cur   ast.Node
 }
 
 func freshCovers(fresh []freshMark, path string, q coverQuery) bool {
 	for _, m := range fresh {
-		if m.end < q.pos && pathHasPrefix(path, m.path) && !q.graph.Reaches(q.call, q.cur, avoidStmt(m.stmt)) {
+		if pathHasPrefix(path, m.path) && !q.graph.Reaches(q.call, q.cur, avoidStmt(m.stmt)) {
 			return true
 		}
 	}
@@ -280,7 +275,6 @@ type mentionPath struct {
 	path   string
 	derefs []string
 	store  bool
-	end    token.Pos
 	stmt   ast.Node
 }
 
@@ -326,7 +320,6 @@ func pathOfMention(info *types.Info, root *types.Var, cur inspector.Cursor) ment
 	mention := mentionPath{path: path, derefs: derefs}
 	if as, ok := skipParens(up.Parent()).Node().(*ast.AssignStmt); ok && lhsStoresField(as, child) {
 		mention.store = true
-		mention.end = as.End()
 		mention.stmt = as
 	}
 	return mention
@@ -347,12 +340,12 @@ func (idx *funcIndex) firstRead(call *ast.CallExpr, v *types.Var, after token.Po
 	var fresh []freshMark
 	for i := start; i < len(list); i++ {
 		mention := pathOfMention(idx.info, v, list[i].cur)
-		q := coverQuery{graph: idx.graph, call: call, pos: list[i].pos, cur: list[i].cur.Node()}
+		q := coverQuery{graph: idx.graph, call: call, cur: list[i].cur.Node()}
 		if mention.store {
 			if storeReadsDecode(mention, fresh, q) {
 				return list[i].cur, true
 			}
-			fresh = append(fresh, freshMark{path: mention.path, end: mention.end, stmt: mention.stmt})
+			fresh = append(fresh, freshMark{path: mention.path, stmt: mention.stmt})
 			continue
 		}
 		if freshCovers(fresh, mention.path, q) {

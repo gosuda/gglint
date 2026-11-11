@@ -23,18 +23,24 @@ type durableMemo struct {
 	opened      map[*types.Var]bool
 	storedVar   map[*types.Var][]*types.Var
 	storedField map[*types.Var][]fieldStore
-	called      map[*types.Var][]token.Pos
-	passed      map[*types.Var][]token.Pos
+	called      map[*types.Var][]pathUse
+	passed      map[*types.Var][]pathUse
 	used        map[*types.Var]bool
 }
 
 type fieldStore struct {
 	root *types.Var
+	path string
+	pos  token.Pos
+}
+
+type pathUse struct {
+	path string
 	pos  token.Pos
 }
 
 func buildDurableMemo(pass *analysis.Pass, fn inspector.Cursor) *durableMemo {
-	memo := &durableMemo{fn: fn, method: map[*types.Var][]token.Pos{}, arg: map[*types.Var][]token.Pos{}, opened: map[*types.Var]bool{}, storedVar: map[*types.Var][]*types.Var{}, storedField: map[*types.Var][]fieldStore{}, called: map[*types.Var][]token.Pos{}, passed: map[*types.Var][]token.Pos{}, used: map[*types.Var]bool{}}
+	memo := &durableMemo{fn: fn, method: map[*types.Var][]token.Pos{}, arg: map[*types.Var][]token.Pos{}, opened: map[*types.Var]bool{}, storedVar: map[*types.Var][]*types.Var{}, storedField: map[*types.Var][]fieldStore{}, called: map[*types.Var][]pathUse{}, passed: map[*types.Var][]pathUse{}, used: map[*types.Var]bool{}}
 	collectDurableCalls(pass, fn, memo)
 	collectDurableAssigns(pass, fn, memo)
 	collectDurableSpecs(pass, fn, memo)
@@ -103,27 +109,53 @@ func noteCalledOn(pass *analysis.Pass, call *ast.CallExpr, memo *durableMemo) {
 	if !ok {
 		return
 	}
-	id, ok := ast.Unparen(sel.X).(*ast.Ident)
-	if !ok {
-		return
-	}
-	if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
-		memo.called[v] = append(memo.called[v], call.Pos())
+	if v, path, ok := useOfVar(pass, sel.X); ok {
+		memo.called[v] = append(memo.called[v], pathUse{path: path, pos: call.Pos()})
 	}
 }
 
 func notePassedOn(pass *analysis.Pass, call *ast.CallExpr, memo *durableMemo) {
 	for _, arg := range call.Args {
-		a := ast.Unparen(arg)
-		if u, ok := a.(*ast.UnaryExpr); ok && u.Op == token.AND {
-			a = ast.Unparen(u.X)
-		}
-		if id, ok := a.(*ast.Ident); ok {
-			if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
-				memo.passed[v] = append(memo.passed[v], call.Pos())
-			}
+		if v, path, ok := useOfVar(pass, arg); ok {
+			memo.passed[v] = append(memo.passed[v], pathUse{path: path, pos: call.Pos()})
 		}
 	}
+}
+
+func useOfVar(pass *analysis.Pass, e ast.Expr) (*types.Var, string, bool) {
+	a := ast.Unparen(e)
+	if u, ok := a.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		a = ast.Unparen(u.X)
+	}
+	if id, ok := a.(*ast.Ident); ok {
+		if v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var); ok {
+			return v, "", true
+		}
+		return nil, "", false
+	}
+	return rootFieldPath(pass, a)
+}
+
+func rootFieldPath(pass *analysis.Pass, lhs ast.Expr) (*types.Var, string, bool) {
+	var fields []string
+	cur := ast.Unparen(lhs)
+	for {
+		sel, ok := cur.(*ast.SelectorExpr)
+		if !ok {
+			break
+		}
+		fields = append([]string{sel.Sel.Name}, fields...)
+		cur = ast.Unparen(sel.X)
+	}
+	id, ok := cur.(*ast.Ident)
+	if !ok || len(fields) == 0 {
+		return nil, "", false
+	}
+	v, ok := pass.TypesInfo.ObjectOf(id).(*types.Var)
+	if !ok {
+		return nil, "", false
+	}
+	return v, strings.Join(fields, "."), true
 }
 
 func noteUsedClose(pass *analysis.Pass, cur inspector.Cursor, call *ast.CallExpr, memo *durableMemo) {
@@ -215,25 +247,14 @@ func noteStoredField(pass *analysis.Pass, as *ast.AssignStmt, lhs, rhs ast.Expr,
 	if t == nil || !isWriterInterface(t) {
 		return
 	}
-	w, ok := fieldStoreRoot(pass, lhs)
+	w, fpath, ok := rootFieldPath(pass, lhs)
 	if !ok {
 		return
 	}
 	if !fieldDeclaredAbroad(pass, lhs) {
 		return
 	}
-	memo.storedField[v] = append(memo.storedField[v], fieldStore{root: w, pos: as.Pos()})
-}
-
-func fieldStoreRoot(pass *analysis.Pass, lhs ast.Expr) (*types.Var, bool) {
-	if !storeThroughField(lhs) {
-		return nil, false
-	}
-	v := pathRootVar(pass, lhs)
-	if v == nil {
-		return nil, false
-	}
-	return v, true
+	memo.storedField[v] = append(memo.storedField[v], fieldStore{root: w, path: fpath, pos: as.Pos()})
 }
 
 func fieldDeclaredAbroad(pass *analysis.Pass, lhs ast.Expr) bool {
@@ -280,21 +301,6 @@ func descendField(t types.Type, index int) (types.Type, bool) {
 		return nil, false
 	}
 	return st.Field(index).Type(), true
-}
-
-func storeThroughField(lhs ast.Expr) bool {
-	e := lhs
-	for {
-		child, ok := pathStep(e)
-		if !ok {
-			return false
-		}
-		switch ast.Unparen(e).(type) {
-		case *ast.SelectorExpr, *ast.IndexExpr, *ast.IndexListExpr:
-			return true
-		}
-		e = child
-	}
 }
 
 func collectDurableSpecs(pass *analysis.Pass, fn inspector.Cursor, memo *durableMemo) {
@@ -448,13 +454,12 @@ func storedFieldWritten(x *types.Var, memo *durableMemo) bool {
 }
 
 func rootUsedAfter(s fieldStore, memo *durableMemo) bool {
-	for _, pos := range memo.called[s.root] {
-		if pos > s.pos {
-			return true
-		}
-	}
-	for _, pos := range memo.passed[s.root] {
-		if pos > s.pos {
+	return pathUsedAfter(memo.called[s.root], s) || pathUsedAfter(memo.passed[s.root], s)
+}
+
+func pathUsedAfter(uses []pathUse, s fieldStore) bool {
+	for _, u := range uses {
+		if u.pos > s.pos && (u.path == "" || pathHasPrefix(s.path, u.path)) {
 			return true
 		}
 	}

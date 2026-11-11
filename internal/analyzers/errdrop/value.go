@@ -265,10 +265,53 @@ func samePackageMethodWrites(pass *analysis.Pass, fn *types.Func) bool {
 	if !ok || sig.Recv() == nil {
 		return false
 	}
-	return bodyWritesRecvElem(pass, decl.Body, sig.Recv()) && !bodyAssignsRecv(pass, decl.Body, sig.Recv())
+	return bodyWritesRecvElem(pass, decl.Body, sig.Recv()) && !guardedAllocBeforeStore(pass, decl.Body, sig.Recv())
 }
 
-func bodyAssignsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+func guardedAllocBeforeStore(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+	for _, stmt := range body.List {
+		if isNilGuardedAlloc(pass, stmt, recv) {
+			return true
+		}
+		if bodyWritesRecvElem(pass, stmt, recv) {
+			return false
+		}
+	}
+	return false
+}
+
+func isNilGuardedAlloc(pass *analysis.Pass, stmt ast.Stmt, recv *types.Var) bool {
+	guard, ok := stmt.(*ast.IfStmt)
+	if !ok || guard.Body == nil {
+		return false
+	}
+	if !isRecvNilTest(pass, guard.Cond, recv) {
+		return false
+	}
+	return blockAssignsRecv(pass, guard.Body, recv)
+}
+
+func isRecvNilTest(pass *analysis.Pass, cond ast.Expr, recv *types.Var) bool {
+	b, ok := ast.Unparen(cond).(*ast.BinaryExpr)
+	if !ok || b.Op != token.EQL {
+		return false
+	}
+	return isNilAndRecv(pass, b.X, b.Y, recv) || isNilAndRecv(pass, b.Y, b.X, recv)
+}
+
+func isNilAndRecv(pass *analysis.Pass, side, other ast.Expr, recv *types.Var) bool {
+	if !isNilIdent(pass.TypesInfo, side) {
+		return false
+	}
+	return isRecvIdent(pass, other, recv) || isStarRecv(pass, other, recv)
+}
+
+func isStarRecv(pass *analysis.Pass, e ast.Expr, recv *types.Var) bool {
+	star, ok := ast.Unparen(e).(*ast.StarExpr)
+	return ok && isRecvIdent(pass, star.X, recv)
+}
+
+func blockAssignsRecv(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
@@ -312,9 +355,9 @@ func declOfMethod(pass *analysis.Pass, fn *types.Func) *ast.FuncDecl {
 	return nil
 }
 
-func bodyWritesRecvElem(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
+func bodyWritesRecvElem(pass *analysis.Pass, node ast.Node, recv *types.Var) bool {
 	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
+	ast.Inspect(node, func(n ast.Node) bool {
 		if found {
 			return false
 		}

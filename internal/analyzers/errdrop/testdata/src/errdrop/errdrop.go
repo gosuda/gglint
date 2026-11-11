@@ -1215,9 +1215,9 @@ func valueMapWrite(p string) {
 	s.Add("x")
 }
 
-type errdropRows struct{}
+type errdropRows struct{ err error }
 
-func (errdropRows) Scan(dest ...any) error {
+func (r errdropRows) Scan(dest ...any) error {
 	if len(dest) == 0 {
 		return errors.New("no dest")
 	}
@@ -1229,7 +1229,7 @@ func (errdropRows) Scan(dest ...any) error {
 	if len(dest) > 1 {
 		return errors.New("one only")
 	}
-	return nil
+	return r.err
 }
 
 func outReportedLocalScan(rows errdropRows) int {
@@ -1272,6 +1272,55 @@ func loadLazySet(p string) (errdropLazySet, error) {
 func valueSilentLazyAlloc(p string) {
 	s, _ := loadLazySet(p)
 	s.Add("x")
+}
+
+func wrapInner(in *errdropInner) *errdropInner {
+	if in == nil {
+		return &errdropInner{}
+	}
+	return in
+}
+
+func outReportedWrapSelfRead(b []byte) error {
+	var o errdropOuter
+	json.Unmarshal(b, &o) // want "o is read after the error of json.Unmarshal is dropped"
+	o.In = wrapInner(o.In)
+	return nil
+}
+
+func Scan(s string, v fmt.Stringer, rest ...any) error {
+	_ = rest
+	if v == nil {
+		return errors.New("nil")
+	}
+	return errors.New("no")
+}
+
+type errdropBoundedSet map[string]struct{}
+
+func (s *errdropBoundedSet) Add(k string) {
+	if len(*s) > 1000 {
+		*s = errdropBoundedSet{}
+	}
+	(*s)[k] = struct{}{}
+}
+
+func loadBoundedSet(p string) (errdropBoundedSet, error) {
+	if p == "" {
+		return nil, errors.New("empty")
+	}
+	return errdropBoundedSet{}, nil
+}
+
+func valueBoundedWrite(p string) {
+	s, _ := loadBoundedSet(p) // want "s is used after the error of loadBoundedSet is dropped"
+	s.Add("x")
+}
+
+func outSilentScanFixedArg() string {
+	var b bytes.Buffer
+	Scan("a", &b)
+	return b.String()
 }
 
 func durableReportedExecOut(cmd []string, outfile string) int {
@@ -1322,9 +1371,7 @@ type errdropTLSHolder struct {
 	TLS *tls.Config
 }
 
-func useTLSHolder(c errdropTLSHolder) {}
-
-func durableReportedNestedFieldPassed(p string) error {
+func durableReportedNestedFieldPassed(addr, p string) error {
 	f, err := os.Create(p)
 	if err != nil {
 		return err
@@ -1333,6 +1380,10 @@ func durableReportedNestedFieldPassed(p string) error {
 	var cfg errdropTLSHolder
 	cfg.TLS = &tls.Config{}
 	cfg.TLS.KeyLogWriter = f
-	useTLSHolder(cfg)
+	conn, err := tls.Dial("tcp", addr, cfg.TLS)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
 	return nil
 }
