@@ -214,3 +214,20 @@ func rootReportedLiveAfterGuard(ctx, parent context.Context) error {
 	ctx = context.Background() // want "a context is in scope, and this root context drops its cancellation and deadline"
 	return workOn(ctx)
 }
+
+func rootSilentFallbackWithTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	var cancel context.CancelFunc
+	if ctx == nil {
+		ctx, cancel = context.WithTimeout(context.Background(), d)
+	}
+	return ctx, cancel
+}
+
+func rootSilentGuardThenWithTimeout(ctx context.Context) error {
+	if ctx != nil {
+		return workOn(ctx)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return workOn(ctx)
+}

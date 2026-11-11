@@ -326,16 +326,37 @@ func inRHS(as *ast.AssignStmt, call *ast.CallExpr) bool {
 
 func assignedContextVar(pass *analysis.Pass, as *ast.AssignStmt, call *ast.CallExpr) *types.Var {
 	idx := rhsIndexOf(as, call)
-	if idx < 0 || len(as.Lhs) != len(as.Rhs) {
+	if idx < 0 {
 		return nil
 	}
-	id, ok := stripParens(as.Lhs[idx]).(*ast.Ident)
+	if len(as.Lhs) == len(as.Rhs) {
+		return contextVarAt(pass, as.Lhs[idx])
+	}
+	if len(as.Rhs) == 1 {
+		if _, ok := stripParens(as.Rhs[0]).(*ast.CallExpr); ok {
+			return firstContextVar(pass, as)
+		}
+	}
+	return nil
+}
+
+func contextVarAt(pass *analysis.Pass, e ast.Expr) *types.Var {
+	id, ok := stripParens(e).(*ast.Ident)
 	if !ok {
 		return nil
 	}
 	v := varOf(pass.TypesInfo, id)
 	if v != nil && isContextVarType(v.Type()) {
 		return v
+	}
+	return nil
+}
+
+func firstContextVar(pass *analysis.Pass, as *ast.AssignStmt) *types.Var {
+	for _, lhs := range as.Lhs {
+		if v := contextVarAt(pass, lhs); v != nil {
+			return v
+		}
 	}
 	return nil
 }
