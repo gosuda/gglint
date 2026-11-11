@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log"
 	"net"
 	"net/http"
 	"os/exec"
 	"strings"
+	"syscall"
 )
 
 func useCtx(...any) {}
@@ -336,8 +336,8 @@ func nocontextReportedDoneWithoutTouch(ctx context.Context) error {
 	}
 }
 
-func nocontextReportedDoneOnlyLogs(ctx context.Context) error {
-	cmd := exec.Command("sleep", "10") // want "exec\\.Command cannot be cancelled"
+func nocontextSilentProcessGroupKill(ctx context.Context) error {
+	cmd := exec.Command("sleep", "10")
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -345,7 +345,8 @@ func nocontextReportedDoneOnlyLogs(ctx context.Context) error {
 	go func() { done <- cmd.Wait() }()
 	select {
 	case <-ctx.Done():
-		log.Println("cancelled", cmd.Path)
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
 		return ctx.Err()
 	case err := <-done:
 		return err

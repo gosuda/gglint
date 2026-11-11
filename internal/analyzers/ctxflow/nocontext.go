@@ -20,7 +20,7 @@ const httpDoReplacement = "http.NewRequestWithContext and (*http.Client).Do"
 
 var nocontextAnalyzer = &analysis.Analyzer{
 	Name:     "nocontext",
-	Doc:      "report the table calls that cannot be cancelled where a named context or *http.Request parameter, or a context local variable that is visible at the call exists; a wrapper is exempt only when its context parameter's value flows on: as a call argument, a method receiver, the right side of an assignment to another name, a composite literal element, a sent value, or a return operand; comparing the parameter with nil, overwriting it, or dropping it to blank does not exempt",
+	Doc:      "report the table calls that cannot be cancelled where a named context or *http.Request parameter, or a context local variable that is visible at the call exists; a wrapper is exempt only when its context parameter's value flows on: as a call argument, a method receiver, the right side of an assignment to another name, a composite literal element, a sent value, or a return operand; comparing the parameter with nil, overwriting it, or dropping it to blank does not exempt; a function that uses the result of the call in a select clause on Done is taken to cancel it by hand",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runNocontext,
 }
@@ -86,14 +86,14 @@ func resultInDoneClause(pass *analysis.Pass, fn inspector.Cursor, target flow.Ke
 		if !ok {
 			continue
 		}
-		if selectStopsWork(pass, stmt, target) {
+		if selectMentionsResult(pass, stmt, target) {
 			return true
 		}
 	}
 	return false
 }
 
-func selectStopsWork(pass *analysis.Pass, stmt *ast.SelectStmt, target flow.Key) bool {
+func selectMentionsResult(pass *analysis.Pass, stmt *ast.SelectStmt, target flow.Key) bool {
 	for _, s := range stmt.Body.List {
 		clause, ok := s.(*ast.CommClause)
 		if !ok || clause.Comm == nil {
@@ -102,57 +102,40 @@ func selectStopsWork(pass *analysis.Pass, stmt *ast.SelectStmt, target flow.Key)
 		if !receivesDone(pass.TypesInfo, clause.Comm) {
 			continue
 		}
-		if doneClauseStopsWork(pass.TypesInfo, clause.Body, target) {
+		if mentionsResultKey(pass.TypesInfo, clause.Body, target) {
 			return true
 		}
 	}
 	return false
 }
 
-type resultStopSearch struct {
+type resultKeySearch struct {
 	info   *types.Info
 	target flow.Key
 	found  bool
 }
 
-func (s *resultStopSearch) visit(n ast.Node) bool {
+func (s *resultKeySearch) visit(n ast.Node) bool {
 	if s.found {
 		return false
 	}
-	c, ok := n.(*ast.CallExpr)
+	e, ok := n.(ast.Expr)
 	if !ok {
 		return true
 	}
-	if s.stopsWork(c) {
+	k, ok := flow.KeyOf(s.info, e)
+	if !ok || k.Root != s.target.Root {
+		return true
+	}
+	if s.target.Path == "" || k.Path == s.target.Path || strings.HasPrefix(k.Path, s.target.Path+".") {
 		s.found = true
 		return false
 	}
 	return true
 }
 
-func (s *resultStopSearch) stopsWork(c *ast.CallExpr) bool {
-	if sel, ok := stripParens(c.Fun).(*ast.SelectorExpr); ok {
-		if k, ok := flow.KeyOf(s.info, sel.X); ok && keyBelowOrEqual(k, s.target) {
-			return true
-		}
-	}
-	for _, arg := range c.Args {
-		if k, ok := flow.KeyOf(s.info, arg); ok && k == s.target {
-			return true
-		}
-	}
-	return false
-}
-
-func keyBelowOrEqual(got, target flow.Key) bool {
-	if got.Root != target.Root {
-		return false
-	}
-	return target.Path == "" || got.Path == target.Path || strings.HasPrefix(got.Path, target.Path+".")
-}
-
-func doneClauseStopsWork(info *types.Info, body []ast.Stmt, target flow.Key) bool {
-	s := &resultStopSearch{info: info, target: target}
+func mentionsResultKey(info *types.Info, body []ast.Stmt, target flow.Key) bool {
+	s := &resultKeySearch{info: info, target: target}
 	for _, stmt := range body {
 		ast.Inspect(stmt, s.visit)
 		if s.found {
