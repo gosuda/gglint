@@ -426,6 +426,37 @@ func stalecasReportedInnerGoto(n *atomic.Int64) {
 	}
 	use(old)
 }
+
+type casNode struct{ next *casNode }
+
+func stalecasSilentSinglePop(head *atomic.Pointer[casNode]) (*casNode, bool) {
+	old := head.Load()
+	if old == nil {
+		return nil, false
+	}
+	for {
+		if head.CompareAndSwap(old, old.next) {
+			use(old)
+			return old, true
+		}
+		return nil, false
+	}
+}
+
+func stalecasSilentSinglePopBreak(head *atomic.Pointer[casNode]) (*casNode, bool) {
+	old := head.Load()
+	if old == nil {
+		return nil, false
+	}
+	for {
+		if head.CompareAndSwap(old, old.next) {
+			use(old)
+			break
+		}
+		return nil, false
+	}
+	return old, true
+}
 func stalecasSilentSelfGotoInit(n *atomic.Int64) {
 retry:
 	for old := n.Load(); !n.CompareAndSwap(old, old+1); {

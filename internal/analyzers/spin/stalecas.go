@@ -48,13 +48,97 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt,
 	if loopHasOutsideJump(pass.TypesInfo, fc, loop, old) {
 		return
 	}
-	if fc.addrs[old] {
+	if hasStaleAddr(pass.TypesInfo, fc, loop, old) {
 		return
 	}
-	if otherLitAssignsOld(pass.TypesInfo, fc, loop, old) {
+	if !loopHasRetry(pass.TypesInfo, fc, loop) {
 		return
 	}
 	pass.Reportf(loop.Pos(), "after one failed swap %s is stale, so retries fail until another goroutine stores %s back: load it again inside the loop", old.Name(), old.Name())
+}
+
+func hasStaleAddr(info *types.Info, fc *staleFn, loop *ast.ForStmt, old *types.Var) bool {
+	return fc.addrs[old] || otherLitAssignsOld(info, fc, loop, old)
+}
+
+func loopHasRetry(info *types.Info, fc *staleFn, loop *ast.ForStmt) bool {
+	if cond, ok := ast.Unparen(loop.Cond).(*ast.UnaryExpr); ok && cond.Op == token.NOT {
+		if _, ok := casOld(info, cond.X); ok {
+			return !restEndsExiting(info, fc, loop, loopBodyList(loop))
+		}
+	}
+	_, ok := firstCheck(loop)
+	if !ok {
+		return true
+	}
+	if loop.Body == nil || len(loop.Body.List) < 1 {
+		return true
+	}
+	return !restEndsExiting(info, fc, loop, loop.Body.List[1:])
+}
+
+func loopBodyList(loop *ast.ForStmt) []ast.Stmt {
+	if loop.Body == nil {
+		return nil
+	}
+	return loop.Body.List
+}
+
+func restEndsExiting(info *types.Info, fc *staleFn, loop *ast.ForStmt, rest []ast.Stmt) bool {
+	if len(rest) == 0 {
+		return false
+	}
+	return stmtEndsExiting(info, fc, loop, rest[len(rest)-1])
+}
+
+func stmtEndsExiting(info *types.Info, fc *staleFn, loop *ast.ForStmt, stmt ast.Stmt) bool {
+	switch t := stmt.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.BranchStmt:
+		if t.Tok == token.BREAK {
+			return true
+		}
+		if t.Tok == token.GOTO {
+			return gotoExitsLoop(fc, loop, t.Label)
+		}
+		return false
+	case *ast.ExprStmt:
+		return isPanicCall(info, t.X)
+	case *ast.BlockStmt:
+		if len(t.List) == 0 {
+			return false
+		}
+		return stmtEndsExiting(info, fc, loop, t.List[len(t.List)-1])
+	default:
+		return false
+	}
+}
+
+func gotoExitsLoop(fc *staleFn, loop *ast.ForStmt, label *ast.Ident) bool {
+	if label == nil {
+		return false
+	}
+	if ownLoopLabels(fc, loop)[label.Name] {
+		return false
+	}
+	target := findStaleLabel(fc, label.Name)
+	if target == nil {
+		return true
+	}
+	if loop.Body == nil {
+		return true
+	}
+	return target.Pos() < loop.Body.Pos() || target.End() > loop.Body.End()
+}
+
+func findStaleLabel(fc *staleFn, name string) *ast.LabeledStmt {
+	for _, lab := range fc.labels {
+		if lab.Label.Name == name {
+			return lab
+		}
+	}
+	return nil
 }
 
 func staleFnFor(info *types.Info, fn ast.Node, cache map[ast.Node]*staleFn) *staleFn {
