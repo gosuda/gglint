@@ -73,18 +73,18 @@ func headerCanEnd(pass *analysis.Pass, n *ast.ForStmt, dflt *ast.CommClause) boo
 func everyPassAssigned(pass *analysis.Pass, n *ast.ForStmt, dflt *ast.CommClause) map[*types.Var]bool {
 	out := map[*types.Var]bool{}
 	for _, s := range dflt.Body {
-		directAssigned(pass, s, out)
+		addEveryPass(pass, s, out)
 	}
 	for _, s := range n.Body.List {
 		if _, ok := s.(*ast.SelectStmt); ok {
 			continue
 		}
-		directAssigned(pass, s, out)
+		addEveryPass(pass, s, out)
 	}
 	return out
 }
 
-func directAssigned(pass *analysis.Pass, s ast.Stmt, into map[*types.Var]bool) {
+func addEveryPass(pass *analysis.Pass, s ast.Stmt, into map[*types.Var]bool) {
 	switch s := s.(type) {
 	case *ast.AssignStmt:
 		for _, lhs := range s.Lhs {
@@ -92,6 +92,40 @@ func directAssigned(pass *analysis.Pass, s ast.Stmt, into map[*types.Var]bool) {
 		}
 	case *ast.IncDecStmt:
 		addAssignedVar(pass, s.X, into)
+	case *ast.BlockStmt:
+		for _, inner := range s.List {
+			addEveryPass(pass, inner, into)
+		}
+	case *ast.IfStmt:
+		addBothBranches(pass, s, into)
+	}
+}
+
+func addBothBranches(pass *analysis.Pass, s *ast.IfStmt, into map[*types.Var]bool) {
+	if s.Else == nil {
+		return
+	}
+	then := map[*types.Var]bool{}
+	for _, t := range s.Body.List {
+		addEveryPass(pass, t, then)
+	}
+	els := map[*types.Var]bool{}
+	addElseBranch(pass, s.Else, els)
+	for v := range then {
+		if els[v] {
+			into[v] = true
+		}
+	}
+}
+
+func addElseBranch(pass *analysis.Pass, e ast.Stmt, into map[*types.Var]bool) {
+	switch e := e.(type) {
+	case *ast.BlockStmt:
+		for _, t := range e.List {
+			addEveryPass(pass, t, into)
+		}
+	case *ast.IfStmt:
+		addBothBranches(pass, e, into)
 	}
 }
 

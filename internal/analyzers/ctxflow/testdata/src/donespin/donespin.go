@@ -433,3 +433,31 @@ func donespinReportedConditionalAdvance(ctx context.Context, i, n int, step bool
 		}
 	}
 }
+
+func donespinSilentAdvanceBothBranches(ctx context.Context, i, n int, big bool) {
+	for i < n {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			if big {
+				i += 2
+			} else {
+				i++
+			}
+		}
+	}
+}
+
+func donespinSilentAdvanceBlock(ctx context.Context, i, n int) {
+	for i < n {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			{
+				i++
+			}
+		}
+	}
+}
