@@ -17,7 +17,7 @@ import (
 
 var addlateAnalyzer = &analysis.Analyzer{
 	Name:     "addlate",
-	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable that can hold it at that call; an Add in a go or defer statement does not; a literal that receives, ranges over a channel, or locks or waits is not reported, because that wait can order the Add",
+	Doc:      "report a WaitGroup Add that is a plain statement after a go statement whose function literal calls Done, in the same statement list; an Add earlier in the function silences it, also an Add inside a function literal that is called before the go statement directly or through a local variable that can hold it at that call; an Add in a go statement never counts as earlier, and an Add in a defer statement in the function itself does not, while a defer inside a called literal does; a literal that receives, ranges over a channel, or locks or waits is not reported, because that wait can order the Add",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runAddlate,
 }
@@ -85,7 +85,8 @@ func litAddKeys(pass *analysis.Pass, lit *ast.FuncLit) []flow.Key {
 		return out
 	}
 	ast.Inspect(lit.Body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
+		switch n.(type) {
+		case *ast.FuncLit, *ast.GoStmt:
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)

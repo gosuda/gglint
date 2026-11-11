@@ -318,3 +318,39 @@ func addlateReportedVarLitAssignedAfterCall() {
 	wg.Add(1) // want "negative WaitGroup counter"
 	wg.Wait()
 }
+
+func addlateReportedGoInsideLit() {
+	var wg sync.WaitGroup
+	add := func() { go wg.Add(1) }
+	add()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateReportedGoInsideInPlace() {
+	var wg sync.WaitGroup
+	func() { go wg.Add(1) }()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateSilentDeferInsideLit() {
+	var wg sync.WaitGroup
+	add := func() { defer wg.Add(1) }
+	add()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Wait()
+}
