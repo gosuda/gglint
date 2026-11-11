@@ -5,6 +5,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/analysis"
 
@@ -315,12 +316,7 @@ func reachingCaps(scope *appendScope, a *types.Var, slicePos token.Pos) []capRes
 func reachesForCapCached(scope *appendScope, a *types.Var, from, to ast.Node) bool {
 	kills := scope.assigns[a]
 	avoid := func(n ast.Node) bool {
-		for _, k := range kills {
-			if n == k {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(kills, n)
 	}
 	return scope.graph.Reaches(from, to, avoid)
 }
@@ -489,8 +485,8 @@ func assignsBefore(info *types.Info, n ast.Node, a *types.Var, before token.Pos)
 }
 
 func insideNestedBlock(stack []ast.Node, before token.Pos) bool {
-	for i := len(stack) - 1; i >= 0; i-- {
-		switch t := stack[i].(type) {
+	for _, s := range slices.Backward(stack) {
+		switch t := s.(type) {
 		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt, *ast.LabeledStmt:
 			if before < t.Pos() || before >= t.End() {
 				return true

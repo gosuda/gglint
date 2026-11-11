@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/analysis"
 
@@ -76,10 +77,8 @@ func scopeWholeHitStores(scope *appendScope, a *types.Var, site readSite, kills 
 
 func storeAvoid(scope *appendScope, a *types.Var, kills []ast.Node, k int) func(ast.Node) bool {
 	return func(n ast.Node) bool {
-		for _, e := range kills {
-			if n == e {
-				return true
-			}
+		if slices.Contains(kills, n) {
+			return true
 		}
 		return isElementStoreTo(scope.info, scope, n, a, k)
 	}
@@ -114,12 +113,7 @@ func wholeHasLiveIndex(scope *appendScope, a *types.Var, site readSite, kills []
 
 func wholeAvoid(kills []ast.Node) func(ast.Node) bool {
 	return func(n ast.Node) bool {
-		for _, e := range kills {
-			if n == e {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(kills, n)
 	}
 }
 

@@ -266,10 +266,8 @@ func insideSkips(pos, end token.Pos, view scopeView) bool {
 
 func sharesLoop(a, b []ast.Node) bool {
 	for _, x := range a {
-		for _, y := range b {
-			if x == y {
-				return true
-			}
+		if slices.Contains(b, x) {
+			return true
 		}
 	}
 	return false

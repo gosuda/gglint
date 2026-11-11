@@ -64,12 +64,7 @@ func compatible(sig, wait syncKind, knownBuffered bool) bool {
 	if recvSendOpen(sig, wait, knownBuffered) {
 		return true
 	}
-	for _, w := range compatWaitKinds[sig] {
-		if w == wait {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(compatWaitKinds[sig], wait)
 }
 
 func classifyNode(pass *analysis.Pass, s flow.Spawn, n ast.Node) []syncOp {
