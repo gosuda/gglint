@@ -736,6 +736,28 @@ func viewescapeSilentStarRebind(in []string, h *countedHolder, out [][]byte) [][
 	return out
 }
 
+func viewescapeSilentAmpersandRebind(in []string, hv countedHolder, out [][]byte) [][]byte {
+	for _, s := range in {
+		b := hv.c
+		_, _ = b.buf.WriteString(s)
+		out = append(out, b.buf.Bytes())
+		(&hv).c.buf = bytes.Buffer{}
+	}
+	return out
+}
+
+func (h *countedHolder) slot() **counted { return &h.c }
+
+func viewescapeSilentCallRebind(in []string, h *countedHolder, out [][]byte) [][]byte {
+	for _, s := range in {
+		b := h.c
+		_, _ = b.buf.WriteString(s)
+		out = append(out, b.buf.Bytes())
+		*h.slot() = &counted{}
+	}
+	return out
+}
+
 type viewLazyHolder struct{ buf *bytes.Buffer }
 
 func viewescapeReportedLazyField(in []string, h *viewLazyHolder, out [][]byte) [][]byte {

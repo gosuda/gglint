@@ -371,7 +371,7 @@ func pathAffectsTarget(pass *analysis.Pass, e ast.Expr, full []string, root *typ
 	}
 	lc, ok := pathChain(pass, e, root)
 	if !ok {
-		return targetBaseIsRoot(pass, e, root)
+		return unspellableRebinds(pass, e, root)
 	}
 	for i, s := range lc {
 		if i >= len(full) {
@@ -470,33 +470,67 @@ func structOf(t types.Type) (*types.Struct, bool) {
 	return st, ok
 }
 
-func targetBaseIsRoot(pass *analysis.Pass, e ast.Expr, root *types.Var) bool {
+func unspellableRebinds(pass *analysis.Pass, e ast.Expr, root *types.Var) bool {
 	v, ok := targetBaseVar(pass, e)
-	if !ok {
+	if ok {
+		return v == root
+	}
+	return mentionsRootVar(pass, e, root)
+}
+
+func mentionsRootVar(pass *analysis.Pass, e ast.Expr, root *types.Var) bool {
+	if e == nil {
 		return false
 	}
-	return v == root
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if v, ok := pass.TypesInfo.Uses[id].(*types.Var); ok && v == root {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func targetBaseVar(pass *analysis.Pass, e ast.Expr) (*types.Var, bool) {
 	for {
-		e = ast.Unparen(e)
-		switch x := e.(type) {
-		case *ast.Ident:
-			v, ok := pass.TypesInfo.Uses[x].(*types.Var)
+		if id, ok := ast.Unparen(e).(*ast.Ident); ok {
+			v, ok := pass.TypesInfo.Uses[id].(*types.Var)
 			return v, ok
-		case *ast.SelectorExpr:
-			e = x.X
-		case *ast.IndexExpr:
-			e = x.X
-		case *ast.SliceExpr:
-			e = x.X
-		case *ast.StarExpr:
-			e = x.X
-		default:
+		}
+		next, ok := targetBaseStep(e)
+		if !ok {
 			return nil, false
 		}
+		e = next
 	}
+}
+
+func targetBaseStep(e ast.Expr) (ast.Expr, bool) {
+	switch x := ast.Unparen(e).(type) {
+	case *ast.SelectorExpr:
+		return x.X, true
+	case *ast.IndexExpr:
+		return x.X, true
+	case *ast.SliceExpr:
+		return x.X, true
+	case *ast.StarExpr:
+		return x.X, true
+	case *ast.UnaryExpr:
+		if x.Op != token.AND {
+			return nil, false
+		}
+		return x.X, true
+	}
+	return nil, false
 }
 
 func stripAddr(e ast.Expr) ast.Expr {
