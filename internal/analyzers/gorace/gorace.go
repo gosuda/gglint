@@ -15,21 +15,21 @@ import (
 
 var mapAnalyzer = &analysis.Analyzer{
 	Name:     "map",
-	Doc:      "reports a map a goroutine writes that the function or another goroutine uses without ordering; a loop that waits per iteration is still reported; only index, range, delete, and clear accesses count; mutex-passing functions are skipped",
+	Doc:      "reports a map a goroutine writes that the function or another goroutine uses without ordering; a loop that waits per iteration is still reported; a sibling goroutine that starts after the first is joined is not paired, and a write bracketed by a send before and a receive after on a channel of capacity one, or of capacity the function cannot see, counts as locked; only index, range, delete, and clear accesses count, and clear counts only when its argument is a map; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runMap,
 }
 
 var fanoutAnalyzer = &analysis.Analyzer{
 	Name:     "fanout",
-	Doc:      "reports variables declared outside a loop that every goroutine the loop starts writes; indexed writes, guarded writes, and single-goroutine loops are not reported; a loop that waits per iteration or runs once is still reported; a write between a receive and a send, or a send and a receive, on a channel of capacity one in the goroutine counts as guarded, and the check does not verify that only one token exists; mutex-passing functions are skipped",
+	Doc:      "reports variables declared outside a loop that every goroutine the loop starts writes; indexed writes, guarded writes, and single-goroutine loops are not reported; a loop that waits per iteration is still reported, and a loop that leaves right after the go statement is not; a write between a receive and a send, or a send and a receive, counts as guarded when the function makes the channel with capacity one or its capacity is not visible to the function, and a write between an atomic Load and a Store, or between a receive and a send on a channel not known to be buffered, counts as guarded as well; the check does not verify that only one token exists; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runFanout,
 }
 
 var sharedAnalyzer = &analysis.Analyzer{
 	Name:     "shared",
-	Doc:      "reports a local variable a goroutine outside a loop reads or writes without ordering; silent when joined, when a common lock is held at both accesses, when both accesses lie between two operations on one channel (the check does not verify a single token), or when a signal and a wait on one channel, WaitGroup, or Cond can order them (the goroutine signals after its access and the parent waits before its own, or the reverse); a send counts as a wait only on a channel that is not known to be buffered; a mutex orders only when the parent holds it at the go statement; a call that is given the object can order and is not reported; sibling goroutines and package or parameter variables are not compared; mutex-passing functions are skipped",
+	Doc:      "reports a local variable a goroutine outside a loop reads or writes without ordering; silent when joined, when a common lock is held at both accesses, when both accesses lie between two operations on one channel (the check does not verify a single token), or when a signal and a wait on one channel, WaitGroup, or Cond can order them (the goroutine signals after its access and the parent waits before its own, or the reverse); a send counts as a wait only on a channel that is not known to be buffered; a mutex orders when the parent holds it at the go statement or when it is held at both accesses; a call that is given the object can order and is not reported; sibling goroutines and package or parameter variables are not compared; an access to a whole variable and an access to one of its fields are not paired, and reads of a map are not counted; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runShared,
 }
@@ -43,7 +43,7 @@ var doublecheckAnalyzer = &analysis.Analyzer{
 
 var subtestAnalyzer = &analysis.Analyzer{
 	Name:     "subtest",
-	Doc:      "reports sibling t.Run calls in one block whose parallel subtests write a variable the other also uses; loops and indexed writes are not checked; t.Parallel anywhere in the literal counts as parallel",
+	Doc:      "reports sibling t.Run calls in one block, including the bodies of for and range statements, whose parallel subtests write a variable the other also uses; indexed writes are not checked; a pair of accesses that both hold one mutex declared outside the subtests is not reported; t.Parallel anywhere in the literal counts as parallel",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runSubtest,
 }
