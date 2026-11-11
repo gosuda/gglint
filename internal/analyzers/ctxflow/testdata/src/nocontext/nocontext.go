@@ -338,6 +338,7 @@ func nocontextReportedDoneWithoutTouch(ctx context.Context) error {
 
 func nocontextSilentProcessGroupKill(ctx context.Context) error {
 	cmd := exec.Command("sleep", "10")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
