@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 
@@ -36,7 +37,7 @@ func checkMapcopy(pass *analysis.Pass, fn ast.Node) {
 			continue
 		}
 		for _, st := range writes[d.v] {
-			if st.Pos() > d.pos {
+			if st.Pos() > d.pos && !storedBack(pass.TypesInfo, fn, d, st) {
 				reportMapCopy(pass, st, d)
 			}
 		}
@@ -200,6 +201,129 @@ func isFieldBase(stack []ast.Node, id *ast.Ident) bool {
 	}
 	sel, ok := rest[len(rest)-1].(*ast.SelectorExpr)
 	return ok && sel.X == child
+}
+
+func storedBack(info *types.Info, fn ast.Node, d mapDef, write ast.Stmt) bool {
+	paths := writeFieldPaths(info, write, d.v)
+	if len(paths) == 0 {
+		return false
+	}
+	for _, p := range paths {
+		if !fieldStoredBack(info, fn, d, p, write) {
+			return false
+		}
+	}
+	return true
+}
+
+func writeFieldPaths(info *types.Info, st ast.Stmt, v *types.Var) []string {
+	switch st := st.(type) {
+	case *ast.AssignStmt:
+		var out []string
+		for _, lhs := range st.Lhs {
+			if p, ok := fieldPathOf(info, lhs, v); ok {
+				out = append(out, p)
+			}
+		}
+		return out
+	case *ast.IncDecStmt:
+		if p, ok := fieldPathOf(info, st.X, v); ok {
+			return []string{p}
+		}
+		return nil
+	}
+	return nil
+}
+
+func fieldPathOf(info *types.Info, e ast.Expr, v *types.Var) (string, bool) {
+	if passesPointer(info, e) {
+		return "", false
+	}
+	k, ok := flow.KeyOf(info, e)
+	if !ok {
+		return "", false
+	}
+	if k.Root != v {
+		return "", false
+	}
+	if k.Path == "" {
+		return "", false
+	}
+	return k.Path, true
+}
+
+func fieldStoredBack(info *types.Info, fn ast.Node, d mapDef, path string, write ast.Stmt) bool {
+	found := false
+	ast.Inspect(flow.Body(fn), func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		st, ok := n.(*ast.AssignStmt)
+		if !ok || st.Pos() <= write.Pos() || st.Tok != token.ASSIGN {
+			return true
+		}
+		if !storesSameMap(info, st, d.text) {
+			return true
+		}
+		for _, rhs := range st.Rhs {
+			if fieldReadHas(info, rhs, d.v, path) {
+				found = true
+				break
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func storesSameMap(info *types.Info, st *ast.AssignStmt, text string) bool {
+	for _, lhs := range st.Lhs {
+		var x ast.Expr
+		switch n := ast.Unparen(lhs).(type) {
+		case *ast.IndexExpr:
+			x = n.X
+		case *ast.IndexListExpr:
+			x = n.X
+		default:
+			continue
+		}
+		t := info.TypeOf(x)
+		if t == nil {
+			continue
+		}
+		if _, ok := t.Underlying().(*types.Map); !ok {
+			continue
+		}
+		if types.ExprString(x) == text {
+			return true
+		}
+	}
+	return false
+}
+
+func fieldReadHas(info *types.Info, e ast.Expr, v *types.Var, want string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		k, ok := flow.KeyOf(info, sel)
+		if !ok || k.Root != v {
+			return true
+		}
+		if k.Path == want || strings.HasPrefix(k.Path, want+".") {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 func reportMapCopy(pass *analysis.Pass, st ast.Stmt, d mapDef) {

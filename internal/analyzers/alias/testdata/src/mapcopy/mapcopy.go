@@ -112,3 +112,20 @@ func MapcopySilentClosure(m map[string]item, k string) {
 	defer func() { useItem(v) }()
 	v.n++
 }
+
+func MapcopySilentFieldStoredBack(m map[string]item, k string) {
+	v := m[k]
+	v.n++
+	m[k] = item{n: v.n}
+}
+
+type namedItem struct {
+	n    int
+	name string
+}
+
+func MapcopyReportedOtherField(m map[string]namedItem, k string) string {
+	v := m[k]
+	v.n++ // want `v is a copy of the element of m, so this write is lost`
+	return v.name
+}
