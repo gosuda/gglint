@@ -633,6 +633,41 @@ func viewescapeSilentReboundElement(in []string, out [][]byte) [][]byte {
 	return out
 }
 
+type viewLazyHolder struct{ buf *bytes.Buffer }
+
+func viewescapeReportedLazyField(in []string, h *viewLazyHolder, out [][]byte) [][]byte {
+	for _, s := range in {
+		if h.buf == nil {
+			h.buf = new(bytes.Buffer)
+		}
+		b := h.buf
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes()) // want "points into the buffer of"
+	}
+	return out
+}
+
+func viewescapeReportedOtherElementRebound(in []string, out [][]byte) [][]byte {
+	bufs := []*bytes.Buffer{new(bytes.Buffer), new(bytes.Buffer)}
+	for _, s := range in {
+		bufs[1] = new(bytes.Buffer)
+		b := bufs[0]
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes()) // want "points into the buffer of"
+	}
+	return out
+}
+
+func viewescapeReportedInitPointer(out [][]byte) [][]byte {
+	var shared bytes.Buffer
+	for p, i := &shared, 0; i < 3; i++ {
+		b := p
+		_, _ = b.WriteString("x")
+		out = append(out, b.Bytes()) // want "points into the buffer of"
+	}
+	return out
+}
+
 type viewLoopHolder struct{ buf bytes.Buffer }
 
 func viewescapeSilentRangeHolder(hs []*viewLoopHolder) [][]byte {
