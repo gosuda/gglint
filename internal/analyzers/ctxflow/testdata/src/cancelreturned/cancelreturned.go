@@ -268,3 +268,26 @@ func cancelreturnedReportedBareReturn(parent context.Context) (ctx context.Conte
 	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
 	return
 }
+
+func cancelreturnedReportedDoubleDefer(parent context.Context) context.Context {
+	c, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	defer cancel()
+	return c
+}
+
+func cancelreturnedSilentSecondPair(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel()
+	var cancel2 context.CancelFunc
+	ctx, cancel2 = context.WithTimeout(parent, time.Second)
+	return ctx, cancel2
+}
+
+func cancelreturnedReportedOnce(parent context.Context) (context.Context, context.Context) {
+	c1, cancel := context.WithTimeout(parent, time.Second)
+	defer cancel() // want "the deferred cancel runs before the caller uses the returned context"
+	var c2 context.Context
+	c2, cancel = context.WithTimeout(parent, time.Second)
+	return c1, c2
+}

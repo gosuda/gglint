@@ -32,26 +32,28 @@ func runCancel(pass *analysis.Pass) (any, error) {
 type cancelPair struct {
 	ctx    *types.Var
 	cancel *types.Var
+	def    token.Pos
 }
 
 func checkCancel(pass *analysis.Pass, fn inspector.Cursor) {
 	s := summarizeCancel(pass, fn)
+	reported := map[token.Pos]bool{}
 	for _, p := range collectPairs(pass, fn) {
-		checkPair(pass, p, s)
+		checkPair(pass, p, s, reported)
 	}
 }
 
 type cancelSummary struct {
 	defers     map[*types.Var]*ast.DeferStmt
 	returned   map[*types.Var]bool
-	reassigned map[*types.Var]bool
+	reassigned map[*types.Var][]token.Pos
 }
 
 func summarizeCancel(pass *analysis.Pass, fn inspector.Cursor) cancelSummary {
 	s := cancelSummary{
 		defers:     map[*types.Var]*ast.DeferStmt{},
 		returned:   map[*types.Var]bool{},
-		reassigned: map[*types.Var]bool{},
+		reassigned: map[*types.Var][]token.Pos{},
 	}
 	for cur := range fn.Preorder((*ast.DeferStmt)(nil), (*ast.ReturnStmt)(nil), (*ast.AssignStmt)(nil)) {
 		if _, isAssign := cur.Node().(*ast.AssignStmt); !isAssign {
@@ -103,26 +105,18 @@ func (s cancelSummary) recordReturn(pass *analysis.Pass, fn inspector.Cursor, r 
 }
 
 func (s cancelSummary) recordAssign(pass *analysis.Pass, as *ast.AssignStmt) {
-	if len(as.Lhs) == 2 && len(as.Rhs) == 1 {
-		if call, ok := stripParens(as.Rhs[0]).(*ast.CallExpr); ok && isWithCall(pass.TypesInfo, call) {
-			return
-		}
-	}
 	for _, lhs := range as.Lhs {
 		id, ok := stripParens(lhs).(*ast.Ident)
 		if !ok {
 			continue
 		}
-		if _, isDef := pass.TypesInfo.Defs[id]; isDef {
-			continue
-		}
 		if v := varOf(pass.TypesInfo, id); v != nil {
-			s.reassigned[v] = true
+			s.reassigned[v] = append(s.reassigned[v], as.Pos())
 		}
 	}
 }
 
-func checkPair(pass *analysis.Pass, p cancelPair, s cancelSummary) {
+func checkPair(pass *analysis.Pass, p cancelPair, s cancelSummary, reported map[token.Pos]bool) {
 	site, ok := s.defers[p.cancel]
 	if !ok {
 		return
@@ -130,9 +124,15 @@ func checkPair(pass *analysis.Pass, p cancelPair, s cancelSummary) {
 	if s.returned[p.cancel] || !s.returned[p.ctx] {
 		return
 	}
-	if s.reassigned[p.ctx] {
+	for _, pos := range s.reassigned[p.ctx] {
+		if pos > p.def {
+			return
+		}
+	}
+	if reported[site.Pos()] {
 		return
 	}
+	reported[site.Pos()] = true
 	pass.Report(analysis.Diagnostic{Pos: site.Pos(), End: site.End(), Message: cancelMessage})
 }
 
@@ -213,10 +213,10 @@ func pairFromAssign(pass *analysis.Pass, as *ast.AssignStmt) (cancelPair, bool) 
 	if !ok || !isWithCall(pass.TypesInfo, call) {
 		return cancelPair{}, false
 	}
-	return pairFromIdents(pass, as.Lhs[0], as.Lhs[1])
+	return pairFromIdents(pass, as.Lhs[0], as.Lhs[1], as.Pos())
 }
 
-func pairFromIdents(pass *analysis.Pass, x, y ast.Expr) (cancelPair, bool) {
+func pairFromIdents(pass *analysis.Pass, x, y ast.Expr, def token.Pos) (cancelPair, bool) {
 	xid, ok := stripParens(x).(*ast.Ident)
 	if !ok {
 		return cancelPair{}, false
@@ -230,7 +230,7 @@ func pairFromIdents(pass *analysis.Pass, x, y ast.Expr) (cancelPair, bool) {
 	if ctx == nil || cancel == nil {
 		return cancelPair{}, false
 	}
-	return cancelPair{ctx: ctx, cancel: cancel}, true
+	return cancelPair{ctx: ctx, cancel: cancel, def: def}, true
 }
 
 func pairsFromDecl(pass *analysis.Pass, d *ast.DeclStmt) []cancelPair {
@@ -261,7 +261,7 @@ func pairFromValueSpec(pass *analysis.Pass, spec ast.Spec) (cancelPair, bool) {
 	if ctx == nil || cancel == nil {
 		return cancelPair{}, false
 	}
-	return cancelPair{ctx: ctx, cancel: cancel}, true
+	return cancelPair{ctx: ctx, cancel: cancel, def: spec.Pos()}, true
 }
 
 func isWithCall(info *types.Info, call *ast.CallExpr) bool {
