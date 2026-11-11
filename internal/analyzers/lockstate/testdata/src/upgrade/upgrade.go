@@ -114,10 +114,16 @@ type resetS struct {
 	mu sync.RWMutex
 }
 
-func upgradeResetSilent() {
-	var s resetS
-	s.mu.RLock()
-	s.mu = sync.RWMutex{}
-	s.mu.Lock()
-	s.mu.Unlock()
+type resetOuter struct {
+	p *resetS
+}
+
+func upgradeMovedFieldSilent(a, b *resetS) {
+	var o resetOuter
+	o.p = a
+	o.p.mu.RLock()
+	defer a.mu.RUnlock()
+	o.p = b
+	o.p.mu.Lock()
+	o.p.mu.Unlock()
 }

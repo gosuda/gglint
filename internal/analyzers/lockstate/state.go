@@ -488,8 +488,6 @@ func invalidatesKey(info *types.Info, x ast.Node, key flow.Key, v *types.Var) bo
 		return assignInvalidates(info, n, key, v)
 	case *ast.IncDecStmt:
 		return targetInvalidates(info, n.X, key, v)
-	case *ast.RangeStmt:
-		return rangeInvalidates(info, n, key, v)
 	}
 	return false
 }
@@ -501,13 +499,6 @@ func assignInvalidates(info *types.Info, as *ast.AssignStmt, key flow.Key, v *ty
 		}
 	}
 	return false
-}
-
-func rangeInvalidates(info *types.Info, rs *ast.RangeStmt, key flow.Key, v *types.Var) bool {
-	if rs.Key != nil && targetInvalidates(info, rs.Key, key, v) {
-		return true
-	}
-	return rs.Value != nil && targetInvalidates(info, rs.Value, key, v)
 }
 
 func targetInvalidates(info *types.Info, e ast.Expr, key flow.Key, v *types.Var) bool {
@@ -569,18 +560,20 @@ func handsAddress(info *types.Info, n ast.Node, key flow.Key) bool {
 }
 
 type helperCache struct {
-	info  *types.Info
-	pkg   *types.Package
-	decls map[*types.Func]ast.Node
-	memo  map[*types.Func]bool
+	info     *types.Info
+	pkg      *types.Package
+	decls    map[*types.Func]ast.Node
+	memo     map[*types.Func]bool
+	pureMemo map[*types.Func]bool
 }
 
 func newHelperCache(pass *analysis.Pass) *helperCache {
 	c := &helperCache{
-		info:  pass.TypesInfo,
-		pkg:   pass.Pkg,
-		decls: map[*types.Func]ast.Node{},
-		memo:  map[*types.Func]bool{},
+		info:     pass.TypesInfo,
+		pkg:      pass.Pkg,
+		decls:    map[*types.Func]ast.Node{},
+		memo:     map[*types.Func]bool{},
+		pureMemo: map[*types.Func]bool{},
 	}
 	for _, f := range pass.Files {
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -673,7 +666,51 @@ func (c *helperCache) isPure(call *ast.CallExpr, key flow.Key) bool {
 	if !ok || !c.passesRoot(call, key) {
 		return false
 	}
-	return !c.unlocks(fn)
+	return c.pureBody(fn)
+}
+
+func (c *helperCache) pureBody(fn *types.Func) bool {
+	if v, ok := c.pureMemo[fn]; ok {
+		return v
+	}
+	body, ok := c.bodyOf(fn)
+	if !ok {
+		c.pureMemo[fn] = false
+		return false
+	}
+	pure := true
+	ast.Inspect(body, func(n ast.Node) bool {
+		if !pure {
+			return false
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			pure = false
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if c.trivialCall(call) {
+			return true
+		}
+		pure = false
+		return false
+	})
+	c.pureMemo[fn] = pure
+	return pure
+}
+
+func (c *helperCache) trivialCall(call *ast.CallExpr) bool {
+	if _, ok := flow.IsCall(c.info, call); !ok {
+		return true
+	}
+	if id, ok := ast.Unparen(call.Fun).(*ast.Ident); ok {
+		if _, ok := c.info.Uses[id].(*types.Builtin); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *helperCache) isUnlocking(call *ast.CallExpr, key flow.Key) bool {

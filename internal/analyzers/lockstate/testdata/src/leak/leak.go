@@ -235,3 +235,31 @@ func leakPureHelperReported(s *S, bad bool) error {
 	s.mu.Unlock()
 	return nil
 }
+
+func (s *S) finish() {
+	s.unlock()
+}
+
+func leakChainSilent(s *S, bad bool) error {
+	s.mu.Lock()
+	if bad {
+		s.finish()
+		return errBad
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func unlockVia(l sync.Locker) {
+	l.Unlock()
+}
+
+func leakLockerSilent(s *S, bad bool) error {
+	s.mu.Lock()
+	if bad {
+		unlockVia(&s.mu)
+		return errBad
+	}
+	s.mu.Unlock()
+	return nil
+}
