@@ -19,14 +19,14 @@ func Analyzers() []*analysis.Analyzer {
 
 var appendclobber = &analysis.Analyzer{
 	Name:     "appendclobber",
-	Doc:      "Reports an append through b := a[:n] with constant n and capacity proof that overwrites an element of local a read later, or a leaving after the append; an element stored again before the read is not overwritten, and the length proof needs straight-line assignments; a slice that a closure touches, that a pointer with a storing or escaping use can change, or whose address is taken before the append in any other way, is not tracked.",
+	Doc:      "Reports an append through b := a[:n] with constant n and capacity proof that overwrites an element of local a read later, or a leaving after the append; an element stored again before the read is not overwritten, and the length proof needs straight-line assignments; an append in a loop that neither ranges over a nor tests len(a) counts once; a slice that a closure touches, that a pointer with a storing or escaping use can change, or whose address is taken before the append in any other way, is not tracked.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runAppendclobber,
 }
 
 var mapcopy = &analysis.Analyzer{
 	Name:     "mapcopy",
-	Doc:      "Reports a field write to v := m[k] lost when v never used as a whole; only :=, struct elements.",
+	Doc:      "Reports a field write to v := m[k] lost when v is never used as a whole and the field is not stored back into the map; only :=, struct elements.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runMapcopy,
 }
@@ -40,7 +40,7 @@ var rangemutate = &analysis.Analyzer{
 
 var rangeref = &analysis.Analyzer{
 	Name:     "rangeref",
-	Doc:      "Reports &v of range copy v that escapes by append, send, map store, or written outer store.",
+	Doc:      "Reports &v of range copy v that escapes by append, send, map store, or written outer store; an outer pointer whose address is taken before the write is not followed.",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runRangeref,
 }
