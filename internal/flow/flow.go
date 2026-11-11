@@ -121,7 +121,6 @@ type Graph struct {
 	spanMemo    map[ast.Node]map[ast.Node]bool
 	nextMemo    map[ast.Node][]ast.Node
 	reachMemo   map[ast.Node]map[ast.Node]bool
-	predMemo    map[*cfg.Block][]*cfg.Block
 	closureOnce sync.Once
 	closureVars map[*ast.FuncLit]*types.Var
 }
@@ -507,29 +506,6 @@ func (g *Graph) entries(b *cfg.Block, seen map[*cfg.Block]bool, out *[]ast.Node)
 	}
 }
 
-func (g *Graph) predecessors() map[*cfg.Block][]*cfg.Block {
-	g.joinMu.Lock()
-	if g.predMemo != nil {
-		out := g.predMemo
-		g.joinMu.Unlock()
-		return out
-	}
-	g.joinMu.Unlock()
-	built := make(map[*cfg.Block][]*cfg.Block)
-	for _, b := range g.blocks {
-		for _, s := range b.Succs {
-			built[s] = append(built[s], b)
-		}
-	}
-	g.joinMu.Lock()
-	if g.predMemo == nil {
-		g.predMemo = built
-	}
-	out := g.predMemo
-	g.joinMu.Unlock()
-	return out
-}
-
 func Forward[S comparable](g *Graph, entry S, transfer func(ast.Node, S) S, join func(S, S) S, visit func(ast.Node, S)) {
 	if g == nil || transfer == nil {
 		return
@@ -538,21 +514,16 @@ func Forward[S comparable](g *Graph, entry S, transfer func(ast.Node, S) S, join
 	if len(blocks) == 0 {
 		return
 	}
-	in := make(map[*cfg.Block]S, len(blocks))
-	reached := make(map[*cfg.Block]bool, len(blocks))
-	in[blocks[0]] = entry
-	reached[blocks[0]] = true
-	preds := g.predecessors()
-	for propagate(blocks, preds, in, reached, transfer, join) {
-	}
+	state := newPropagation(blocks, entry, join)
+	state.run(transfer)
 	if visit == nil {
 		return
 	}
 	for _, b := range blocks {
-		if !reached[b] {
+		if !state.reached[b] {
 			continue
 		}
-		s := in[b]
+		s := state.in[b]
 		for _, n := range b.Nodes {
 			visit(n, s)
 			s = transfer(n, s)
@@ -560,41 +531,66 @@ func Forward[S comparable](g *Graph, entry S, transfer func(ast.Node, S) S, join
 	}
 }
 
-func propagate[S comparable](blocks []*cfg.Block, preds map[*cfg.Block][]*cfg.Block, in map[*cfg.Block]S, reached map[*cfg.Block]bool, transfer func(ast.Node, S) S, join func(S, S) S) bool {
-	changed := false
-	for _, b := range blocks {
-		if b == blocks[0] {
-			continue
-		}
-		s, ok := joinReached(preds[b], in, reached, transfer, join)
-		if !ok {
-			continue
-		}
-		if !reached[b] || s != in[b] {
-			in[b] = s
-			reached[b] = true
-			changed = true
-		}
-	}
-	return changed
+type propagation[S comparable] struct {
+	in      map[*cfg.Block]S
+	reached map[*cfg.Block]bool
+	queued  map[*cfg.Block]bool
+	work    []*cfg.Block
+	join    func(S, S) S
 }
 
-func joinReached[S comparable](ps []*cfg.Block, in map[*cfg.Block]S, reached map[*cfg.Block]bool, transfer func(ast.Node, S) S, join func(S, S) S) (S, bool) {
-	var s S
-	first := true
-	for _, p := range ps {
-		if !reached[p] {
-			continue
-		}
-		out := applyBlock(p, in[p], transfer)
-		if first {
-			s = out
-			first = false
-			continue
-		}
-		s = join(s, out)
+func newPropagation[S comparable](blocks []*cfg.Block, entry S, join func(S, S) S) *propagation[S] {
+	p := &propagation[S]{
+		in:      make(map[*cfg.Block]S, len(blocks)),
+		reached: make(map[*cfg.Block]bool, len(blocks)),
+		queued:  make(map[*cfg.Block]bool, len(blocks)),
+		work:    []*cfg.Block{blocks[0]},
+		join:    join,
 	}
-	return s, !first
+	p.in[blocks[0]] = entry
+	p.reached[blocks[0]] = true
+	p.queued[blocks[0]] = true
+	return p
+}
+
+func (p *propagation[S]) run(transfer func(ast.Node, S) S) {
+	for len(p.work) > 0 {
+		b := p.pop()
+		out := applyBlock(b, p.in[b], transfer)
+		for _, s := range b.Succs {
+			p.merge(s, out)
+		}
+	}
+}
+
+func (p *propagation[S]) pop() *cfg.Block {
+	b := p.work[len(p.work)-1]
+	p.work = p.work[:len(p.work)-1]
+	p.queued[b] = false
+	return b
+}
+
+func (p *propagation[S]) merge(s *cfg.Block, out S) {
+	if !p.reached[s] {
+		p.in[s] = out
+		p.reached[s] = true
+		p.enqueue(s)
+		return
+	}
+	joined := p.join(p.in[s], out)
+	if joined == p.in[s] {
+		return
+	}
+	p.in[s] = joined
+	p.enqueue(s)
+}
+
+func (p *propagation[S]) enqueue(s *cfg.Block) {
+	if p.queued[s] {
+		return
+	}
+	p.queued[s] = true
+	p.work = append(p.work, s)
 }
 
 func applyBlock[S comparable](b *cfg.Block, s S, transfer func(ast.Node, S) S) S {
