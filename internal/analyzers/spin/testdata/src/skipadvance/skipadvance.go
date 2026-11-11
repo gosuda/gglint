@@ -2,6 +2,7 @@ package skipadvance
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 )
@@ -294,6 +295,139 @@ func skipadvanceSilentBoundedRetry(xs []int) {
 	for i < len(xs) {
 		if attempts > 3 {
 			break
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue
+		}
+		i++
+	}
+}
+
+func skipadvanceSilentBoundedRetrySwitch(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		switch {
+		case attempts > 3:
+			return
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue
+		}
+		i++
+	}
+}
+
+func giveUp() { panic("gave up") }
+
+func skipadvanceSilentBoundedRetryHelperLeaves(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		if attempts > 3 {
+			giveUp()
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue
+		}
+		i++
+	}
+}
+
+func skipadvanceSilentBoundedRetryElseLeaves(xs []int) {
+	i, attempts, seen := 0, 0, 0
+	for i < len(xs) {
+		if attempts < 3 {
+			seen++
+		} else {
+			return
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue
+		}
+		i++
+	}
+	_ = seen
+}
+
+func skipadvanceSilentBoundedRetryHeaderCopy(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		if n := attempts; n > 3 {
+			return
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue
+		}
+		i++
+	}
+}
+
+func skipadvanceReportedCounterOnlySlogged(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		if attempts > 3 {
+			slog.Info("many attempts", slog.Int("attempts", attempts))
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue // want `this continue skips the statement that advances the loop, so if the error repeats, the same item is retried forever: advance before continue`
+		}
+		i++
+	}
+}
+
+func capAttempts(n int) int {
+	if n > 3 {
+		panic("too many")
+	}
+	return n
+}
+
+func skipadvanceSilentPrintWithCall(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		if attempts > 3 {
+			slog.Info("attempts", slog.Int("n", capAttempts(attempts)))
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue
+		}
+		i++
+	}
+}
+
+func skipadvanceSilentPrintThenLeave(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		if attempts > 3 {
+			slog.Info("many")
+			return
+		}
+		if err := doStep(xs[i]); err != nil {
+			attempts++
+			continue
+		}
+		i++
+	}
+}
+
+func tooMany(n int) bool {
+	if n > 3 {
+		panic("too many")
+	}
+	return false
+}
+
+func skipadvanceSilentPrintCondCall(xs []int) {
+	i, attempts := 0, 0
+	for i < len(xs) {
+		if tooMany(attempts) {
+			slog.Info("many")
 		}
 		if err := doStep(xs[i]); err != nil {
 			attempts++
