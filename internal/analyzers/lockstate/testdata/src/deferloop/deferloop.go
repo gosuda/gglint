@@ -77,3 +77,18 @@ func deferloopLeavesSilent() {
 		panic("unexpected item")
 	}
 }
+
+type deferloopStore struct {
+	mu    sync.RWMutex
+	items []int
+}
+
+func (s *deferloopStore) deferloopReportedFieldReadLock(keys []int) int {
+	n := 0
+	for _, k := range keys {
+		s.mu.RLock()
+		defer s.mu.RUnlock() // want "the deferred unlock runs at function exit"
+		n += s.items[k]
+	}
+	return n
+}
