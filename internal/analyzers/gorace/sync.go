@@ -258,7 +258,7 @@ func checkSubtestBlock(pass *analysis.Pass, b *ast.BlockStmt) {
 	}
 	for i := 1; i < len(runs); i++ {
 		for j := range i {
-			if k, ok := sharedSubtestVar(runs[i], runs[j]); ok {
+			if k, ok := sharedSubtestVar(pass, runs[i], runs[j]); ok {
 				pass.Reportf(runs[i].call.Pos(), "parallel subtests write %s without ordering, so the test result depends on scheduling: give each subtest its own variable", keyText(pass, k))
 				break
 			}
@@ -356,20 +356,21 @@ func accAfter(info *types.Info, lit *ast.FuncLit, pos token.Pos) []varAccess {
 	return out
 }
 
-func sharedSubtestVar(a, b subtestRun) (flow.Key, bool) {
-	if k, ok := matchSubtestDir(a, b); ok {
+func sharedSubtestVar(pass *analysis.Pass, a, b subtestRun) (flow.Key, bool) {
+	if k, ok := matchSubtestDir(pass, a, b); ok {
 		return k, true
 	}
-	return matchSubtestDir(b, a)
+	return matchSubtestDir(pass, b, a)
 }
 
-func matchSubtestDir(writes, reads subtestRun) (flow.Key, bool) {
+func matchSubtestDir(pass *analysis.Pass, writes, reads subtestRun) (flow.Key, bool) {
 	for _, w := range writes.acc {
 		if !subtestWriteOutside(w, writes, reads) {
 			continue
 		}
-		if k, ok := matchSubtestRead(w, reads.acc); ok {
-			return k, true
+		held := heldOutside(pass, writes.lit, lockNodeFor(w))
+		if unguardedSubtestRead(pass, reads, w.key, held) {
+			return w.key, true
 		}
 	}
 	return flow.Key{}, false
@@ -382,13 +383,13 @@ func subtestWriteOutside(w varAccess, writes, reads subtestRun) bool {
 	return outsideLit(w.key.Root, writes.lit) && outsideLit(w.key.Root, reads.lit)
 }
 
-func matchSubtestRead(w varAccess, reads []varAccess) (flow.Key, bool) {
-	for _, r := range reads {
-		if subtestKeysOverlap(w.key, r.key) {
-			return w.key, true
+func unguardedSubtestRead(pass *analysis.Pass, reads subtestRun, written flow.Key, held []flow.Key) bool {
+	for _, r := range reads.acc {
+		if subtestKeysOverlap(written, r.key) && !commonKey(held, heldOutside(pass, reads.lit, lockNodeFor(r))) {
+			return true
 		}
 	}
-	return flow.Key{}, false
+	return false
 }
 
 func subtestKeysOverlap(w, r flow.Key) bool {
