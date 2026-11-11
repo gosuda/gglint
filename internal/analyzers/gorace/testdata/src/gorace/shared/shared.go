@@ -10,7 +10,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-
 func workErr() error { return nil }
 
 func sharedReported() {
@@ -129,7 +128,6 @@ func sharedEarliestJoinedReported(c bool) {
 	}
 	s = "y"
 }
-
 
 func sharedUnguardedAfterReadReported() {
 	var mu sync.Mutex
@@ -344,7 +342,6 @@ func sharedRendezvousSilent() int {
 	return count
 }
 
-
 func sharedBufferedSendReported() int {
 	var count int
 	c := make(chan byte, 1)
@@ -410,6 +407,7 @@ func sharedNestedCloseSilent(wg *sync.WaitGroup, done chan struct{}) int {
 	wg.Wait()
 	return gp
 }
+
 func sharedParamRendezvousSilent() int {
 	var count int
 	c := make(chan byte)
@@ -452,6 +450,7 @@ func sharedGateInterfaceSilent() int {
 	w.wait2()
 	return x
 }
+
 func sharedSelectReturnSilent(ctx context.Context) (int, error) {
 	x := 0
 	done := make(chan struct{})
@@ -499,11 +498,12 @@ func sharedSiblingFieldReported() int {
 	fmt.Println(g.name)
 	return x
 }
+
 func sharedBoundLitSilent() int {
 	x := 0
 	done := make(chan struct{})
 	f := func() { close(done) }
-	var wait = func() { <-done }
+	wait := func() { <-done }
 	go func() {
 		x = 1
 		f()
@@ -511,6 +511,7 @@ func sharedBoundLitSilent() int {
 	wait()
 	return x
 }
+
 func sharedRangeSilent() int {
 	x := 0
 	ch := make(chan struct{})
@@ -523,6 +524,7 @@ func sharedRangeSilent() int {
 	}
 	return x
 }
+
 func sharedGateAssignSilent() int {
 	g := &sharedGate2{done: make(chan struct{})}
 	var w sharedWaiter2
@@ -535,6 +537,7 @@ func sharedGateAssignSilent() int {
 	w.wait2()
 	return x
 }
+
 func sharedDeclRecvSilent() int {
 	x := 0
 	done := make(chan struct{})
@@ -542,9 +545,10 @@ func sharedDeclRecvSilent() int {
 		x = 1
 		close(done)
 	}()
-	var _ = <-done
+	_ = <-done
 	return x
 }
+
 func sharedSelectEscapeReported(ready chan struct{}) (int, int) {
 	conn := 0
 	err := 0
@@ -608,6 +612,7 @@ func sharedStartGateReorderedReported() int {
 	x = 1
 	return x
 }
+
 func sharedWaitInOtherGoroutineReported() int {
 	x := 0
 	done := make(chan struct{})
@@ -702,6 +707,7 @@ func sharedGoArgBoundCallWaitsSilent() int {
 	go sharedSink(wait())
 	return x
 }
+
 func sharedSelectBodyWaitSilent(other chan int) int {
 	x := 0
 	sig := make(chan struct{})
@@ -745,3 +751,16 @@ func sharedPreGoWaitReported(c bool, sig chan struct{}) int {
 	return x
 }
 
+func sharedEntryAssignWaitSilent(ch chan int) int {
+	n := 0
+	done := make(chan struct{})
+	go func() {
+		v := <-ch
+		n = v
+		close(done)
+	}()
+	n = 5
+	ch <- 1
+	<-done
+	return n
+}

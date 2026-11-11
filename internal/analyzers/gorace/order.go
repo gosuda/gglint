@@ -637,14 +637,9 @@ func entryOrdered(s waitSide, waits []syncOp) bool {
 }
 
 func isWaitStmt(stmt, op ast.Node) bool {
-	switch st := stmt.(type) {
-	case *ast.SendStmt:
-		return nodeContains(st, op)
-	case *ast.ExprStmt:
-		switch ast.Unparen(st.X).(type) {
-		case *ast.UnaryExpr, *ast.CallExpr:
-			return nodeContains(st, op)
-		}
+	switch stmt.(type) {
+	case *ast.SendStmt, *ast.ExprStmt, *ast.AssignStmt, *ast.DeclStmt:
+		return nodeContains(stmt, op)
 	}
 	return false
 }
