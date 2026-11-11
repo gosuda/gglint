@@ -1,6 +1,9 @@
 package rangeunclosed
 
-import "os"
+import (
+	"os"
+	"runtime"
+)
 
 var rangeSink any
 
@@ -183,5 +186,16 @@ func rangeunclosedSilentExit() {
 	}()
 	for v := range ch {
 		_ = v
+	}
+}
+
+func rangeunclosedReportedGoexit() {
+	ch := make(chan int)
+	go func() {
+		ch <- 1
+		runtime.Goexit()
+	}()
+	for v := range ch { // want `no code closes ch, so this range never ends: close it when the senders finish`
+		useRange(v)
 	}
 }

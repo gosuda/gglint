@@ -934,7 +934,7 @@ func isNeverReturn(info *types.Info, c *ast.CallExpr) bool {
 		return false
 	}
 	switch fn.Pkg().Path() + "." + fn.Name() {
-	case "os.Exit", "log.Fatal", "log.Fatalf", "log.Fatalln", "runtime.Goexit":
+	case "os.Exit", "log.Fatal", "log.Fatalf", "log.Fatalln":
 		return true
 	}
 	return false

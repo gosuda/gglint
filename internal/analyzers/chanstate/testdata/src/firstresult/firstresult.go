@@ -739,3 +739,21 @@ func firstresultSilentCondSend() int {
 	}
 	return <-ch + <-ch
 }
+
+func tryOnceFirst(v int) bool { return v >= 0 }
+
+func firstresultReportedLabeledBreak() int {
+	ch := make(chan int)
+	for i := 0; i < 3; i++ {
+		go func() { // want `this loop starts 3 goroutines that send on ch, and at most 1 values are received with capacity 0`
+		retry:
+			for attempt := 0; attempt < 3; attempt++ {
+				if tryOnceFirst(i) {
+					break retry
+				}
+			}
+			ch <- i
+		}()
+	}
+	return <-ch
+}

@@ -65,7 +65,7 @@ func exitsAt(info *types.Info, n ast.Node, before token.Pos) bool {
 	case *ast.ReturnStmt:
 		return n.Pos() < before
 	case *ast.BranchStmt:
-		return n.Pos() < before && (n.Tok == token.GOTO || n.Label != nil)
+		return n.Pos() < before && n.Tok == token.GOTO
 	case *ast.CallExpr:
 		return n.Pos() < before && isPanicCall(info, n)
 	}
