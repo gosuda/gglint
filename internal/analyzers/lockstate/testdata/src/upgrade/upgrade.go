@@ -118,7 +118,8 @@ type resetOuter struct {
 	p *resetS
 }
 
-func upgradeMovedFieldSilent(a, b *resetS) {
+func upgradeMovedFieldSilent() {
+	a, b := &resetS{}, &resetS{}
 	var o resetOuter
 	o.p = a
 	o.p.mu.RLock()
