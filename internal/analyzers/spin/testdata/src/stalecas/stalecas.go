@@ -1,6 +1,9 @@
 package stalecas
 
-import "sync/atomic"
+import (
+	"runtime"
+	"sync/atomic"
+)
 
 func use(any) {}
 
@@ -509,7 +512,7 @@ type staleVal struct{ n int }
 
 func stalecasSilentValueFieldLitAssign(v *atomic.Value) {
 	v.Store(staleVal{n: 1})
-	old := staleVal{}
+	old := v.Load().(staleVal)
 	bump := func() { old.n++ }
 	for !v.CompareAndSwap(old, staleVal{n: 2}) {
 		bump()
@@ -521,7 +524,7 @@ func staleValRefresh(p *int, v *atomic.Value) { *p = v.Load().(staleVal).n }
 
 func stalecasSilentValueAddrField(v *atomic.Value) {
 	v.Store(staleVal{n: 1})
-	old := staleVal{}
+	old := v.Load().(staleVal)
 	for !v.CompareAndSwap(old, staleVal{n: 2}) {
 		staleValRefresh(&old.n, v)
 	}
@@ -534,7 +537,7 @@ type staleOuter struct{ *staleInner }
 
 func stalecasReportedEmbeddedPointer(v *atomic.Value) {
 	v.Store(staleOuter{staleInner: &staleInner{f: 1}})
-	old := staleOuter{staleInner: &staleInner{}}
+	old := v.Load().(staleOuter)
 	bump := func() { old.f++ }
 	_ = bump
 	for !v.CompareAndSwap(old, staleOuter{staleInner: &staleInner{}}) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
@@ -549,7 +552,7 @@ func (s *staleCell) reload(v *atomic.Value) { *s = v.Load().(staleCell) }
 
 func stalecasSilentPointerMethod(v *atomic.Value) {
 	v.Store(staleCell{n: 1})
-	old := staleCell{}
+	old := v.Load().(staleCell)
 	for !v.CompareAndSwap(old, staleCell{n: 2}) {
 		old.reload(v)
 	}
@@ -560,7 +563,7 @@ func (i *staleInner) reset() { i.f = 0 }
 
 func stalecasReportedEmbeddedPointerMethod(v *atomic.Value) {
 	v.Store(staleOuter{staleInner: &staleInner{f: 1}})
-	old := staleOuter{staleInner: &staleInner{}}
+	old := v.Load().(staleOuter)
 	for !v.CompareAndSwap(old, staleOuter{staleInner: &staleInner{}}) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		old.reset()
 	}
@@ -575,7 +578,7 @@ type staleVOuter struct{ staleVBox }
 
 func stalecasSilentEmbeddedValueMethod(v *atomic.Value) {
 	v.Store(staleVOuter{staleVBox{n: 1}})
-	old := staleVOuter{}
+	old := v.Load().(staleVOuter)
 	for !v.CompareAndSwap(old, staleVOuter{staleVBox{n: 2}}) {
 		old.reload(v)
 	}
@@ -583,10 +586,19 @@ func stalecasSilentEmbeddedValueMethod(v *atomic.Value) {
 }
 func stalecasSilentMethodValue(v *atomic.Value) {
 	v.Store(staleCell{n: 1})
-	old := staleCell{}
+	old := v.Load().(staleCell)
 	bind := old.reload
 	for !v.CompareAndSwap(old, staleCell{n: 2}) {
 		bind(v)
 	}
 	use(old)
+}
+
+func stalecasSilentFixedExpectation(state *atomic.Int32) {
+	free := int32(0)
+	for !state.CompareAndSwap(free, 1) {
+		runtime.Gosched()
+	}
+	use(1)
+	state.Store(free)
 }

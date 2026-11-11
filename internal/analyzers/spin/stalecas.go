@@ -13,7 +13,7 @@ import (
 
 var stalecasAnalyzer = &analysis.Analyzer{
 	Name:     "stalecas",
-	Doc:      "reports a retry loop on CompareAndSwap(old, new), written as the loop condition or as a first statement that breaks or returns on success, when old is a local, nothing in the loop assigns old, and no goto or labeled break or continue leaves the loop; silent for the whole function when another function literal assigns old, or when the address of old appears, also through a pointer-receiver method of old that is called or bound as a method value; a field or element stored inside a struct or array value counts as old, and anything reached through a pointer does not; spin covers five shapes only",
+	Doc:      "reports a retry loop on CompareAndSwap(old, new), written as the loop condition or as a first statement that breaks or returns on success, when old is a local that the function assigns only from a Load of sync/atomic, nothing in the loop assigns old, and no goto or labeled break or continue leaves the loop; an old that holds a constant, a parameter, or any other value is a fixed expectation and is not reported; silent for the whole function when another function literal assigns old, or when the address of old appears, also through a pointer-receiver method of old that is called or bound as a method value; a field or element stored inside a struct or array value counts as old, and anything reached through a pointer does not; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runStalecas,
 }
@@ -38,7 +38,7 @@ func checkStalecas(pass *analysis.Pass, cur inspector.Cursor, loop *ast.ForStmt,
 		return
 	}
 	fn := enclosingFunc(cur)
-	if !isLocalVar(fn, old) || definedInBody(loop, old) {
+	if !isLocalVar(fn, old) || definedInBody(loop, old) || !loadedOnly(pass.TypesInfo, fn, old) {
 		return
 	}
 	if assignsOldInLoop(pass.TypesInfo, loop, old) {
@@ -565,6 +565,66 @@ func staleShape(pass *analysis.Pass, loop *ast.ForStmt) (*types.Var, bool) {
 
 func definedInBody(loop *ast.ForStmt, old *types.Var) bool {
 	return loop.Body != nil && loop.Body.Pos() <= old.Pos() && old.Pos() < loop.Body.End()
+}
+
+func loadedOnly(info *types.Info, fn ast.Node, old *types.Var) bool {
+	sources := oldSources(info, fn, old)
+	for _, src := range sources {
+		if !isAtomicLoad(info, src) {
+			return false
+		}
+	}
+	return len(sources) > 0
+}
+
+func oldSources(info *types.Info, fn ast.Node, old *types.Var) []ast.Expr {
+	var out []ast.Expr
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch t := n.(type) {
+		case *ast.AssignStmt:
+			out = append(out, pairedValues(info, t.Lhs, t.Rhs, old)...)
+		case *ast.ValueSpec:
+			out = append(out, pairedValues(info, t.Names, t.Values, old)...)
+		}
+		return true
+	})
+	return out
+}
+
+func pairedValues[N ast.Expr](info *types.Info, names []N, values []ast.Expr, old *types.Var) []ast.Expr {
+	if len(values) == 0 {
+		return nil
+	}
+	var out []ast.Expr
+	for i, name := range names {
+		id, ok := ast.Unparen(ast.Expr(name)).(*ast.Ident)
+		if ok && info.ObjectOf(id) == old {
+			out = append(out, values[min(i, len(values)-1)])
+		}
+	}
+	return out
+}
+
+func isAtomicLoad(info *types.Info, e ast.Expr) bool {
+	call, ok := assertedValue(e).(*ast.CallExpr)
+	if !ok || !isAtomicCall(info, call) {
+		return false
+	}
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	return ok && strings.HasPrefix(sel.Sel.Name, "Load")
+}
+
+func assertedValue(e ast.Expr) ast.Expr {
+	for {
+		switch t := e.(type) {
+		case *ast.ParenExpr:
+			e = t.X
+		case *ast.TypeAssertExpr:
+			e = t.X
+		default:
+			return e
+		}
+	}
 }
 
 func firstCheck(loop *ast.ForStmt) (*ast.IfStmt, bool) {
