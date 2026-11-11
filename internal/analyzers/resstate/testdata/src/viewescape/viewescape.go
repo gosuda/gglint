@@ -532,3 +532,24 @@ func viewescapeSilentRangeSplitSeqSeparator(sc *bufio.Scanner, data []byte, out 
 	}
 	return out
 }
+
+func viewescapeReportedSharedAddr(in []string, out [][]byte) [][]byte {
+	var shared bytes.Buffer
+	for _, s := range in {
+		b := &shared
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes()) // want "points into the buffer of"
+	}
+	return out
+}
+
+func viewescapeReportedFreshReset(in []string, out [][]byte) [][]byte {
+	for _, s := range in {
+		var b bytes.Buffer
+		_, _ = b.WriteString(s)
+		out = append(out, b.Bytes()) // want "points into the buffer of"
+		b.Reset()
+		_, _ = b.WriteString("x")
+	}
+	return out
+}

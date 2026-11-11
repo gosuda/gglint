@@ -129,7 +129,13 @@ func sinkReady(pass *analysis.Pass, ctx loopCtx, views map[*types.Var]viewSrc, s
 		return nil, nil, flow.Key{}, "", false
 	}
 	k, ok := flow.KeyOf(pass.TypesInfo, recv)
-	if !ok || recvFreshInBody(k, ctx.body) || viewSilent(pass, ctx, s, k, method) {
+	if !ok {
+		return nil, nil, flow.Key{}, "", false
+	}
+	if freshReceiver(pass, ctx.body, k) && !freshInvalidAfter(pass, ctx.body, s.expr, k, method) {
+		return nil, nil, flow.Key{}, "", false
+	}
+	if viewSilent(pass, ctx, s, k, method) {
 		return nil, nil, flow.Key{}, "", false
 	}
 	return v, recv, k, method, true
@@ -166,12 +172,139 @@ func invalidAfter(pass *analysis.Pass, ctx loopCtx, from ast.Node, recvKey flow.
 	return false
 }
 
-func recvFreshInBody(k flow.Key, body ast.Node) bool {
+func freshReceiver(pass *analysis.Pass, body ast.Node, k flow.Key) bool {
 	v, ok := k.Root.(*types.Var)
 	if !ok {
 		return false
 	}
-	return v.Pos() >= body.Pos() && v.Pos() <= body.End()
+	rhs, hasValue, found := bodyDeclRHS(pass, body, v)
+	if !found {
+		return false
+	}
+	return freshValue(pass, body, rhs, hasValue)
+}
+
+func bodyDeclRHS(pass *analysis.Pass, body ast.Node, v *types.Var) (ast.Expr, bool, bool) {
+	var rhs ast.Expr
+	hasValue := false
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if out := declRHS(pass, n, v); out.found {
+			rhs, hasValue, found = out.rhs, out.hasValue, true
+			return false
+		}
+		return true
+	})
+	return rhs, hasValue, found
+}
+
+type declOutcome struct {
+	rhs      ast.Expr
+	hasValue bool
+	found    bool
+}
+
+func declRHS(pass *analysis.Pass, n ast.Node, v *types.Var) declOutcome {
+	switch x := n.(type) {
+	case *ast.ValueSpec:
+		return specOutcome(pass, x, v)
+	case *ast.AssignStmt:
+		return defineOutcome(pass, x, v)
+	}
+	return declOutcome{}
+}
+
+func specOutcome(pass *analysis.Pass, x *ast.ValueSpec, v *types.Var) declOutcome {
+	for _, id := range x.Names {
+		if pass.TypesInfo.Defs[id] == v {
+			if len(x.Values) == 0 {
+				return declOutcome{found: true}
+			}
+			return declOutcome{rhs: x.Values[0], hasValue: true, found: true}
+		}
+	}
+	return declOutcome{}
+}
+
+func defineOutcome(pass *analysis.Pass, x *ast.AssignStmt, v *types.Var) declOutcome {
+	if x.Tok != token.DEFINE {
+		return declOutcome{}
+	}
+	for _, l := range x.Lhs {
+		id, ok := ast.Unparen(l).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if pass.TypesInfo.Defs[id] == v {
+			if len(x.Rhs) == 0 {
+				return declOutcome{found: true}
+			}
+			return declOutcome{rhs: x.Rhs[0], hasValue: true, found: true}
+		}
+	}
+	return declOutcome{}
+}
+
+func freshValue(pass *analysis.Pass, body ast.Node, rhs ast.Expr, hasValue bool) bool {
+	if !hasValue {
+		return true
+	}
+	r := ast.Unparen(rhs)
+	if _, ok := r.(*ast.CompositeLit); ok {
+		return true
+	}
+	if u, ok := r.(*ast.UnaryExpr); ok && u.Op == token.AND {
+		inner := ast.Unparen(u.X)
+		if _, ok := inner.(*ast.CompositeLit); ok {
+			return true
+		}
+		return false
+	}
+	if _, ok := r.(*ast.CallExpr); ok {
+		return true
+	}
+	if id, ok := r.(*ast.Ident); ok {
+		return !isOuterVar(pass, body, id)
+	}
+	return false
+}
+
+func isOuterVar(pass *analysis.Pass, body ast.Node, id *ast.Ident) bool {
+	w, ok := pass.TypesInfo.Uses[id].(*types.Var)
+	if !ok {
+		return false
+	}
+	return w.Pos() < body.Pos() || w.Pos() > body.End()
+}
+
+func freshInvalidAfter(pass *analysis.Pass, body ast.Node, view ast.Expr, recvKey flow.Key, viewMethod string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if call.Pos() <= view.Pos() {
+			return true
+		}
+		name := viewInvalidName(pass, call)
+		if name == "" || name == viewMethod {
+			return true
+		}
+		k, ok := flow.MethodKey(pass.TypesInfo, call)
+		if !ok || k != recvKey {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
 }
 
 func invalidOther(methods []string, viewMethod string) (string, bool) {
