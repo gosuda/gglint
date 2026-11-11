@@ -219,9 +219,16 @@ func (nocontextDialerReassigned) DialContext(ctx context.Context, network, addre
 	return net.Dial(network, address) // want "net\\.Dial cannot be cancelled"
 }
 
+func (nocontextDialerBlankDef) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	var _ = ctx
+	return net.Dial(network, address) // want "net\\.Dial cannot be cancelled"
+}
+
 type nocontextDialerNilCompare struct{}
 
 type nocontextDialerReassigned struct{}
+
+type nocontextDialerBlankDef struct{}
 
 type nocontextDialerSilentAlias struct{}
 

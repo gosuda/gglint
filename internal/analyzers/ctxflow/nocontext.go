@@ -257,6 +257,8 @@ func flowsContextValue(c inspector.Cursor) bool {
 			return n.Op != token.EQL && n.Op != token.NEQ
 		case *ast.AssignStmt:
 			return assignedInRHS(n, cur.Node())
+		case *ast.ValueSpec:
+			return definedInNames(n, cur.Node())
 		case *ast.ExprStmt:
 			return false
 		}
@@ -275,6 +277,16 @@ func assignedInRHS(as *ast.AssignStmt, n ast.Node) bool {
 		if rhs == n || stripParens(rhs) == n {
 			return !blankAt(as, i)
 		}
+	}
+	return true
+}
+
+func definedInNames(vs *ast.ValueSpec, n ast.Node) bool {
+	for i, val := range vs.Values {
+		if val != n && stripParens(val) != n {
+			continue
+		}
+		return i >= len(vs.Names) || vs.Names[i].Name != "_"
 	}
 	return true
 }
