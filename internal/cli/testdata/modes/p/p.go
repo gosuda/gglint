@@ -46,8 +46,8 @@ func WholeRule(n int) bool {
 	return n == n //nolint:staticcheck // reason
 }
 
-func ErrcheckPair() {
-	logf("%d\n", "errcheckpair") //nolint:printf,errcheck // reason
+func LostcancelPair() {
+	logf("%d\n", "lostcancelpair") //nolint:printf,lostcancel // reason
 }
 
 func TrailingComma() {

@@ -15,10 +15,8 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"honnef.co/go/tools/analysis/lint"
-	"honnef.co/go/tools/quickfix"
 	"honnef.co/go/tools/simple"
 	"honnef.co/go/tools/staticcheck"
-	"honnef.co/go/tools/stylecheck"
 
 	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/rules"
@@ -201,7 +199,7 @@ func readmeDroppedLinters(t *testing.T) []string {
 
 func TestCatalogOmitsEveryDroppedOrRenamedGolangciLinter(t *testing.T) {
 	t.Parallel()
-	renamedOrFormatters := []string{"govet", "nolintlint", "gochecknoinits", "gci", "gofmt", "goimports", "golines", "swaggo"}
+	renamedOrFormatters := []string{"govet", "nolintlint", "gci", "gofmt", "goimports", "golines", "swaggo"}
 	catalog := ruleNames(rules.All())
 	for _, name := range slices.Concat(readmeDroppedLinters(t), renamedOrFormatters) {
 		if slices.Contains(catalog, name) {
@@ -364,7 +362,7 @@ type selectErrorCase struct {
 
 func unknownNameCases(path string) []selectErrorCase {
 	var cases []selectErrorCase
-	for _, bad := range []string{"", "nosuchrule", "Printf", " printf", "printf,errcheck", "staticcheck:SA1015", "err_chain", "structtag_", "govet"} {
+	for _, bad := range []string{"", "nosuchrule", "Printf", " printf", "printf,nilness", "staticcheck:SA1015", "err_chain", "structtag_", "govet"} {
 		cases = append(cases,
 			selectErrorCase{"enable " + strconv.Quote(bad), config.Config{Path: path, Enable: []string{"printf", bad}}, fmt.Sprintf("%s: enable: unknown rule %q", path, bad)},
 			selectErrorCase{"disable " + strconv.Quote(bad), config.Config{Path: path, Disable: []string{"printf", bad}}, fmt.Sprintf("%s: disable: unknown rule %q", path, bad)},
@@ -502,10 +500,19 @@ func assertTokenRoundTrip(t *testing.T, r rules.Rule, built []*analysis.Analyzer
 	}
 }
 
+func checkDriverToken(t *testing.T, m config.Mode, driver string, orders [][]rules.Rule) {
+	t.Helper()
+	for i, order := range orders {
+		if rule, check := rules.Token(driver, order); rule != driver || check != "" {
+			t.Errorf("mode %v order %d: Token(%q) = (%q, %q), want (%q, \"\")", m, i, driver, rule, check, driver)
+		}
+	}
+}
+
 func TestTokenInvertsAnalyzerNameForEveryBuiltAnalyzerInAnyRuleOrder(t *testing.T) {
 	t.Parallel()
 	strict := ruleNames(selectOrFatal(t, modeConfig(config.Strict)))
-	for _, name := range []string{"err_chain_reset", "discarded_error", "infinite_recursion", "structtag_malformed", "reentrant_withlock_deadlock"} {
+	for _, name := range []string{"err_chain_reset", "infinite_recursion", "reentrant_withlock_deadlock"} {
 		if !slices.Contains(strict, name) {
 			t.Fatalf("strict does not select underscored rule %q, so the round trip cannot cover it", name)
 		}
@@ -520,11 +527,7 @@ func TestTokenInvertsAnalyzerNameForEveryBuiltAnalyzerInAnyRuleOrder(t *testing.
 			}
 		}
 		for _, driver := range []string{rules.TypecheckName, rules.NolintName} {
-			for i, order := range orders {
-				if rule, check := rules.Token(driver, order); rule != driver || check != "" {
-					t.Errorf("mode %v order %d: Token(%q) = (%q, %q), want (%q, \"\")", m, i, driver, rule, check, driver)
-				}
-			}
+			checkDriverToken(t, m, driver, orders)
 		}
 	}
 }
@@ -553,7 +556,9 @@ func TestReadmeTokensPrintFromUpstreamAnalyzerNames(t *testing.T) {
 		{"modernize", "forvar", "modernize:forvar"},
 		{"modernize", "rangeint", "modernize:rangeint"},
 		{"modernize", "waitgroupgo", "modernize:waitgroupgo"},
-		{"iface", "identical", "iface:identical"},
+		{"gosimple", "S1005", "gosimple:S1005"},
+		{"lockstate", "pair", "lockstate:pair"},
+		{"spin", "busywait", "spin:busywait"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.wantToken, func(t *testing.T) {
@@ -569,7 +574,7 @@ func TestReadmeTokensPrintFromUpstreamAnalyzerNames(t *testing.T) {
 }
 
 func upstreamStaticcheckFamilies() map[string]string {
-	lists := map[string][]*lint.Analyzer{"SA": staticcheck.Analyzers, "S": simple.Analyzers, "ST": stylecheck.Analyzers, "QF": quickfix.Analyzers}
+	lists := map[string][]*lint.Analyzer{"SA": staticcheck.Analyzers, "S": simple.Analyzers}
 	families := map[string]string{}
 	for family, list := range lists {
 		for _, a := range list {
@@ -593,8 +598,8 @@ func TestStaticcheckRunsEverySACheckInBasicAndAddsReadmeFamiliesPerModeNested(t 
 	families := upstreamStaticcheckFamilies()
 	wantFamilies := map[config.Mode][]string{
 		config.Basic:    {"SA"},
-		config.Standard: {"S", "SA", "ST"},
-		config.Strict:   {"QF", "S", "SA", "ST"},
+		config.Standard: {"SA"},
+		config.Strict:   {"SA"},
 	}
 	r := findRule(t, "staticcheck")
 	var below []string
@@ -614,19 +619,31 @@ func TestStaticcheckRunsEverySACheckInBasicAndAddsReadmeFamiliesPerModeNested(t 
 	for i, a := range staticcheck.Analyzers {
 		sa[i] = a.Analyzer
 	}
-	if got, want := checkNames(r.Build(modeConfig(config.Basic))), checkNames(sa); !slices.Equal(got, want) {
+	saNames := checkNames(sa)
+	saNames = slices.DeleteFunc(slices.Clone(saNames), func(n string) bool {
+		return n == "SA1019" || n == "SA4006"
+	})
+	slices.Sort(saNames)
+	if got, want := checkNames(r.Build(modeConfig(config.Basic))), saNames; !slices.Equal(got, want) {
 		t.Errorf("basic staticcheck checks %s", selectionDiff(got, want))
 	}
-}
-
-func TestIfaceBuildsTheDocumentedChecksAtEveryMode(t *testing.T) {
-	t.Parallel()
-	iface := findRule(t, "iface")
-	wantIface := []string{"identical", "unexported", "unused", "unusedmethod"}
-	for _, m := range allModes() {
-		if got := checkNames(iface.Build(modeConfig(m))); !slices.Equal(got, wantIface) {
-			t.Errorf("mode %v: iface checks %s", m, selectionDiff(got, wantIface))
+	saStd := checkNames(sa)
+	saStd = slices.DeleteFunc(slices.Clone(saStd), func(n string) bool { return n == "SA4006" })
+	slices.Sort(saStd)
+	for _, m := range []config.Mode{config.Standard, config.Strict} {
+		if got := checkNames(r.Build(modeConfig(m))); !slices.Equal(got, saStd) {
+			t.Errorf("mode %v: staticcheck checks %s", m, selectionDiff(got, saStd))
 		}
+	}
+	simpleNames := func() []string {
+		out := make([]*analysis.Analyzer, len(simple.Analyzers))
+		for i, a := range simple.Analyzers {
+			out[i] = a.Analyzer
+		}
+		return checkNames(out)
+	}
+	if got := checkNames(findRule(t, "gosimple").Build(modeConfig(config.Standard))); !slices.Equal(got, simpleNames()) {
+		t.Errorf("gosimple checks %s", selectionDiff(got, simpleNames()))
 	}
 }
 
@@ -654,12 +671,10 @@ func TestModeDependentFlagsStayOnEachBuiltAnalyzer(t *testing.T) {
 		rule, flag string
 		want       [3]bool
 	}{
-		{"errcheck", "blank", [3]bool{false, true, true}},
-		{"errcheck", "assert", [3]bool{false, false, true}},
 		{"checklocks", "inferred", [3]bool{false, false, true}},
 		{"checklocks", "atomic", [3]bool{true, true, true}},
 		{"checklocks", "wrappers", [3]bool{true, true, true}},
-		{"errorlint", "errorf", [3]bool{true, true, true}},
+		{"errorlint", "errorf", [3]bool{false, false, false}},
 	}
 	modes := []config.Mode{config.Strict, config.Basic, config.Standard, config.Strict}
 	for _, tt := range tests {
@@ -675,7 +690,7 @@ func TestModeDependentFlagsStayOnEachBuiltAnalyzer(t *testing.T) {
 	}
 }
 
-func TestGocriticEnablesDiagnosticsAndDeferInLoopAndAddsOpinionatedAndPerformanceOnlyInStrict(t *testing.T) {
+func TestGocriticEnablesOnlyDiagnosticsAndDeferInLoopInEveryMode(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		checker string
@@ -683,8 +698,8 @@ func TestGocriticEnablesDiagnosticsAndDeferInLoopAndAddsOpinionatedAndPerformanc
 	}{
 		{"appendAssign", [3]bool{true, true, true}},
 		{"deferInLoop", [3]bool{true, true, true}},
-		{"hugeParam", [3]bool{false, false, true}},
-		{"paramTypeCombine", [3]bool{false, false, true}},
+		{"hugeParam", [3]bool{false, false, false}},
+		{"ifElseChain", [3]bool{false, false, false}},
 	}
 	for _, m := range []config.Mode{config.Strict, config.Basic, config.Standard} {
 		gocritic := buildOne(t, "gocritic", modeConfig(m))
@@ -703,7 +718,6 @@ func TestGocriticEnablesDiagnosticsAndDeferInLoopAndAddsOpinionatedAndPerformanc
 func TestDeferredFlagsRejectValuesTheUpstreamParserRejects(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ rule, flag, bad, keep string }{
-		{"errcheck", "blank", "banana", "true"},
 		{"checklocks", "inferred-threshold", "abc", "0.9"},
 		{"gocritic", "@hugeParam.sizeThreshold", "abc", "80"},
 	}
@@ -718,5 +732,15 @@ func TestDeferredFlagsRejectValuesTheUpstreamParserRejects(t *testing.T) {
 				t.Errorf("%s flag %s = %q after a rejected value, want %q", tt.rule, tt.flag, got, tt.keep)
 			}
 		})
+	}
+}
+
+func TestExhaustiveTreatsDefaultAsExhaustiveInStrictMode(t *testing.T) {
+	t.Parallel()
+	if got := findRule(t, "exhaustive").Mode; got != config.Strict {
+		t.Errorf("exhaustive mode = %v, want strict", got)
+	}
+	if got := flagValue(t, buildOne(t, "exhaustive", modeConfig(config.Strict)), "exhaustive", "d"); got != "true" {
+		t.Errorf("strict exhaustive flag d = %q, want %q", got, "true")
 	}
 }

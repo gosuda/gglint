@@ -69,7 +69,7 @@ Stderr carries only lines that start with `gglint: `:
 
 Paths are slash-separated and relative to the working directory, so they can start with `../`. Columns start at 1; a missing column prints as 1.
 
-Each finding carries a token: the rule name, or `rule:check` when the rule runs more than one analyzer, for example `staticcheck:SA1015`, `modernize:forvar`, or `iface:identical`. The `check` part is the upstream analyzer name.
+Each finding carries a token: the rule name, or `rule:check` when the rule runs more than one analyzer, for example `staticcheck:SA1015`, `modernize:forvar`, or `chanstate:doubleclose`. The `check` part is the upstream analyzer name.
 
 Agent format, the default, prints one line per finding and then one summary line. Related positions and fixes stay on the finding line, separated by tabs, so `grep` returns whole findings and `tail -1` returns the totals:
 
@@ -129,7 +129,7 @@ text = "^function .* is too complex"           # Go regexp against the message
 
 [[exclude]]                 # turns off two rules in test code only
 tests = true                # true: only _test.go files; false: only other files; omit for both
-rules = ["goconst", "staticcheck:SA1019"]
+rules = ["unparam", "staticcheck:SA1019"]
 ```
 
 | Key | Default | Meaning |
@@ -179,11 +179,13 @@ rules.checkimports.deny[0]: path is empty
 
 | Mode | What it adds |
 |---|---|
-| `basic` | Defects with near-zero false positives, annotation-driven checks, and lenient complexity limits. |
-| `standard` | Everything in `basic`, plus idiomatic Go, security, concurrency and leak hygiene, formatting, and complexity limits tuned for AI coding agents. This is the default. |
-| `strict` | Everything in `standard`, plus structured concurrency, channel-blocking and closer discipline, opinionated style, and tight agent limits. |
+| `basic` | Defects with positive evidence, checks of annotations and configuration, and the complexity limits. |
+| `standard` | Everything in `basic`, plus rewrites that carry a fix, the gglint rules for errors, locks, wait groups, channels, races, contexts, resource lifetime, aliasing, and spin loops, and the defect checks listed under Added in standard. |
+| `strict` | Everything in `standard`, plus rules that report missing proof of safety, duplicated code, and comment markers. |
 
 The modes are nested: every rule in `basic` is in `standard`, and every rule in `standard` is in `strict`. Some rules also check more in a higher mode; their descriptions in [Rules](#rules) say how.
+
+The rewrite rules `modernize`, `gofumpt`, `gosimple`, `misspell`, and `usetesting` report only findings that carry a fix, so `gglint run -fix` resolves every finding of such a rule.
 
 ### Complexity limits
 
@@ -204,16 +206,15 @@ In `_test.go` files, `complexity` skips the function line limit (`max_lines`) an
 
 Large files and deeply nested functions exceed what a reader or an agent can hold and edit reliably. Each nested branch multiplies the paths a reader must keep in mind.
 
-### Concurrency coverage
-
 | Hazard | Rules |
 |---|---|
-| Unjoined, unstructured, or unbounded goroutines | `goroutine` (a join in `standard`; errgroup or `WaitGroup.Go` only, exit paths, and bounded fan-out in `strict`), `testinggoroutine`, `staticcheck:SA2002` |
-| Goroutines blocked forever on channels | `chanblock` (`strict`), and the exit-path and empty-select checks of `goroutine` |
-| Lost or misused contexts | `lostcancel`, `fatcontext`, `noctx`, and in `strict` `contextcheck` and `containedctx` |
-| Data races | `capturerace`, `checklocks` (guards, `+checkatomic`, inferred guards in `strict`), `copylocks`, `atomic`, `atomicalign`, `checkaligned`, `staticcheck:SA2000` to `SA2003` |
-| `sync.WaitGroup` misuse | `waitgroup`, `modernize:waitgroupgo`, `staticcheck:SA2000` |
-| Deadlock by re-entry | `reentrant_withlock_deadlock`, `checklocks` double-acquire check |
+| Unjoined, unstructured, or unbounded goroutines | `goroutine` (`strict`: join, errgroup or `WaitGroup.Go` only, exit paths, and bounded fan-out), `testinggoroutine`, `staticcheck:SA2002` |
+| Goroutines blocked forever on channels | `chanstate`, `chanblock` (`strict`), and the exit-path and empty-select checks of `goroutine` |
+| Lost or misused contexts | `lostcancel`, `ctxflow`, `fatcontext`, `noctx`, and in `strict` `contextcheck` |
+| Data races | `gorace`, `checklocks` (`strict`: guards, `+checkatomic`, inferred guards), `copylocks`, `atomic`, `atomicalign`, `staticcheck:SA2000` to `SA2003` |
+| `sync.WaitGroup` and `errgroup` misuse | `wgstate`, `waitgroup`, `modernize:waitgroupgo`, `staticcheck:SA2000` |
+| Deadlock by re-entry | `lockstate`, `reentrant_withlock_deadlock`, `checklocks` (`strict`: double-acquire check) |
+| Loops that spin without waiting or without advancing, five shapes only (spin:poll, spin:closedrecv, spin:busywait, spin:stalecas, spin:skipadvance) | `spin` |
 | Timer churn and leaks | `timeafter`, `staticcheck:SA1015` |
 
 ## Suppressing findings
@@ -243,7 +244,7 @@ The `nolint` rule checks the directives themselves and reports at the directive:
 
 ## Rules
 
-The catalog has 122 rules. `basic` runs 54 of them, `standard` runs 101, and `strict` runs all 122. Run `gglint rules` for the list that matches your build.
+The catalog has 104 rules. `basic` runs 51 of them, `standard` runs 92, and `strict` runs all 104. Run `gglint rules` for the list that matches your build.
 
 | Origin | Source |
 |---|---|
@@ -268,14 +269,13 @@ The catalog has 122 rules. `basic` runs 54 of them, `standard` runs 101, and `st
 | `cgocall` | go/analysis | detect some violations of the cgo pointer passing rules |
 | `checkconst` | gvisor | Checks +checkconst, +checkalign, +checkoffset, and +checksize against assembly constants. |
 | `checkescape` | gvisor | Checks +checkescape and +mustescape annotations; unannotated callees read as unknown, failing only :all and :unknown. |
+| `checkimports` | gvisor | Enforces the configured import deny list. |
 | `checklinkname` | gvisor | Validates //go:linkname directives against the signatures of their targets. |
-| `checklocks` | gvisor | Checks +checklocks and +checkatomic annotations and reports double acquisition of a held lock. |
 | `complexity` | logos | Caps cognitive score, nesting, lines, parameters, and file size; large units exceed what agents edit reliably. |
 | `composites` | go/analysis | check for unkeyed composite literals |
 | `copylocks` | go/analysis | check for locks erroneously passed by value |
 | `defers` | go/analysis | report common mistakes in defer statements |
 | `directive` | go/analysis | check Go toolchain directives such as //go:debug |
-| `errcheck` | third-party | Reports unchecked errors; standard adds blank assignments, strict adds unchecked type assertions. |
 | `errorsas` | go/analysis | report passing non-pointer or non-error values to errors.As |
 | `framepointer` | go/analysis | report assembly that clobbers the frame pointer before saving it |
 | `gocheckcompilerdirectives` | third-party | Reports malformed or unknown //go: compiler directives. |
@@ -295,101 +295,87 @@ The catalog has 122 rules. `basic` runs 54 of them, `standard` runs 101, and `st
 | `sigchanyzer` | go/analysis | check for unbuffered channel of os.Signal |
 | `slog` | go/analysis | check for invalid structured logging calls |
 | `stackaddr` | logos | Reports a stack address kept as uintptr, or an unsafe.Pointer to stack storage that leaves its function. |
-| `staticcheck` | staticcheck | Staticcheck: SA bug checks; standard adds S and ST checks, strict adds QF quick fixes. |
+| `staticcheck` | staticcheck | Staticcheck SA bug checks; standard adds SA1019 (deprecated API use). |
 | `stdmethods` | go/analysis | check signature of methods of well-known interfaces |
 | `stdversion` | go/analysis | report uses of too-new standard library symbols |
 | `stringintconv` | go/analysis | check for string(int) conversions |
 | `structtag` | go/analysis | check that struct field tags conform to reflect.StructTag.Get |
-| `structtag_malformed` | logos | Reports struct tags reflect.StructTag.Get cannot parse and json or xml tags on unexported fields. |
-| `testinggoroutine` | go/analysis | report calls to (\*testing.T).Fatal from goroutines started by a test |
+| `testinggoroutine` | go/analysis | report calls to (*testing.T).Fatal from goroutines started by a test |
 | `tests` | go/analysis | check for common mistaken usages of tests and examples |
 | `timeformat` | go/analysis | check for calls of (time.Time).Format or time.Parse with 2006-02-01 |
 | `typecheck` | gglint | Reports package load and type errors; it cannot be disabled or suppressed. |
-| `typednil` | logos | Reports a typed nil pointer returned as an interface, which is never nil. |
 | `unmarshal` | go/analysis | report passing non-pointer or non-interface values to unmarshal |
 | `unreachable` | go/analysis | check for unreachable code |
 | `unsafeptr` | go/analysis | check for invalid conversions of uintptr to unsafe.Pointer |
 | `unused` | staticcheck | Reports unused constants, variables, functions, types, and fields (staticcheck U1000). |
 | `unusedresult` | go/analysis | check for unused results of calls to some functions |
 | `waitgroup` | go/analysis | check for misuses of sync.WaitGroup |
-
 ### Added in standard
 
 | Rule | Origin | Description |
 |---|---|---|
+| `alias` | gglint | Reports four shapes of append and copy whose writes land in memory still read or are lost. |
 | `asasalint` | third-party | Reports a []any passed as one element to a variadic ...any parameter. |
 | `atomicalign` | go/analysis | check for non-64-bits-aligned arguments to sync/atomic functions |
 | `bodyclose` | third-party | Reports HTTP response bodies that are never closed. |
-| `capturerace` | logos | Reports multi-word variables written across a goroutine boundary without synchronization. |
-| `checkaligned` | gvisor | Bans sync/atomic 32-bit and 64-bit function calls; use the typed atomics. |
+| `chanstate` | gglint | Reports channel operations that panic, deadlock, or strand a sender, on channels the function declares. |
+| `ctxflow` | gglint | Reports contexts that drop cancellation, deferred cancels of returned contexts, and loops that poll Done with a default. |
 | `deepequalerrors` | go/analysis | check for calls of reflect.DeepEqual on error values |
-| `discarded_error` | logos | Reports call statements and blank assignments that drop an error result. |
-| `dupword` | third-party | Reports duplicated words in comments and strings, such as "the the". |
 | `durationcheck` | third-party | Reports multiplication of two time.Duration values. |
 | `err_chain_reset` | logos | Reports fmt.Errorf calls that format an error with a verb other than %w or pass err.Error(). |
-| `errorlint` | third-party | Reports error comparisons and assertions that break wrapping, and fmt.Errorf without %w. |
-| `exhaustive` | third-party | Requires switch statements on enum types to cover every enum member. |
+| `errdrop` | gglint | Reports a dropped error that later code depends on, a written file's Close error, or an error dropped before return nil. |
 | `fatcontext` | third-party | Reports contexts nested in loops and closures, which grow the context chain each iteration. |
 | `gochecksumtype` | third-party | Requires type switches on sealed sum-type interfaces to cover every variant. |
-| `gocritic` | third-party | Runs go-critic diagnostic and style checkers plus deferInLoop; strict adds opinionated and performance. |
+| `gocritic` | third-party | Runs go-critic diagnostic checkers plus deferInLoop. |
 | `gofumpt` | third-party | Reports files that are not gofumpt-formatted, with a fix that formats them. |
-| `goroutine` | logos | Requires joined goroutines with exit paths; strict requires errgroup or WaitGroup.Go and bounded fan-out. |
-| `gosec` | third-party | Reports security problems found by gosec; standard skips G104, G115, G304, strict skips G104. |
+| `gorace` | gglint | Reports unordered conflicting accesses by goroutines or parallel subtests; double-checked reads outside the lock. |
+| `gosec` | third-party | Reports security problems found by gosec; standard skips G101, G103, G104, G115, G204, G301, G302, G304, G306, and G404. |
+| `gosimple` | staticcheck | Staticcheck S simplifications that carry a fix. |
 | `httpmux` | go/analysis | report using Go 1.22 enhanced ServeMux patterns in older Go versions |
 | `inline` | go/analysis | apply fixes based on 'go:fix inline' comment directives |
+| `lockstate` | gglint | Reports lock misuse that panics, deadlocks, or guards nothing, within one function's own lock calls. |
 | `makezero` | third-party | Reports append to a slice created with a non-zero length. |
 | `misspell` | third-party | Reports commonly misspelled English words, with a fix that corrects them. |
 | `modernize` | go/analysis | Suggests modern Go replacements for outdated idioms and library calls. |
 | `musttag` | third-party | Requires field tags on structs passed to JSON, XML, YAML, and TOML marshaling functions. |
-| `nakedret` | third-party | Reports naked returns in functions longer than 30 lines. |
 | `nilerr` | third-party | Reports returning nil after checking a non-nil error, or an error after checking it is nil. |
 | `nilness` | go/analysis | check for redundant or impossible nil comparisons |
 | `nilnesserr` | third-party | Reports returning a nil error after checking that a different error is non-nil. |
-| `noctx` | third-party | Reports network and SQL calls made without a context.Context. |
-| `noinit` | gglint | Reports init functions; move setup into an explicit function called from main. |
 | `placeholder` | logos | Reports placeholder panics; strict also reports comments that start with TODO or FIXME. |
-| `predeclared` | third-party | Reports declarations that shadow predeclared identifiers. |
 | `reassign` | third-party | Reports assignments to variables of other packages, such as io.EOF. |
-| `recvcheck` | third-party | Reports types whose methods mix value and pointer receivers. |
 | `reflectvaluecompare` | go/analysis | check for comparing reflect.Value values with == or reflect.DeepEqual |
+| `resstate` | gglint | Reports os, net, and http calls after Close, uses after Put or free, and buffer views kept past an overwrite. |
 | `scannererr` | go/analysis | scannererr: report failure to check bufio.Scanner.Err |
-| `sloglint` | third-party | Reports log/slog handlers built over io.Discard; use slog.DiscardHandler. |
 | `sortslice` | go/analysis | check the argument type of sort.Slice |
+| `spin` | gglint | Reports five shapes of loop that spin without waiting or without advancing; test files are skipped. |
 | `sqlrowserr` | go/analysis | sqlrowserr: report failure to check sql.Rows.Err |
-| `testableexamples` | third-party | Reports example functions without an output comment, which compile but never run. |
-| `thelper` | third-party | Requires test helpers to call Helper first and take their \*testing.T, B, F, or TB first, conventionally named. |
 | `timeafter` | logos | Reports time.After inside a loop, which allocates a timer per iteration. |
 | `tparallel` | third-party | Reports t.Parallel used in subtests but not the top-level test, or the reverse. |
-| `unconvert` | third-party | Reports type conversions to the type the value already has. |
 | `unparam` | third-party | Reports unexported function parameters and results that are unused or always the same value. |
 | `unusedwrite` | go/analysis | checks for unused writes |
-| `usetesting` | third-party | Reports os.MkdirTemp, os.CreateTemp, and os.Chdir in tests, which have testing package replacements. |
+| `usetesting` | third-party | Reports os.CreateTemp("", ...) in tests that name their test parameter, with a fix that passes its TempDir(). |
+| `wgstate` | gglint | Reports WaitGroup misuse that hangs Wait or lets it return early, and errgroup Wait calls that hang. |
+
+`chanstate:firstresult` reports sends exceeding receives plus capacity; it counts every receive site, so a send that leaks through only one branch is not reported, and a function with a backward goto is not checked. `alias:appendclobber` reports an append through `b := a[:n]` that overwrites local `a` read later; it needs a constant `n` and capacity proof, an append in a loop that neither ranges over `a` nor tests its length counts once, and a slice touched by a closure, changed through a pointer, or whose address is taken is not tracked. `gorace` is silent when the accesses are joined, when a send and receive around the access order them on a channel of capacity one or one the function does not build (a parameter, a field, a package variable, or a call result), when a lock, a read lock included, is held at both accesses, and when parallel subtests share one mutex.
+
+`wgstate` reads a goroutine only when it is a function literal: a goroutine that runs a named function is not checked.
 
 ### Added in strict
 
 | Rule | Origin | Description |
 |---|---|---|
-| `asciicheck` | third-party | Reports identifiers that contain non-ASCII characters. |
 | `backingpin` | logos | Reports subslices and substrings that keep a backing store over 64 KiB alive past the function. |
 | `chanblock` | logos | Reports channel sends and receives that can block forever without a ctx.Done() case or buffer proof. |
-| `checkimports` | gvisor | Restricts unsafe to \*_unsafe.go files and enforces the configured import deny list. |
+| `checklocks` | gvisor | Checks +checklocks and +checkatomic annotations and reports double acquisition of a held lock. |
 | `closer` | logos | Reports local io closers that are neither closed with defer nor handed on. |
-| `containedctx` | third-party | Reports struct types that hold a context.Context field. |
 | `contextcheck` | third-party | Reports functions that use a non-inherited context. |
 | `dupl` | third-party | Reports duplicated code fragments of 150 or more tokens. |
-| `err113` | third-party | Reports dynamic errors.New and fmt.Errorf values and errors compared with ==. |
-| `errname` | third-party | Requires error types named XxxError and sentinel errors named ErrXxx. |
+| `errorlint` | third-party | Requires errors.Is and errors.As for error comparisons and assertions. |
+| `exhaustive` | third-party | Requires switch statements on enum types without a default case to cover every enum member. |
 | `forcetypeassert` | third-party | Reports type assertions whose ok result is not checked. |
-| `gochecknoglobals` | third-party | Reports package-level variables. |
-| `goconst` | third-party | Reports strings of 3 or more bytes repeated 3 or more times that should be constants. |
-| `iface` | third-party | Reports identical, unused, and unexported interfaces and interface methods never called. |
-| `ireturn` | third-party | Reports functions that return interfaces; accept interfaces, return concrete types. |
-| `mirror` | third-party | Reports bytes and string conversions where a mirrored bytes or strings function exists. |
-| `nilnil` | third-party | Reports returning a nil error together with an invalid nil value. |
-| `paralleltest` | third-party | Requires tests and subtests to call t.Parallel. |
-| `perfsprint` | third-party | Reports fmt.Sprintf calls that a faster strconv or string operation can replace. |
-| `unsizedint` | logos | Reports int and uint fields in JSON structs; their size depends on the platform. |
-| `wrapcheck` | third-party | Reports errors from other packages returned without wrapping. |
+| `goroutine` | logos | Requires joined goroutines with exit paths; strict requires errgroup or WaitGroup.Go and bounded fan-out. |
+| `noctx` | third-party | Reports network and SQL calls made without a context.Context. |
+| `typednil` | logos | Reports a typed nil pointer returned as an interface, which is never nil. |
 
 ### Coming from golangci-lint
 
@@ -400,7 +386,6 @@ gglint keeps these golangci-lint linters in a new form:
 | `govet` | One rule per `go/analysis` pass |
 | `modernize` | The `modernize` rule |
 | `nolintlint` | The `nolint` rule |
-| `gochecknoinits` | The `noinit` rule |
 | `typecheck` | The `typecheck` rule |
 | `gofumpt` | The `gofumpt` rule |
 
@@ -427,13 +412,29 @@ These linters are dropped for other reasons:
 |---|---|
 | Targets a third-party library or `golang.org/x/exp` | `arangolint`, `clickhouselint`, `exptostd`, `ginkgolinter`, `loggercheck`, `promlinter`, `protogetter`, `spancheck`, `testifylint`, `zerologlint` |
 | Layout or ordering opinion | `decorder`, `dogsled`, `embeddedstructfieldcheck`, `funcorder`, `godot`, `goprintffuncname`, `grouper`, `inamedparam`, `iotamixing`, `lll`, `nlreturn`, `noinlineerr`, `tagalign`, `wsl_v5` |
-| Contested convention with no defect | `errchkjson`, `exhaustruct_v5`, `godoclint`, `gosmopolitan`, `mnd`, `nonamedreturns`, `prealloc`, `testpackage`, `unqueryvet`, `usestdlibvars`, `varnamelen` |
+| Contested convention with no defect | `asciicheck`, `containedctx`, `dupword`, `err113`, `errcheck`, `errname`, `gochecknoglobals`, `gochecknoinits`, `goconst`, `iface`, `ireturn`, `mirror`, `nakedret`, `nilnil`, `paralleltest`, `perfsprint`, `predeclared`, `recvcheck`, `sloglint`, `testableexamples`, `thelper`, `unconvert`, `wrapcheck`, `errchkjson`, `exhaustruct_v5`, `godoclint`, `gosmopolitan`, `mnd`, `nonamedreturns`, `prealloc`, `testpackage`, `unqueryvet`, `usestdlibvars`, `varnamelen` |
 | Does nothing useful without project configuration | `forbidigo`, `goheader`, `gomoddirectives`, `importas`, `tagliatelle` |
 | Deprecated upstream | `exhaustruct`, `gomodguard`, `wsl` |
 
 The formatters `gci`, `gofmt`, and `goimports` are covered by `gofumpt`. `golines` is dropped as a layout opinion, and `swaggo` because it targets one library.
 
 gglint does not rebuild Go or module plugins, `custom`, `migrate`, `config path|verify`, `cache`, the `formatters` and `fmt` commands, the JSON schema, the docs site, presets, severities, issue caps, SARIF and the other printers, `-new-from-patch`, `whole-files`, colors, or source excerpts.
+
+## Upgrading from the first catalog
+
+| Removed | Use instead |
+|---|---|
+| `errcheck`, `discarded_error` | `errdrop` |
+| `capturerace` | `gorace` |
+| `staticcheck:S…` tokens | `gosimple:S…` |
+| `staticcheck:SA4006` | `ineffassign` |
+| `staticcheck:ST…`, `staticcheck:QF…`, `structtag_malformed`, `checkaligned`, `noinit`, `unsizedint`, and the third-party rules listed under `Coming from golangci-lint` | no replacement |
+
+A `gglint.toml` that names a deleted rule in `enable` or `disable` fails with the existing `enable: unknown rule "X"` or `disable: unknown rule "X"` error, and in `[[exclude]] rules` with `exclude[N].rules: unknown rule "X"` (exit 2).
+
+A `//nolint:X` comment that names a deleted rule gets the existing finding `unknown nolint rule "X"`.
+
+A `staticcheck:S1005` token (any S check) stays valid, because `staticcheck` stays known, and matches nothing: the finding now carries `gosimple:S1005`, so the directive is reported as `unused nolint directive for staticcheck:S1005`.
 
 ## Development
 
@@ -446,6 +447,7 @@ go vet ./...
 go test -race ./...
 go run ./cmd/gglint run ./...
 golangci-lint run ./...
+go test -count=1 -run TestCorpusBudget ./internal/precision/
 ```
 
 ## License

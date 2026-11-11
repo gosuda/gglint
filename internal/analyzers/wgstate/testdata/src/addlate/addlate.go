@@ -1,0 +1,529 @@
+package addlate
+
+import (
+	"log"
+	"sync"
+	"sync/atomic"
+)
+
+func work() {}
+
+func addlateReported() {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addlateSilent() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Wait()
+}
+func addlateReportedLabeled() {
+	var wg sync.WaitGroup
+	if false {
+		goto L
+	}
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+L:
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+func addlateReportedDouble() {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(2) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+func addlateSilentChanGate() {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	go func() {
+		<-start
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	close(start)
+	wg.Wait()
+}
+func addlateSilentMutexGate() {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	mu.Lock()
+	go func() {
+		mu.Lock()
+		defer wg.Done()
+		mu.Unlock()
+		work()
+	}()
+	wg.Add(1)
+	mu.Unlock()
+	wg.Wait()
+}
+func addlateSilentRWMutexParent() {
+	var wg sync.WaitGroup
+	var mu sync.RWMutex
+	mu.RLock()
+	go func() {
+		mu.Lock()
+		defer wg.Done()
+		mu.Unlock()
+		work()
+	}()
+	wg.Add(1)
+	mu.RUnlock()
+	wg.Wait()
+}
+func addlateSilentSelectGate() {
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	other := make(chan struct{})
+	go func() {
+		select {
+		case <-start:
+		case <-other:
+		}
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	close(start)
+	wg.Wait()
+}
+func addlateSilentRangeRecv() {
+	var wg sync.WaitGroup
+	start := make(chan int)
+	go func() {
+		defer wg.Done()
+		for range start {
+			work()
+		}
+	}()
+	wg.Add(1)
+	close(start)
+	wg.Wait()
+}
+func addlateSilentWaitGroupGate() {
+	var wg sync.WaitGroup
+	var ready sync.WaitGroup
+	ready.Add(1)
+	go func() {
+		ready.Wait()
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	ready.Done()
+	wg.Wait()
+}
+func addlateSilentCondGate() {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	ready := false
+	cond := sync.NewCond(&mu)
+	go func() {
+		defer wg.Done()
+		mu.Lock()
+		for !ready {
+			cond.Wait()
+		}
+		mu.Unlock()
+		work()
+	}()
+	wg.Add(1)
+	mu.Lock()
+	ready = true
+	mu.Unlock()
+	cond.Broadcast()
+	wg.Wait()
+}
+func addlateReportedWaitFirst() {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Wait()
+	wg.Add(1) // want "can return early"
+}
+func addlateSilentRLockGoroutine() {
+	var wg sync.WaitGroup
+	var mu sync.RWMutex
+	mu.Lock()
+	go func() {
+		mu.RLock()
+		defer wg.Done()
+		mu.RUnlock()
+		work()
+	}()
+	wg.Add(1)
+	mu.Unlock()
+	wg.Wait()
+}
+
+func addlateSilentEarlyAndLate() {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateSilentOtherKey() {
+	var wg1, wg2 sync.WaitGroup
+	go func() {
+		wg1.Add(1)
+		defer wg1.Done()
+		work()
+	}()
+	wg2.Add(1)
+	wg2.Done()
+	wg2.Wait()
+}
+
+func addlateSilentNestedDone() {
+	var wg sync.WaitGroup
+	go func() {
+		cleanup := func() { wg.Done() }
+		_ = cleanup
+		work()
+	}()
+	wg.Add(1)
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateReportedLitAddNoOrder() {
+	var wg sync.WaitGroup
+	setup := func() {
+		wg.Add(1)
+	}
+	_ = setup
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addlateSilentLitCall() {
+	var wg sync.WaitGroup
+	add := func() {
+		wg.Add(1)
+	}
+	add()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateSilentLitInPlace() {
+	var wg sync.WaitGroup
+	func() {
+		wg.Add(1)
+	}()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	wg.Done()
+	wg.Wait()
+}
+func addlateSilentVarLitReassigned(verbose bool) {
+	var wg sync.WaitGroup
+	add := func() {
+		wg.Add(1)
+	}
+	if verbose {
+		add = func() {
+			log.Print("add")
+			wg.Add(1)
+		}
+	}
+	add()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Wait()
+}
+func addlateReportedGoLitNoOrder() {
+	var wg sync.WaitGroup
+	go func() {
+		wg.Add(1)
+	}()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addlateReportedDirectGoDeferNoOrder() {
+	var wg sync.WaitGroup
+	go wg.Add(1)
+	defer wg.Add(1)
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addlateReportedVarLitAssignedAfterCall() {
+	var wg sync.WaitGroup
+	var step func()
+	step = func() {}
+	step()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	step = func() { wg.Add(1) }
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addlateReportedGoInsideLit() {
+	var wg sync.WaitGroup
+	add := func() { go wg.Add(1) }
+	add()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateReportedGoInsideInPlace() {
+	var wg sync.WaitGroup
+	func() { go wg.Add(1) }()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Done()
+	wg.Wait()
+}
+
+func addlateSilentDeferInsideLit() {
+	var wg sync.WaitGroup
+	add := func() { defer wg.Add(1) }
+	add()
+	go func() {
+		defer wg.Done()
+		work()
+	}()
+	wg.Wait()
+}
+
+func addlateSendGated() {
+	var wg sync.WaitGroup
+	ch := make(chan int)
+	go func() {
+		defer wg.Done()
+		ch <- 1
+	}()
+	wg.Add(1)
+	<-ch
+	wg.Wait()
+}
+
+var started = make(chan struct{})
+
+func awaitStart() { <-started }
+
+func addlateHelperGated(work func()) {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		awaitStart()
+		work()
+	}()
+	wg.Add(1)
+	close(started)
+	wg.Wait()
+}
+
+func addlateAtomicLoadGated(work func(), flag *atomic.Bool) {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		for !flag.Load() {
+		}
+		work()
+	}()
+	wg.Add(1)
+	flag.Store(true)
+	wg.Wait()
+}
+
+func addlateEnclosingAdd(work func()) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	func() {
+		go func() { defer wg.Done(); work() }()
+		wg.Add(1)
+		go func() { defer wg.Done(); work() }()
+	}()
+	wg.Wait()
+}
+
+var poolWG sync.WaitGroup
+
+func reserve() { poolWG.Add(1) }
+
+func addlateHelperAdd() {
+	reserve()
+	go func() { defer poolWG.Done(); work() }()
+	poolWG.Add(1)
+	go func() { defer poolWG.Done(); work() }()
+	poolWG.Wait()
+}
+
+type addPool struct{ wg sync.WaitGroup }
+type addStats struct{ wg sync.WaitGroup }
+
+func (s *addStats) bump() { s.wg.Add(1) }
+
+func addlateReportedOtherGroup(p *addPool, s *addStats, work func()) {
+	s.bump()
+	go func() { defer p.wg.Done(); work() }()
+	p.wg.Add(1) // want "negative WaitGroup counter"
+	p.wg.Wait()
+	s.wg.Done()
+}
+
+func addDrain(ch chan int) { for range ch {} }
+
+func addlateReportedSpawnsDrain(ch chan int, work func()) {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		go addDrain(ch)
+		work()
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addlateReportedCountedLoad(work func(int64), size *atomic.Int64) {
+	var wg sync.WaitGroup
+	go func() {
+		defer wg.Done()
+		for i := int64(0); i < size.Load(); i++ {
+			work(i)
+		}
+	}()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addSetup(wg *sync.WaitGroup) { log.Print("setup") }
+
+func addlateReportedPassedNoAdd(work func()) {
+	var wg sync.WaitGroup
+	addSetup(&wg)
+	go func() { defer wg.Done(); work() }()
+	wg.Add(1) // want "negative WaitGroup counter"
+	wg.Wait()
+}
+
+func addOne(wg *sync.WaitGroup) { wg.Add(1) }
+
+func addlateSilentPassedParamAdd(work func()) {
+	var wg sync.WaitGroup
+	addOne(&wg)
+	go func() { defer wg.Done(); work() }()
+	wg.Add(1)
+	go func() { defer wg.Done(); work() }()
+	wg.Wait()
+}
+
+func addOnceInLit(wg *sync.WaitGroup) { func() { wg.Add(1) }() }
+
+func addlateSilentHelperAddsInLiteral(work func()) {
+	var wg sync.WaitGroup
+	addOnceInLit(&wg)
+	go func() { defer wg.Done(); work() }()
+	wg.Add(1)
+	go func() { defer wg.Done(); work() }()
+	wg.Wait()
+}
+
+func addOnceDo(wg *sync.WaitGroup, once *sync.Once) { once.Do(func() { wg.Add(1) }) }
+
+func addlateSilentHelperOnceDo(work func()) {
+	var wg sync.WaitGroup
+	var once sync.Once
+	addOnceDo(&wg, &once)
+	go func() { defer wg.Done(); work() }()
+	wg.Add(1)
+	go func() { defer wg.Done(); work() }()
+	wg.Wait()
+}
+
+func addViaAlias(wg *sync.WaitGroup) {
+	w := wg
+	w.Add(1)
+}
+
+func addlateSilentHelperAlias(work func()) {
+	var wg sync.WaitGroup
+	addViaAlias(&wg)
+	go func() { defer wg.Done(); work() }()
+	wg.Add(1)
+	go func() { defer wg.Done(); work() }()
+	wg.Wait()
+}
+
+func addlateSilentReadySignal() {
+	var wg sync.WaitGroup
+	ready := make(chan struct{})
+	go func() {
+		<-ready
+		wg.Done()
+	}()
+	wg.Add(1)
+	close(ready)
+	wg.Wait()
+}

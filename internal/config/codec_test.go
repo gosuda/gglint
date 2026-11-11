@@ -16,8 +16,8 @@ func populated(m config.Mode) config.Config {
 		Path:        "/work/conf/gglint.toml",
 		ExcludeBase: "/work/conf",
 		Mode:        m,
-		Enable:      []string{"goconst", "dupl", "chanblock"},
-		Disable:     []string{"noinit", "closer"},
+		Enable:      []string{"dupl", "dupl", "chanblock"},
+		Disable:     []string{"placeholder", "closer"},
 		Tests:       true,
 		BuildTags:   []string{"integration", "e2e"},
 		Complexity:  config.Complexity{MaxCognitive: 1, MaxCyclomatic: 2, MaxNesting: 3, MaxLines: 4, MaxParams: 5, MaxBoolParams: 6, MaxInterfaceMethods: 7, MaxFileLines: 8},
@@ -28,7 +28,7 @@ func populated(m config.Mode) config.Config {
 		Excludes: []config.Exclude{
 			{Paths: []string{"^legacy/"}, Rules: []string{"complexity"}, Text: "too complex", Tests: new(true)},
 			{Paths: []string{"^gen/"}, Rules: []string{"staticcheck:SA1019"}, Text: "deprecated", Tests: new(false)},
-			{Paths: []string{"^vendor/"}, Rules: []string{"goconst"}, Text: "occurrences"},
+			{Paths: []string{"^vendor/"}, Rules: []string{"dupl"}, Text: "occurrences"},
 		},
 	}
 }
@@ -37,8 +37,8 @@ func TestDecodeInvertsEncodeUpToSortedSlices(t *testing.T) {
 	t.Parallel()
 	for _, m := range allModes {
 		want := populated(m)
-		want.Enable = []string{"chanblock", "dupl", "goconst"}
-		want.Disable = []string{"closer", "noinit"}
+		want.Enable = []string{"chanblock", "dupl", "dupl"}
+		want.Disable = []string{"closer", "placeholder"}
 		want.BuildTags = []string{"e2e", "integration"}
 		data := populated(m).Encode()
 		got, err := config.Decode(data)

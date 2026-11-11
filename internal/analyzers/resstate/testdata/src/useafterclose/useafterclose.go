@@ -1,0 +1,163 @@
+package useafterclose
+
+import (
+	"fmt"
+	"os"
+)
+
+func useaftercloseReported(p string, b []byte) {
+	f, _ := os.Open(p)
+	f.Close()
+	f.Read(b) // want "is closed on every path to this call"
+}
+
+func useaftercloseSilent(p string, b []byte) {
+	f, _ := os.Open(p)
+	defer f.Close()
+	f.Read(b)
+}
+
+func useaftercloseSilentEscape(p string, ch chan *os.File) *os.File {
+	f, _ := os.Open(p)
+	f.Close()
+	_ = &f
+	ch <- f
+	g := f
+	_ = g
+	return f
+}
+
+type f1wrap struct {
+	f *os.File
+}
+
+func (w f1wrap) Close() error {
+	return w.f.Close()
+}
+
+func (w f1wrap) Name() string {
+	return w.f.Name()
+}
+
+func useaftercloseSilentFieldRelease(p string) string {
+	f, _ := os.Open(p)
+	w := f1wrap{f: f}
+	w.f.Close()
+	return w.Name()
+}
+
+
+func reopenAddr(p **os.File) {
+	*p, _ = os.Open("x")
+}
+
+func useaftercloseSilentAddrReopen(p string, b []byte) {
+	f, _ := os.Open(p)
+	f.Close()
+	reopenAddr(&f)
+	_, _ = f.Read(b)
+}
+
+func useaftercloseSilentCapture(p, q string, b []byte) {
+	f, _ := os.Open(p)
+	f.Close()
+	reopen := func() {
+		f, _ = os.Open(q)
+	}
+	reopen()
+	_, _ = f.Read(b)
+}
+
+func useaftercloseSilentRangeAssign(ch chan *os.File, b []byte) {
+	f, _ := os.Open("x")
+	f.Close()
+	for f = range ch {
+		_, _ = f.Read(b)
+	}
+}
+
+func useaftercloseReportedLoop(p string, b []byte) {
+	f, _ := os.Open(p)
+	f.Close()
+	for range 2 {
+		_, _ = f.Read(b) // want "is closed on every path to this call"
+	}
+}
+
+func useaftercloseReportedAfterCopy(p string, b []byte) {
+	f, _ := os.Open(p)
+	f.Close()
+	name := f.Name()
+	_, _ = f.Read(b) // want "is closed on every path to this call"
+	_ = name
+}
+
+func useaftercloseSilentName(p string) string {
+	f, _ := os.Open(p)
+	f.Close()
+	return f.Name()
+}
+
+
+func useaftercloseReportedDerivedArg(p string, b []byte) {
+	f, _ := os.Open(p)
+	f.Close()
+	fmt.Println(f.Name())
+	_, _ = f.Read(b) // want "is closed on every path to this call"
+}
+
+type memBuf struct{ data []byte }
+
+func (m *memBuf) Close() error { return nil }
+
+func (m *memBuf) Write(p []byte) (int, error) {
+	m.data = append(m.data, p...)
+	return len(p), nil
+}
+
+func useaftercloseSilentForeignWrite(p []byte) {
+	m := &memBuf{}
+	m.Close()
+	_, _ = m.Write(p)
+}
+
+
+func useaftercloseSilentAddr() string {
+	p := afterCloseProbe{}
+	p.Close()
+	return p.Addr()
+}
+
+type afterCloseProbe struct{}
+
+func (afterCloseProbe) Close() error { return nil }
+
+func (afterCloseProbe) Addr() string { return "" }
+
+func useaftercloseSilentBranchClose(done bool, p string, b []byte) {
+	f, _ := os.Open(p)
+	if done {
+		f.Close()
+	} else {
+		_ = b
+	}
+	if !done {
+		_, _ = f.Read(b)
+		f.Close()
+	}
+}
+
+func useaftercloseSilentReopenInPlace(p, q string, b []byte) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	func() { f, err = os.Open(q) }()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Read(b)
+	return err
+}

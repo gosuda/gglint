@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -121,7 +122,7 @@ func loadTinyPackage(t *testing.T) *packages.Package {
 	dir := t.TempDir()
 	files := map[string]string{
 		"go.mod": "module example.com/p\n\ngo 1.27\n",
-		"p.go":   "package p\n\nfunc g() error { return nil }\n\nfunc f() { _ = g() }\n",
+		"p.go":   "package p\n\nimport \"sync\"\n\ntype T struct {\n\tmu sync.Mutex\n\tn int\n}\n\nfunc (t *T) A() { t.mu.Lock(); t.n++; t.mu.Unlock() }\n\nfunc (t *T) B() { t.mu.Lock(); t.n--; t.mu.Unlock() }\n",
 	}
 	for name, src := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o600); err != nil {
@@ -156,17 +157,22 @@ func analyzeWithEngine(cfg config.Config, pkg *packages.Package) error {
 		return fmt.Errorf("mode %v: analyze: %w", cfg.Mode, err)
 	}
 	var failures []error
-	blankFindings := 0
+	found := 0
 	for _, root := range graph.Roots {
 		if root.Err != nil {
 			failures = append(failures, fmt.Errorf("mode %v: %s: %w", cfg.Mode, root.Analyzer.Name, root.Err))
 		}
-		if root.Analyzer.Name == "errcheck" {
-			blankFindings += len(root.Diagnostics)
+		if root.Analyzer.Name != "checklocks" {
+			continue
+		}
+		for _, d := range root.Diagnostics {
+			if strings.Contains(d.Message, "may require checklocks annotation") {
+				found++
+			}
 		}
 	}
-	if want := cfg.Mode >= config.Standard; (blankFindings > 0) != want {
-		failures = append(failures, fmt.Errorf("mode %v: errcheck reported %d blank-assignment findings, want any = %v", cfg.Mode, blankFindings, want))
+	if want := cfg.Mode >= config.Strict; (found > 0) != want {
+		failures = append(failures, fmt.Errorf("mode %v: checklocks reported %d findings, want any = %v", cfg.Mode, found, want))
 	}
 	return errors.Join(failures...)
 }
@@ -182,6 +188,9 @@ func TestConcurrentBuildsKeepSharedAnalyzersIsolated(t *testing.T) {
 	for _, mode := range []config.Mode{config.Basic, config.Standard, config.Strict} {
 		for range workersPerMode {
 			cfg := config.Config{Mode: mode, Complexity: config.ComplexityFor(mode), Tests: true}
+			if mode < config.Strict {
+				cfg.Enable = []string{"checklocks"}
+			}
 			jobs = append(jobs, job{cfg: cfg, pkg: loadTinyPackage(t)})
 		}
 	}
@@ -196,5 +205,124 @@ func TestConcurrentBuildsKeepSharedAnalyzersIsolated(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+func TestReportOutsideTestsSkipsTestFiles(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		file string
+		want int
+	}{
+		{name: "non-test file kept", file: "/work/p/a.go", want: 1},
+		{name: "test file dropped", file: "/work/p/a_test.go", want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newTestEngine(t, config.Config{Mode: config.Standard, Tests: true})
+			var got []analysis.Diagnostic
+			pass := newPass(t, tc.file, "package p\n\nvar X = 1\n", func(d analysis.Diagnostic) { got = append(got, d) })
+			r := probeRule()
+			r.Reports = rules.ReportOutsideTests
+			for _, a := range e.analyzers([]rules.Rule{r}) {
+				if _, err := a.Run(pass); err != nil {
+					t.Fatalf("run %s: %v", a.Name, err)
+				}
+			}
+			if len(got) != tc.want {
+				t.Fatalf("kept %d findings, want %d", len(got), tc.want)
+			}
+		})
+	}
+}
+
+func TestReportWithFixKeepsOnlyFindingsWithEdits(t *testing.T) {
+	t.Parallel()
+	e := newTestEngine(t, config.Config{Mode: config.Standard})
+	pass := newPass(t, "/work/p/a.go", "package p\n\nvar X = 1\n", nil)
+	pos := pass.Files[0].Decls[0].Pos()
+	r := probeRule()
+	r.Reports = rules.ReportWithFix
+	cases := []struct {
+		name string
+		d    analysis.Diagnostic
+		want bool
+	}{
+		{
+			name: "no fix dropped",
+			d:    analysis.Diagnostic{Pos: pos, Message: "probe finding"},
+			want: false,
+		},
+		{
+			name: "fix without edits dropped",
+			d:    analysis.Diagnostic{Pos: pos, Message: "probe finding", SuggestedFixes: []analysis.SuggestedFix{{Message: "fix it"}}},
+			want: false,
+		},
+		{
+			name: "fix with edits kept",
+			d:    analysis.Diagnostic{Pos: pos, Message: "probe finding", SuggestedFixes: []analysis.SuggestedFix{{Message: "fix it", TextEdits: []analysis.TextEdit{{Pos: pos, End: pos, NewText: []byte("var Y = 1")}}}}},
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		if got := e.keep(pass, r, "", tc.d); got != tc.want {
+			t.Errorf("%s: keep = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestInvalidPositionDroppedForEveryFilter(t *testing.T) {
+	t.Parallel()
+	for _, reports := range []rules.Reports{rules.ReportEverywhere, rules.ReportOutsideTests, rules.ReportWithFix} {
+		e := newTestEngine(t, config.Config{Mode: config.Standard})
+		pass := newPass(t, "/work/p/a.go", "package p\n\nvar X = 1\n", nil)
+		pos := pass.Files[0].Decls[0].Pos()
+		r := probeRule()
+		r.Reports = reports
+		cases := []struct {
+			name string
+			d    analysis.Diagnostic
+		}{
+			{name: "no position", d: analysis.Diagnostic{Pos: token.NoPos, Message: "probe finding"}},
+			{name: "position outside fileset", d: analysis.Diagnostic{Pos: token.Pos(1 << 30), Message: "probe finding"}},
+		}
+		for _, tc := range cases {
+			d := tc.d
+			if reports == rules.ReportWithFix {
+				d.SuggestedFixes = []analysis.SuggestedFix{{Message: "fix it", TextEdits: []analysis.TextEdit{{Pos: pos, End: pos, NewText: []byte("var Y = 1")}}}}
+			}
+			if e.keep(pass, r, "", d) {
+				t.Errorf("reports %v %s: keep = true, want false", reports, tc.name)
+			}
+		}
+	}
+}
+
+func TestFilteredFindingLeavesNolintDirectiveUnused(t *testing.T) {
+	t.Parallel()
+	e := newTestEngine(t, config.Config{Mode: config.Standard, Tests: true})
+	e.known["probe"], e.selected["probe"] = true, true
+	src := "package p\n\nvar X = 1 //nolint:probe // reason\n"
+	var kept []analysis.Diagnostic
+	pass := newPass(t, "/work/p/a.go", src, func(d analysis.Diagnostic) { kept = append(kept, d) })
+	r := probeRule()
+	r.Reports = rules.ReportWithFix
+	for _, a := range e.analyzers([]rules.Rule{r}) {
+		if _, err := a.Run(pass); err != nil {
+			t.Fatalf("run %s: %v", a.Name, err)
+		}
+	}
+	if len(kept) != 0 {
+		t.Fatalf("kept %d findings, want 0", len(kept))
+	}
+	var messages []string
+	nolintPass := newPass(t, "/work/p/a.go", src, func(d analysis.Diagnostic) { messages = append(messages, d.Message) })
+	if _, err := e.nolintAnalyzer(nil).Run(nolintPass); err != nil {
+		t.Fatalf("run nolint: %v", err)
+	}
+	if len(messages) != 1 || messages[0] != "unused nolint directive for probe" {
+		t.Fatalf("nolint reported %q, want %q", messages, []string{"unused nolint directive for probe"})
 	}
 }

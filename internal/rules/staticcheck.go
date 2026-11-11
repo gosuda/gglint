@@ -5,10 +5,8 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
-	"honnef.co/go/tools/quickfix"
 	"honnef.co/go/tools/simple"
 	"honnef.co/go/tools/staticcheck"
-	"honnef.co/go/tools/stylecheck"
 	"honnef.co/go/tools/unused"
 
 	"github.com/gosuda/gglint/internal/config"
@@ -16,30 +14,35 @@ import (
 
 func staticcheckRules() []Rule {
 	return []Rule{
-		{"staticcheck", config.Basic, originStaticcheck, "Staticcheck: SA bug checks; standard adds S and ST checks, strict adds QF quick fixes.", buildStaticcheck},
-		{"unused", config.Basic, originStaticcheck, "Reports unused constants, variables, functions, types, and fields (staticcheck U1000).", single(unused.Analyzer.Analyzer)},
+		{"staticcheck", config.Basic, originStaticcheck, "Staticcheck SA bug checks; standard adds SA1019 (deprecated API use).", ReportEverywhere, buildStaticcheck},
+		{"gosimple", config.Standard, originStaticcheck, "Staticcheck S simplifications that carry a fix.", ReportWithFix, buildGosimple},
+		{"unused", config.Basic, originStaticcheck, "Reports unused constants, variables, functions, types, and fields (staticcheck U1000).", ReportEverywhere, single(unused.Analyzer.Analyzer)},
 	}
 }
 
 func buildStaticcheck(cfg config.Config) []*analysis.Analyzer {
-	prefixes, excluded := staticcheckPolicy(cfg.Mode)
+	excluded := staticcheckExcluded(cfg.Mode)
 	var selected []*analysis.Analyzer
-	for _, a := range slices.Concat(staticcheck.Analyzers, simple.Analyzers, stylecheck.Analyzers, quickfix.Analyzers) {
+	for _, a := range staticcheck.Analyzers {
 		name := a.Analyzer.Name
-		if slices.Contains(prefixes, strings.TrimRight(name, "0123456789")) && !slices.Contains(excluded, name) {
+		if strings.TrimRight(name, "0123456789") == "SA" && !slices.Contains(excluded, name) {
 			selected = append(selected, a.Analyzer)
 		}
 	}
 	return selected
 }
 
-func staticcheckPolicy(m config.Mode) (prefixes, excluded []string) {
-	switch m {
-	case config.Basic:
-		return []string{"SA"}, nil
-	case config.Standard:
-		return []string{"SA", "S", "ST"}, strings.Fields("ST1000 ST1003 ST1016 ST1020 ST1021 ST1022")
-	case config.Strict:
+func buildGosimple(config.Config) []*analysis.Analyzer {
+	var selected []*analysis.Analyzer
+	for _, a := range simple.Analyzers {
+		selected = append(selected, a.Analyzer)
 	}
-	return []string{"SA", "S", "ST", "QF"}, strings.Fields("ST1000 ST1016 ST1020 ST1021 ST1022")
+	return selected
+}
+
+func staticcheckExcluded(m config.Mode) []string {
+	if m == config.Basic {
+		return strings.Fields("SA1019 SA4006")
+	}
+	return strings.Fields("SA4006")
 }

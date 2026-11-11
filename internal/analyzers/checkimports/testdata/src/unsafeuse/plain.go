@@ -1,5 +1,5 @@
 package unsafeuse
 
-import "unsafe" // want `package unsafe imported by plain\.go; must end with _unsafe\.go`
+import "unsafe"
 
 const wordSize = unsafe.Sizeof(uintptr(0))
