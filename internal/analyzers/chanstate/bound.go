@@ -10,47 +10,6 @@ import (
 
 const boundCap = int64(1 << 60)
 
-func upperBoundRecvs(info *types.Info, fn ast.Node, k flow.Key, senders map[*ast.FuncLit]bool) (int64, bool) {
-	body := flow.Body(fn)
-	if body == nil {
-		return 0, true
-	}
-	backward := backwardLabels(fn)
-	if len(backward) > 0 {
-		return 0, false
-	}
-	if anyRangeOver(info, fn, k) {
-		return 0, false
-	}
-	w := &boundWalker{
-		info:    info,
-		key:     k,
-		senders: senders,
-	}
-	w.walkStmts(body.List)
-	if w.unknown {
-		return 0, false
-	}
-	return w.total, true
-}
-
-func anyRangeOver(info *types.Info, fn ast.Node, k flow.Key) bool {
-	found := false
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if r, ok := n.(*ast.RangeStmt); ok {
-			if kk, ok := flow.KeyOf(info, r.X); ok && kk == k {
-				found = true
-				return false
-			}
-		}
-		return true
-	})
-	return found
-}
-
 type boundWalker struct {
 	info    *types.Info
 	key     flow.Key
@@ -414,4 +373,27 @@ func (w *boundWalker) markUnknownOnRecv(n ast.Node) {
 		}
 		return true
 	})
+}
+
+func upperBoundRecvsCached(ctx *fnCtx, k flow.Key, senders map[*ast.FuncLit]bool) (int64, bool) {
+	body := flow.Body(ctx.fn)
+	if body == nil {
+		return 0, true
+	}
+	if len(ctx.backward) > 0 {
+		return 0, false
+	}
+	if ctx.facts.hasAnyRange(k) {
+		return 0, false
+	}
+	w := &boundWalker{
+		info:    ctx.info,
+		key:     k,
+		senders: senders,
+	}
+	w.walkStmts(body.List)
+	if w.unknown {
+		return 0, false
+	}
+	return w.total, true
 }

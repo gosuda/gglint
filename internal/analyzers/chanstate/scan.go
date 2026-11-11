@@ -12,8 +12,8 @@ import (
 	"github.com/gosuda/gglint/internal/flow"
 )
 
-func chanLocals(info *types.Info, fn ast.Node) []flow.Key {
-	body := flow.Body(fn)
+func chanLocalsWith(ctx *fnCtx) []flow.Key {
+	body := flow.Body(ctx.fn)
 	if body == nil {
 		return nil
 	}
@@ -27,8 +27,8 @@ func chanLocals(info *types.Info, fn ast.Node) []flow.Key {
 		if !ok {
 			return true
 		}
-		v, ok := info.Defs[id].(*types.Var)
-		if !ok || !isChan(v.Type()) || !flow.IsLocal(info, fn, v) {
+		v, ok := ctx.info.Defs[id].(*types.Var)
+		if !ok || !isChan(v.Type()) || !flow.IsLocal(ctx.info, ctx.fn, v) {
 			return true
 		}
 		k := flow.Key{Root: v}
@@ -39,7 +39,7 @@ func chanLocals(info *types.Info, fn ast.Node) []flow.Key {
 		out = append(out, k)
 		return true
 	})
-	return keepLocalWith(out, info, fn, spawnLits(info, fn))
+	return keepLocalWith(out, ctx.info, ctx.fn, ctx.spawned)
 }
 
 func keepLocalWith(out []flow.Key, info *types.Info, fn ast.Node, spawned map[*ast.FuncLit]bool) []flow.Key {
@@ -53,10 +53,10 @@ func keepLocalWith(out []flow.Key, info *types.Info, fn ast.Node, spawned map[*a
 	return kept
 }
 
-func nilLocals(info *types.Info, fn ast.Node) []flow.Key {
+func nilLocalsWith(ctx *fnCtx) []flow.Key {
 	var out []flow.Key
-	for _, k := range chanLocals(info, fn) {
-		if nilVar(info, fn, k) {
+	for _, k := range chanLocalsWith(ctx) {
+		if nilVar(ctx.info, ctx.fn, k) {
 			out = append(out, k)
 		}
 	}
@@ -135,57 +135,6 @@ func targets(info *types.Info, lhs []ast.Expr, k flow.Key) bool {
 	return false
 }
 
-func makeDefs(info *types.Info, fn ast.Node, k flow.Key) []*ast.CallExpr {
-	body := flow.Body(fn)
-	if body == nil {
-		return nil
-	}
-	var out []*ast.CallExpr
-	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		collectMakes(info, n, k, &out)
-		return true
-	})
-	return out
-}
-
-func collectMakes(info *types.Info, n ast.Node, k flow.Key, out *[]*ast.CallExpr) {
-	switch a := n.(type) {
-	case *ast.AssignStmt:
-		defMakes(info, a, k, out)
-	case *ast.ValueSpec:
-		specMakes(info, a, k, out)
-	}
-}
-
-func defMakes(info *types.Info, a *ast.AssignStmt, k flow.Key, out *[]*ast.CallExpr) {
-	if a.Tok != token.DEFINE || len(a.Rhs) != len(a.Lhs) {
-		return
-	}
-	for i, l := range a.Lhs {
-		if kk, ok := keyOfIdent(info, l); !ok || kk != k {
-			continue
-		}
-		if c, ok := makeCall(info, a.Rhs[i]); ok {
-			*out = append(*out, c)
-		}
-	}
-}
-
-func specMakes(info *types.Info, vs *ast.ValueSpec, k flow.Key, out *[]*ast.CallExpr) {
-	if len(vs.Values) != 1 {
-		return
-	}
-	if !targets(info, identExprs(vs.Names), k) {
-		return
-	}
-	if c, ok := makeCall(info, vs.Values[0]); ok {
-		*out = append(*out, c)
-	}
-}
-
 func makeCall(info *types.Info, e ast.Expr) (*ast.CallExpr, bool) {
 	if !isMake(info, e) {
 		return nil, false
@@ -197,112 +146,28 @@ func makeCall(info *types.Info, e ast.Expr) (*ast.CallExpr, bool) {
 	return c, true
 }
 
-func makeDef(info *types.Info, fn ast.Node, k flow.Key) (*ast.CallExpr, bool) {
-	calls := makeDefs(info, fn, k)
-	if len(calls) != 1 {
-		return nil, false
-	}
-	return calls[0], true
-}
-
-func reassigned(info *types.Info, fn ast.Node, k flow.Key) bool {
-	body := flow.Body(fn)
-	if body == nil {
-		return false
-	}
-	c := keyAssignCounter{info: info, key: k}
-	ast.Inspect(body, func(n ast.Node) bool {
-		if c.count > 1 {
-			return false
-		}
-		if _, ok := n.(*ast.FuncLit); ok {
-			return false
-		}
-		c.countNode(n)
-		return c.count <= 1
-	})
-	return c.count > 1
-}
-
-type keyAssignCounter struct {
-	info  *types.Info
-	key   flow.Key
-	count int
-}
-
-func (c *keyAssignCounter) countNode(n ast.Node) {
-	switch n := n.(type) {
-	case *ast.AssignStmt:
-		if targets(c.info, n.Lhs, c.key) {
-			c.count++
-		}
-	case *ast.ValueSpec:
-		if len(n.Values) > 0 && targets(c.info, identExprs(n.Names), c.key) {
-			c.count++
-		}
-	case *ast.RangeStmt:
-		if n.Tok == token.ASSIGN && rangeTargets(c.info, n, c.key) {
-			c.count++
-		}
-	}
-}
-
-func madeCap(info *types.Info, fn ast.Node, k flow.Key) (int64, bool) {
-	if reassigned(info, fn, k) {
+func madeCapFacts(info *types.Info, facts *bodyFacts, k flow.Key) (int64, bool) {
+	if facts.isReassigned(k) {
 		return 0, false
 	}
-	call, ok := makeDef(info, fn, k)
+	call, ok := facts.makeCalls(k)
 	if !ok {
 		return 0, false
 	}
 	return constCap(info, call)
 }
 
-func unbuffered(info *types.Info, fn ast.Node, k flow.Key) bool {
-	c, ok := madeCap(info, fn, k)
+func makeInLoopFacts(facts *bodyFacts, loop ast.Stmt, k flow.Key) bool {
+	call, ok := facts.makeCalls(k)
+	if !ok {
+		return false
+	}
+	return withinNode(loop, call)
+}
+
+func unbufferedFacts(info *types.Info, facts *bodyFacts, k flow.Key) bool {
+	c, ok := madeCapFacts(info, facts, k)
 	return ok && c == 0
-}
-
-func channelCopied(info *types.Info, fn ast.Node, k flow.Key) bool {
-	body := flow.Body(fn)
-	if body == nil {
-		return false
-	}
-	copied := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if copied {
-			return false
-		}
-		switch n := n.(type) {
-		case *ast.AssignStmt:
-			copied = copiesKey(info, n.Lhs, n.Rhs, k)
-		case *ast.ValueSpec:
-			copied = copiesKey(info, identExprs(n.Names), n.Values, k)
-		}
-		return !copied
-	})
-	return copied
-}
-
-func copiesKey(info *types.Info, lhs, rhs []ast.Expr, k flow.Key) bool {
-	if !mentionsChan(rhs, info, k) {
-		return false
-	}
-	for _, l := range lhs {
-		if kk, ok := keyOfIdent(info, l); ok && kk != k {
-			return true
-		}
-	}
-	return false
-}
-
-func mentionsChan(rhs []ast.Expr, info *types.Info, k flow.Key) bool {
-	for _, e := range rhs {
-		if kk, ok := keyOfIdent(info, ast.Unparen(e)); ok && kk == k {
-			return true
-		}
-	}
-	return false
 }
 
 func localKey(info *types.Info, fn ast.Node, k flow.Key) bool {
@@ -336,35 +201,6 @@ func chanRanges(info *types.Info, fn ast.Node) []*ast.RangeStmt {
 		return true
 	})
 	return out
-}
-
-func hasRange(info *types.Info, fn ast.Node, k flow.Key) bool {
-	for _, r := range chanRanges(info, fn) {
-		if kk, ok := flow.KeyOf(info, r.X); ok && kk == k {
-			return true
-		}
-	}
-	return false
-}
-
-func closesAnywhere(info *types.Info, fn ast.Node, k flow.Key) bool {
-	body := flow.Body(fn)
-	if body == nil {
-		return false
-	}
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if c, ok := n.(*ast.CallExpr); ok {
-			if ck, ok := closeKey(info, c); ok && ck == k {
-				found = true
-			}
-		}
-		return !found
-	})
-	return found
 }
 
 func literalMentions(info *types.Info, fn ast.Node, k flow.Key) bool {
@@ -525,10 +361,6 @@ func handsOnWith(info *types.Info, fn ast.Node, k flow.Key, spawned map[*ast.Fun
 	}
 	w := &handWalker{info: info, key: k, fn: fn, spawned: spawned}
 	return w.list(body.List, false)
-}
-
-func handsOn(info *types.Info, fn ast.Node, k flow.Key) bool {
-	return handsOnWith(info, fn, k, spawnLits(info, fn))
 }
 
 type handWalker struct {
@@ -894,12 +726,12 @@ func (w *handWalker) storesGlobal(id *ast.Ident) bool {
 	return ok && (v.Pos() < w.fn.Pos() || v.Pos() >= w.fn.End())
 }
 
-func spawnExits(info *types.Info, fn ast.Node, k flow.Key) bool {
-	for lit := range spawnLits(info, fn) {
-		if !mentionsKey(info, lit, k) {
+func spawnExitsWith(ctx *fnCtx, k flow.Key) bool {
+	for lit := range ctx.spawned {
+		if !mentionsKey(ctx.info, lit, k) {
 			continue
 		}
-		if litExits(info, lit) {
+		if litExits(ctx.info, lit) {
 			return true
 		}
 	}
@@ -938,4 +770,251 @@ func isNeverReturn(info *types.Info, c *ast.CallExpr) bool {
 		return true
 	}
 	return false
+}
+
+type bodyFacts struct {
+	assignCount map[flow.Key]int
+	copied      map[flow.Key]bool
+	ranged      map[flow.Key]bool
+	rangedAny   map[flow.Key]bool
+	makes       map[flow.Key][]*ast.CallExpr
+	closes      map[flow.Key]bool
+}
+
+func (f *bodyFacts) isReassigned(k flow.Key) bool {
+	return f.assignCount[k] > 1
+}
+
+func (f *bodyFacts) isCopied(k flow.Key) bool {
+	return f.copied[k]
+}
+
+func (f *bodyFacts) hasRanged(k flow.Key) bool {
+	return f.ranged[k]
+}
+
+func (f *bodyFacts) hasAnyRange(k flow.Key) bool {
+	return f.rangedAny[k]
+}
+
+func (f *bodyFacts) makeCalls(k flow.Key) (*ast.CallExpr, bool) {
+	calls := f.makes[k]
+	if len(calls) != 1 {
+		return nil, false
+	}
+	return calls[0], true
+}
+
+func (f *bodyFacts) isClosed(k flow.Key) bool {
+	return f.closes[k]
+}
+
+func collectBodyFacts(info *types.Info, fn ast.Node) *bodyFacts {
+	f := &bodyFacts{
+		assignCount: map[flow.Key]int{},
+		copied:      map[flow.Key]bool{},
+		ranged:      map[flow.Key]bool{},
+		rangedAny:   map[flow.Key]bool{},
+		makes:       map[flow.Key][]*ast.CallExpr{},
+		closes:      map[flow.Key]bool{},
+	}
+	body := flow.Body(fn)
+	if body == nil {
+		return f
+	}
+	var assigns []*ast.AssignStmt
+	var specs []*ast.ValueSpec
+	var ranges []*ast.RangeStmt
+	var lits []*ast.FuncLit
+	var calls []*ast.CallExpr
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			assigns = append(assigns, n)
+		case *ast.ValueSpec:
+			specs = append(specs, n)
+		case *ast.RangeStmt:
+			ranges = append(ranges, n)
+		case *ast.FuncLit:
+			lits = append(lits, n)
+		case *ast.CallExpr:
+			calls = append(calls, n)
+		}
+		return true
+	})
+	fillAssignCounts(info, f, assigns, specs, ranges, lits)
+	fillCopiedSets(info, f, assigns, specs)
+	fillRangedSets(info, f, ranges, lits)
+	fillMakesSets(info, f, assigns, specs, lits)
+	fillClosesSets(info, f, calls)
+	fillAnyRanges(info, f, ranges)
+	return f
+}
+
+func insideAny(lits []*ast.FuncLit, n ast.Node) bool {
+	for _, lit := range lits {
+		if withinNode(lit, n) {
+			return true
+		}
+	}
+	return false
+}
+
+func fillAssignCounts(info *types.Info, f *bodyFacts, assigns []*ast.AssignStmt, specs []*ast.ValueSpec, ranges []*ast.RangeStmt, lits []*ast.FuncLit) {
+	countAssignStmts(info, f, assigns, lits)
+	countValueSpecs(info, f, specs, lits)
+	countRangeTargets(info, f, ranges, lits)
+}
+
+func countAssignStmts(info *types.Info, f *bodyFacts, assigns []*ast.AssignStmt, lits []*ast.FuncLit) {
+	for _, a := range assigns {
+		if insideAny(lits, a) {
+			continue
+		}
+		for k := range assignKeys(info, a.Lhs) {
+			f.assignCount[k]++
+		}
+	}
+}
+
+func countValueSpecs(info *types.Info, f *bodyFacts, specs []*ast.ValueSpec, lits []*ast.FuncLit) {
+	for _, vs := range specs {
+		if len(vs.Values) == 0 || insideAny(lits, vs) {
+			continue
+		}
+		for k := range assignKeys(info, identExprs(vs.Names)) {
+			f.assignCount[k]++
+		}
+	}
+}
+
+func countRangeTargets(info *types.Info, f *bodyFacts, ranges []*ast.RangeStmt, lits []*ast.FuncLit) {
+	for _, r := range ranges {
+		if r.Tok != token.ASSIGN || insideAny(lits, r) {
+			continue
+		}
+		for k := range rangeAssignKeys(info, r) {
+			f.assignCount[k]++
+		}
+	}
+}
+
+func rangeAssignKeys(info *types.Info, r *ast.RangeStmt) map[flow.Key]bool {
+	var lhs []ast.Expr
+	if r.Key != nil {
+		lhs = append(lhs, r.Key)
+	}
+	if r.Value != nil {
+		lhs = append(lhs, r.Value)
+	}
+	return assignKeys(info, lhs)
+}
+
+func assignKeys(info *types.Info, lhs []ast.Expr) map[flow.Key]bool {
+	seen := map[flow.Key]bool{}
+	for _, l := range lhs {
+		if kk, ok := keyOfIdent(info, l); ok {
+			seen[kk] = true
+		}
+	}
+	return seen
+}
+
+func fillCopiedSets(info *types.Info, f *bodyFacts, assigns []*ast.AssignStmt, specs []*ast.ValueSpec) {
+	for _, a := range assigns {
+		markCopied(info, f, a.Lhs, a.Rhs)
+	}
+	for _, vs := range specs {
+		markCopied(info, f, identExprs(vs.Names), vs.Values)
+	}
+}
+
+func markCopied(info *types.Info, f *bodyFacts, lhs, rhs []ast.Expr) {
+	rhsKeys := map[flow.Key]bool{}
+	for _, e := range rhs {
+		if kk, ok := keyOfIdent(info, ast.Unparen(e)); ok {
+			rhsKeys[kk] = true
+		}
+	}
+	if len(rhsKeys) == 0 {
+		return
+	}
+	for _, l := range lhs {
+		if kk, ok := keyOfIdent(info, l); ok {
+			for rk := range rhsKeys {
+				if kk != rk {
+					f.copied[rk] = true
+				}
+			}
+		}
+	}
+}
+
+func fillRangedSets(info *types.Info, f *bodyFacts, ranges []*ast.RangeStmt, lits []*ast.FuncLit) {
+	for _, r := range ranges {
+		if insideAny(lits, r) {
+			continue
+		}
+		if !isChan(info.TypeOf(r.X)) {
+			continue
+		}
+		if kk, ok := flow.KeyOf(info, r.X); ok {
+			f.ranged[kk] = true
+		}
+	}
+}
+
+func fillMakesSets(info *types.Info, f *bodyFacts, assigns []*ast.AssignStmt, specs []*ast.ValueSpec, lits []*ast.FuncLit) {
+	collectAssignMakes(info, f, assigns, lits)
+	collectSpecMakes(info, f, specs, lits)
+}
+
+func collectAssignMakes(info *types.Info, f *bodyFacts, assigns []*ast.AssignStmt, lits []*ast.FuncLit) {
+	for _, a := range assigns {
+		if a.Tok != token.DEFINE || len(a.Rhs) != len(a.Lhs) || insideAny(lits, a) {
+			continue
+		}
+		for i, l := range a.Lhs {
+			kk, ok := keyOfIdent(info, l)
+			if !ok {
+				continue
+			}
+			if c, ok := makeCall(info, a.Rhs[i]); ok {
+				f.makes[kk] = append(f.makes[kk], c)
+			}
+		}
+	}
+}
+
+func collectSpecMakes(info *types.Info, f *bodyFacts, specs []*ast.ValueSpec, lits []*ast.FuncLit) {
+	for _, vs := range specs {
+		if len(vs.Values) != 1 || insideAny(lits, vs) {
+			continue
+		}
+		c, ok := makeCall(info, vs.Values[0])
+		if !ok {
+			continue
+		}
+		for _, id := range vs.Names {
+			if kk, ok := keyOfIdent(info, id); ok {
+				f.makes[kk] = append(f.makes[kk], c)
+			}
+		}
+	}
+}
+
+func fillClosesSets(info *types.Info, f *bodyFacts, calls []*ast.CallExpr) {
+	for _, c := range calls {
+		if kk, ok := closeKey(info, c); ok {
+			f.closes[kk] = true
+		}
+	}
+}
+
+func fillAnyRanges(info *types.Info, f *bodyFacts, ranges []*ast.RangeStmt) {
+	for _, r := range ranges {
+		if kk, ok := flow.KeyOf(info, r.X); ok {
+			f.rangedAny[kk] = true
+		}
+	}
 }

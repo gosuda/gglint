@@ -47,17 +47,19 @@ const (
 func runNilop(pass *analysis.Pass) (any, error) {
 	each(pass, func(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
 		sel := selectTargets(fn)
-		for _, k := range nilLocals(pass.TypesInfo, fn) {
+		ctx := newFnCtx(pass.TypesInfo, fn)
+		ranges := chanRanges(pass.TypesInfo, fn)
+		for _, k := range nilLocalsWith(ctx) {
 			machineReport(pass, fn, g, k, reportNilop, sel)
-			nilRangeReport(pass, fn, k)
+			nilRangeReport(pass, ranges, k)
 		}
 	})
 	return nil, nil
 }
 
-func nilRangeReport(pass *analysis.Pass, fn ast.Node, k flow.Key) {
+func nilRangeReport(pass *analysis.Pass, ranges []*ast.RangeStmt, k flow.Key) {
 	info := pass.TypesInfo
-	for _, r := range chanRanges(info, fn) {
+	for _, r := range ranges {
 		rk, ok := flow.KeyOf(info, r.X)
 		if !ok || rk != k {
 			continue
@@ -76,7 +78,8 @@ func reportNilop(pass *analysis.Pass, op chanOp, s chanState) {
 func runDoubleclose(pass *analysis.Pass) (any, error) {
 	each(pass, func(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
 		sel := selectTargets(fn)
-		for _, k := range chanLocals(pass.TypesInfo, fn) {
+		ctx := newFnCtx(pass.TypesInfo, fn)
+		for _, k := range chanLocalsWith(ctx) {
 			machineReport(pass, fn, g, k, reportDoubleclose, sel)
 		}
 	})
@@ -92,7 +95,8 @@ func reportDoubleclose(pass *analysis.Pass, op chanOp, s chanState) {
 func runSendafterclose(pass *analysis.Pass) (any, error) {
 	each(pass, func(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
 		sel := selectTargets(fn)
-		for _, k := range chanLocals(pass.TypesInfo, fn) {
+		ctx := newFnCtx(pass.TypesInfo, fn)
+		for _, k := range chanLocalsWith(ctx) {
 			machineReport(pass, fn, g, k, reportSendafterclose, sel)
 		}
 	})
@@ -112,8 +116,9 @@ func runSelfdeadlock(pass *analysis.Pass) (any, error) {
 
 func selfdeadlockCheck(pass *analysis.Pass, fn ast.Node, g *flow.Graph) {
 	info := pass.TypesInfo
-	for _, k := range chanLocals(info, fn) {
-		if !unbuffered(info, fn, k) || literalMentions(info, fn, k) || channelCopied(info, fn, k) {
+	ctx := newFnCtx(info, fn)
+	for _, k := range chanLocalsWith(ctx) {
+		if !unbufferedFacts(info, ctx.facts, k) || literalMentions(info, fn, k) || ctx.facts.isCopied(k) {
 			continue
 		}
 		if first, ok := deadPair(g, chanOps(info, fn, k, opSend|opRecv)); ok {
@@ -129,8 +134,9 @@ func runRangeunclosed(pass *analysis.Pass) (any, error) {
 
 func rangeunclosedCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 	info := pass.TypesInfo
+	ctx := newFnCtx(info, fn)
 	for _, r := range chanRanges(info, fn) {
-		k, ok := rangeUnclosedKey(info, fn, r)
+		k, ok := rangeUnclosedKeyCached(ctx, r)
 		if !ok {
 			continue
 		}
@@ -138,45 +144,45 @@ func rangeunclosedCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 	}
 }
 
-func rangeUnclosedKey(info *types.Info, fn ast.Node, r *ast.RangeStmt) (flow.Key, bool) {
-	k, ok := rangeKeyDecl(info, fn, r)
+func rangeUnclosedKeyCached(ctx *fnCtx, r *ast.RangeStmt) (flow.Key, bool) {
+	k, ok := rangeKeyDeclFacts(ctx, r)
 	if !ok {
 		return flow.Key{}, false
 	}
-	if rangeKeyClosed(info, fn, r, k) {
+	if rangeKeyClosedCached(ctx, r, k) {
 		return flow.Key{}, false
 	}
 	return k, true
 }
 
-func rangeKeyDecl(info *types.Info, fn ast.Node, r *ast.RangeStmt) (flow.Key, bool) {
+func rangeKeyDeclFacts(ctx *fnCtx, r *ast.RangeStmt) (flow.Key, bool) {
 	if _, ok := ast.Unparen(r.X).(*ast.Ident); !ok {
 		return flow.Key{}, false
 	}
-	k, ok := flow.KeyOf(info, r.X)
-	if !ok || k.Path != "" || !localKey(info, fn, k) {
+	k, ok := flow.KeyOf(ctx.info, r.X)
+	if !ok || k.Path != "" || !localKey(ctx.info, ctx.fn, k) {
 		return flow.Key{}, false
 	}
-	if _, ok := makeDef(info, fn, k); !ok {
+	if _, ok := ctx.facts.makeCalls(k); !ok {
 		return flow.Key{}, false
 	}
-	if channelCopied(info, fn, k) || reassigned(info, fn, k) {
+	if ctx.facts.isCopied(k) || ctx.facts.isReassigned(k) {
 		return flow.Key{}, false
 	}
 	return k, true
 }
 
-func rangeKeyClosed(info *types.Info, fn ast.Node, r *ast.RangeStmt, k flow.Key) bool {
-	if closesAnywhere(info, fn, k) {
+func rangeKeyClosedCached(ctx *fnCtx, r *ast.RangeStmt, k flow.Key) bool {
+	if ctx.facts.isClosed(k) {
 		return true
 	}
-	if handsOn(info, fn, k) {
+	if handsOnWith(ctx.info, ctx.fn, k, ctx.spawned) {
 		return true
 	}
-	if spawnExits(info, fn, k) {
+	if spawnExitsWith(ctx, k) {
 		return true
 	}
-	return loopExits(fn, r)
+	return loopExits(ctx.fn, r)
 }
 
 func runOrphansend(pass *analysis.Pass) (any, error) {
@@ -201,7 +207,7 @@ func reportOrphanSpawns(pass *analysis.Pass, info *types.Info, memo *orphanMemo,
 		if !memo.unbuffered(op.Key) {
 			continue
 		}
-		if channelCopied(info, memo.fn, op.Key) {
+		if memo.facts.isCopied(op.Key) {
 			continue
 		}
 		if memo.escaped(op.Key) || memo.drained(op.Key) {
@@ -218,6 +224,7 @@ func reportOrphanSpawns(pass *analysis.Pass, info *types.Info, memo *orphanMemo,
 type orphanMemo struct {
 	info    *types.Info
 	fn      ast.Node
+	facts   *bodyFacts
 	spawned map[*ast.FuncLit]bool
 	unb     map[flow.Key]bool
 	unbDone map[flow.Key]bool
@@ -234,6 +241,7 @@ func newOrphanMemo(info *types.Info, fn ast.Node) *orphanMemo {
 	return &orphanMemo{
 		info:    info,
 		fn:      fn,
+		facts:   collectBodyFacts(info, fn),
 		spawned: spawnLits(info, fn),
 		unb:     map[flow.Key]bool{},
 		unbDone: map[flow.Key]bool{},
@@ -249,7 +257,7 @@ func newOrphanMemo(info *types.Info, fn ast.Node) *orphanMemo {
 
 func (m *orphanMemo) unbuffered(k flow.Key) bool {
 	if !m.unbDone[k] {
-		m.unb[k] = unbuffered(m.info, m.fn, k)
+		m.unb[k] = unbufferedFacts(m.info, m.facts, k)
 		m.unbDone[k] = true
 	}
 	return m.unb[k]
@@ -296,27 +304,46 @@ func runFirstresult(pass *analysis.Pass) (any, error) {
 
 func firstresultCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 	info := pass.TypesInfo
+	ctx := newFnCtx(info, fn)
 	for _, st := range countLoops(fn) {
 		n, ok := loopTrip(info, st)
 		if !ok || n < 2 {
 			continue
 		}
 		for _, goStmt := range directGos(loopBody(st)) {
-			firstresultGo(pass, info, fn, st, goStmt, n)
+			firstresultGo(pass, ctx, st, goStmt, n)
 		}
 	}
 }
 
-func firstresultGo(pass *analysis.Pass, info *types.Info, fn ast.Node, loop ast.Stmt, goStmt *ast.GoStmt, n int64) {
+type fnCtx struct {
+	info     *types.Info
+	fn       ast.Node
+	facts    *bodyFacts
+	spawned  map[*ast.FuncLit]bool
+	backward map[string]bool
+}
+
+func newFnCtx(info *types.Info, fn ast.Node) *fnCtx {
+	return &fnCtx{
+		info:     info,
+		fn:       fn,
+		facts:    collectBodyFacts(info, fn),
+		spawned:  spawnLits(info, fn),
+		backward: backwardLabels(fn),
+	}
+}
+
+func firstresultGo(pass *analysis.Pass, ctx *fnCtx, loop ast.Stmt, goStmt *ast.GoStmt, n int64) {
 	lit, ok := ast.Unparen(goStmt.Call.Fun).(*ast.FuncLit)
 	if !ok {
 		return
 	}
-	op, ok := loneSend(info, lit)
+	op, ok := loneSend(ctx.info, lit)
 	if !ok {
 		return
 	}
-	r, kcap, ok := firstresultBound(info, fn, loop, op.Key)
+	r, kcap, ok := firstresultBound(ctx, loop, op.Key)
 	if !ok {
 		return
 	}
@@ -325,22 +352,22 @@ func firstresultGo(pass *analysis.Pass, info *types.Info, fn ast.Node, loop ast.
 	}
 }
 
-func firstresultBound(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) (drain, kcap int64, ok bool) {
-	kcap, ok = madeCap(info, fn, k)
+func firstresultBound(ctx *fnCtx, loop ast.Stmt, k flow.Key) (drain, kcap int64, ok bool) {
+	kcap, ok = madeCapFacts(ctx.info, ctx.facts, k)
 	if !ok {
 		return 0, 0, false
 	}
-	if makeInLoop(info, fn, loop, k) {
+	if makeInLoopFacts(ctx.facts, loop, k) {
 		return 0, 0, false
 	}
-	if hasRange(info, fn, k) {
+	if ctx.facts.hasRanged(k) {
 		return 0, 0, false
 	}
-	if handsOn(info, fn, k) || channelCopied(info, fn, k) {
+	if handsOnWith(ctx.info, ctx.fn, k, ctx.spawned) || ctx.facts.isCopied(k) {
 		return 0, 0, false
 	}
-	senders := senderLits(info, loop, k)
-	drain, ok = upperBoundRecvs(info, fn, k, senders)
+	senders := senderLits(ctx.info, loop, k)
+	drain, ok = upperBoundRecvsCached(ctx, k, senders)
 	if !ok {
 		return 0, 0, false
 	}
@@ -359,14 +386,6 @@ func senderLits(info *types.Info, loop ast.Stmt, k flow.Key) map[*ast.FuncLit]bo
 		}
 	}
 	return out
-}
-
-func makeInLoop(info *types.Info, fn ast.Node, loop ast.Stmt, k flow.Key) bool {
-	call, ok := makeDef(info, fn, k)
-	if !ok {
-		return false
-	}
-	return withinNode(loop, call)
 }
 
 func each(pass *analysis.Pass, do func(*analysis.Pass, ast.Node, *flow.Graph)) {
