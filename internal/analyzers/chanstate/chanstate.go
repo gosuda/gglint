@@ -183,21 +183,104 @@ func runOrphansend(pass *analysis.Pass) (any, error) {
 
 func orphansendCheck(pass *analysis.Pass, fn ast.Node, _ *flow.Graph) {
 	info := pass.TypesInfo
-	for _, sp := range flow.Spawns(pass, fn) {
-		for _, op := range loneSends(info, sp.Body) {
-			if !unbuffered(info, fn, op.Key) {
-				continue
-			}
-			if handsOn(info, fn, op.Key) || spawnDrains(info, fn, op.Key) {
-				continue
-			}
-			sel, recv, ok := loneSelectRecv(info, fn, op.Key)
-			if !ok || !otherReturns(sel, recv.Expr) {
-				continue
-			}
-			pass.Reportf(op.Pos, msgOrphansend, chanName(op.Key), chanName(op.Key))
+	spawns := flow.Spawns(pass, fn)
+	if len(spawns) == 0 {
+		return
+	}
+	memo := newOrphanMemo(info, fn)
+	for _, sp := range spawns {
+		reportOrphanSpawns(pass, info, memo, sp)
+	}
+}
+
+func reportOrphanSpawns(pass *analysis.Pass, info *types.Info, memo *orphanMemo, sp flow.Spawn) {
+	for _, op := range loneSends(info, sp.Body) {
+		if !memo.unbuffered(op.Key) {
+			continue
+		}
+		if memo.escaped(op.Key) || memo.drained(op.Key) {
+			continue
+		}
+		sel, recv, ok := memo.selectRecv(op.Key)
+		if !ok || !otherReturns(sel, recv.Expr) {
+			continue
+		}
+		pass.Reportf(op.Pos, msgOrphansend, chanName(op.Key), chanName(op.Key))
+	}
+}
+
+type orphanMemo struct {
+	info    *types.Info
+	fn      ast.Node
+	spawned map[*ast.FuncLit]bool
+	unb     map[flow.Key]bool
+	unbDone map[flow.Key]bool
+	hands   map[flow.Key]bool
+	drains  map[flow.Key]bool
+	done    map[flow.Key]bool
+	sels    map[flow.Key]*ast.SelectStmt
+	recvs   map[flow.Key]chanOp
+	selOk   map[flow.Key]bool
+	selDone map[flow.Key]bool
+}
+
+func newOrphanMemo(info *types.Info, fn ast.Node) *orphanMemo {
+	return &orphanMemo{
+		info:    info,
+		fn:      fn,
+		spawned: spawnLits(info, fn),
+		unb:     map[flow.Key]bool{},
+		unbDone: map[flow.Key]bool{},
+		hands:   map[flow.Key]bool{},
+		drains:  map[flow.Key]bool{},
+		done:    map[flow.Key]bool{},
+		sels:    map[flow.Key]*ast.SelectStmt{},
+		recvs:   map[flow.Key]chanOp{},
+		selOk:   map[flow.Key]bool{},
+		selDone: map[flow.Key]bool{},
+	}
+}
+
+func (m *orphanMemo) unbuffered(k flow.Key) bool {
+	if !m.unbDone[k] {
+		m.unb[k] = unbuffered(m.info, m.fn, k)
+		m.unbDone[k] = true
+	}
+	return m.unb[k]
+}
+
+func (m *orphanMemo) escaped(k flow.Key) bool {
+	m.fill(k)
+	return m.hands[k]
+}
+
+func (m *orphanMemo) drained(k flow.Key) bool {
+	m.fill(k)
+	return m.drains[k]
+}
+
+func (m *orphanMemo) fill(k flow.Key) {
+	if m.done[k] {
+		return
+	}
+	m.hands[k] = handsOnWith(m.info, m.fn, k, m.spawned)
+	m.drains[k] = spawnDrainsWith(m.info, m.spawned, k)
+	m.done[k] = true
+}
+
+func (m *orphanMemo) selectRecv(k flow.Key) (*ast.SelectStmt, chanOp, bool) {
+	if _, ok := m.sels[k]; !ok && !m.selOk[k] {
+		sel, recv, ok := loneSelectRecv(m.info, m.fn, k)
+		m.sels[k] = sel
+		m.recvs[k] = recv
+		if ok {
+			m.selOk[k] = true
 		}
 	}
+	if !m.selOk[k] && m.sels[k] == nil {
+		return nil, chanOp{}, false
+	}
+	return m.sels[k], m.recvs[k], m.selOk[k]
 }
 
 func runFirstresult(pass *analysis.Pass) (any, error) {

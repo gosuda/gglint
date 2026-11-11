@@ -39,13 +39,13 @@ func chanLocals(info *types.Info, fn ast.Node) []flow.Key {
 		out = append(out, k)
 		return true
 	})
-	return keepLocal(out, info, fn)
+	return keepLocalWith(out, info, fn, spawnLits(info, fn))
 }
 
-func keepLocal(out []flow.Key, info *types.Info, fn ast.Node) []flow.Key {
+func keepLocalWith(out []flow.Key, info *types.Info, fn ast.Node, spawned map[*ast.FuncLit]bool) []flow.Key {
 	var kept []flow.Key
 	for _, k := range out {
-		if handsOn(info, fn, k) {
+		if handsOnWith(info, fn, k, spawned) {
 			continue
 		}
 		kept = append(kept, k)
@@ -451,8 +451,8 @@ func spawnLits(info *types.Info, fn ast.Node) map[*ast.FuncLit]bool {
 	return out
 }
 
-func spawnDrains(info *types.Info, fn ast.Node, k flow.Key) bool {
-	for lit := range spawnLits(info, fn) {
+func spawnDrainsWith(info *types.Info, spawned map[*ast.FuncLit]bool, k flow.Key) bool {
+	for lit := range spawned {
 		if litDrains(info, lit, k) {
 			return true
 		}
@@ -500,13 +500,17 @@ func markGroupSpawn(info *types.Info, call *ast.CallExpr, out map[*ast.FuncLit]b
 	}
 }
 
-func handsOn(info *types.Info, fn ast.Node, k flow.Key) bool {
+func handsOnWith(info *types.Info, fn ast.Node, k flow.Key, spawned map[*ast.FuncLit]bool) bool {
 	body := flow.Body(fn)
 	if body == nil {
 		return false
 	}
-	w := &handWalker{info: info, key: k, fn: fn, spawned: spawnLits(info, fn)}
+	w := &handWalker{info: info, key: k, fn: fn, spawned: spawned}
 	return w.list(body.List, false)
+}
+
+func handsOn(info *types.Info, fn ast.Node, k flow.Key) bool {
+	return handsOnWith(info, fn, k, spawnLits(info, fn))
 }
 
 type handWalker struct {
