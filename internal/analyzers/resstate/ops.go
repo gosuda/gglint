@@ -191,6 +191,9 @@ func freeStep(t *freeTrack, lit ast.Node, sb ast.Stmt, s ostate) ostate {
 	if inner, ok := inPlaceLit(sb); ok {
 		return freeLitState(t, inner, s)
 	}
+	if stmtLitWrites(t.pass, sb, t.v) {
+		return stUnknown
+	}
 	if hasFreeRelease(t.pass, lit, sb, t.v, t.cache) {
 		return stReleased
 	}
@@ -228,6 +231,9 @@ func freeHeldNext(t *freeTrack, lit ast.Node, sb ast.Stmt, cur ostate) (ostate, 
 		}
 		return freeLitState(t, inner, cur), false
 	}
+	if stmtLitWrites(t.pass, sb, t.v) {
+		return stUnknown, false
+	}
 	if hasFreeRelease(t.pass, lit, sb, t.v, t.cache) {
 		if cur == stReleased {
 			return cur, true
@@ -244,6 +250,78 @@ func freeHeldNext(t *freeTrack, lit ast.Node, sb ast.Stmt, cur ostate) (ostate, 
 		return stUnknown, false
 	}
 	return cur, false
+}
+
+func stmtLitWrites(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if found {
+			return false
+		}
+		lit, ok := x.(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		if lit.Body == nil {
+			return false
+		}
+		if litWritesVar(pass, lit, v) {
+			found = true
+		}
+		return false
+	})
+	return found
+}
+
+func litWritesVar(pass *analysis.Pass, lit *ast.FuncLit, v *types.Var) bool {
+	writes := false
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if writes {
+			return false
+		}
+		if litWriteNode(pass, n, v) {
+			writes = true
+			return false
+		}
+		return true
+	})
+	return writes
+}
+
+func litWriteNode(pass *analysis.Pass, n ast.Node, v *types.Var) bool {
+	switch x := n.(type) {
+	case *ast.AssignStmt:
+		return lhsAssigns(pass, x.Lhs, v)
+	case *ast.IncDecStmt:
+		return incAssigns(pass, x.X, v)
+	case *ast.RangeStmt:
+		return rangeWritesVar(pass, x, v)
+	case *ast.UnaryExpr:
+		return addrWritesVar(pass, x, v)
+	}
+	return false
+}
+
+func rangeWritesVar(pass *analysis.Pass, r *ast.RangeStmt, v *types.Var) bool {
+	if id, ok := ast.Unparen(r.Key).(*ast.Ident); ok {
+		if pass.TypesInfo.Uses[id] == v || pass.TypesInfo.Defs[id] == v {
+			return true
+		}
+	}
+	if id, ok := ast.Unparen(r.Value).(*ast.Ident); ok {
+		if pass.TypesInfo.Uses[id] == v || pass.TypesInfo.Defs[id] == v {
+			return true
+		}
+	}
+	return false
+}
+
+func addrWritesVar(pass *analysis.Pass, x *ast.UnaryExpr, v *types.Var) bool {
+	if x.Op != token.AND {
+		return false
+	}
+	k, ok := flow.KeyOf(pass.TypesInfo, x.X)
+	return ok && k.Root == v
 }
 
 func freeArgsMention(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, v *types.Var, cache *freeTempCache) bool {

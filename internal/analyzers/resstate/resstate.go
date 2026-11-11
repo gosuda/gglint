@@ -438,6 +438,9 @@ func freeTransfer(pass *analysis.Pass, fn, n ast.Node, v *types.Var, s ostate, c
 	if lit, ok := inPlaceLit(n); ok {
 		return freeLitState(&freeTrack{pass: pass, fn: fn, v: v, cache: cache}, lit, s)
 	}
+	if stmtLitWrites(pass, n, v) {
+		return stUnknown
+	}
 	if hasFreeRelease(pass, fn, n, v, cache) {
 		return stReleased
 	}

@@ -180,3 +180,25 @@ func useafterfreeReportedWholeSlice() {
 	syscall.Munmap(b[:])
 	_ = b[0] // want "is used after it was freed"
 }
+
+func useafterfreeSilentNestedReassign() int {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	func() {
+		n := func() int { b = make([]byte, 4096); return len(b) }()
+		_ = n
+	}()
+	v := int(b[0])
+	syscall.Munmap(b)
+	return v
+}
+
+func useafterfreeSilentTopReassign() int {
+	b := make([]byte, 4096)
+	syscall.Munmap(b)
+	ok := func() bool { b = make([]byte, 4096); return b != nil }()
+	_ = ok
+	v := int(b[0])
+	syscall.Munmap(b)
+	return v
+}
