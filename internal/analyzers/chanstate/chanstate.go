@@ -12,15 +12,14 @@ import (
 	"github.com/gosuda/gglint/internal/inspection"
 )
 
-// Analyzers returns the seven channel lifecycle checks.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{
 		mk("nilop", "reports nil-channel ops in the declaring function; select cases and literals are not reported", runNilop),
-		mk("doubleclose", "reports a close of an owned channel already closed on every path to it", runDoubleclose),
+		mk("doubleclose", "reports a close of an owned channel already closed on every path to it; silent for a non-local channel or one handed to other code; after a deferred or spawned close or a literal mention; after an assignment or a close on only one branch", runDoubleclose),
 		mk("sendafterclose", "reports a send to an owned channel closed on every path; select sends are not reported", runSendafterclose),
 		mk("selfdeadlock", "reports a send and a receive, in either order, outside select on an owned unbuffered channel no literal mentions; code after a return is checked like live code", runSelfdeadlock),
-		mk("rangeunclosed", "reports a range over an owned made channel no code closes with no loop exit", runRangeunclosed),
-		mk("orphansend", "reports a spawned send on an owned unbuffered channel drained only by a select that returns elsewhere", runOrphansend),
+		mk("rangeunclosed", "reports a range over an owned made channel no code closes with no loop exit; silent for a field, parameter, call result, copy, or reassigned channel, for a channel handed to other code, for a spawned exit call, and for a loop body that breaks, returns, continues outward, or gotos out", runRangeunclosed),
+		mk("orphansend", "reports a spawned send on an owned unbuffered channel drained only by a select that returns elsewhere; silent for a buffered, copied, handed-off, or elsewhere-drained channel, for zero or many receives or a receive outside select, for a select with no returning other case, and for sends in select or outside a literal", runOrphansend),
 		mk("firstresult", "reports sends exceeding receives plus capacity; counts every receive site, so a one-branch leak is not reported. A function with a goto that jumps backward is not checked.", runFirstresult),
 	}
 }

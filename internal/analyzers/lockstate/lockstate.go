@@ -6,7 +6,6 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 )
 
-// Analyzers returns the six lockstate check analyzers.
 func Analyzers() []*analysis.Analyzer {
 	return []*analysis.Analyzer{
 		pairAnalyzer,
@@ -55,7 +54,7 @@ var trylockAnalyzer = &analysis.Analyzer{
 
 var selfcopyAnalyzer = &analysis.Analyzer{
 	Name:     "selfcopy",
-	Doc:      "reports locks on a copy taken through a value receiver",
+	Doc:      "reports locks on a copy taken through a value receiver; silent for a pointer or unnamed receiver, for a lock not on the receiver, for a mutex behind a pointer, and for Unlock, which is never checked",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runSelfcopy,
 }
