@@ -37,7 +37,7 @@ func checkDonespin(pass *analysis.Pass, cur inspector.Cursor) {
 	if !ok || !receivesDone(pass.TypesInfo, comm.Comm) {
 		return
 	}
-	loop, ok := pollingLoop(cur)
+	loop, ok := pollingLoop(pass, cur)
 	if !ok {
 		return
 	}
@@ -47,7 +47,7 @@ func checkDonespin(pass *analysis.Pass, cur inspector.Cursor) {
 	pass.Report(analysis.Diagnostic{Pos: sel.Pos(), End: sel.End(), Message: donespinMessage})
 }
 
-func pollingLoop(cur inspector.Cursor) (*ast.ForStmt, bool) {
+func pollingLoop(pass *analysis.Pass, cur inspector.Cursor) (*ast.ForStmt, bool) {
 	block, ok := cur.Parent().Node().(*ast.BlockStmt)
 	if !ok || len(block.List) != 1 {
 		return nil, false
@@ -56,7 +56,61 @@ func pollingLoop(cur inspector.Cursor) (*ast.ForStmt, bool) {
 	if !ok || n.Body != block || n.Init != nil || n.Post != nil {
 		return nil, false
 	}
+	if headerCanEnd(pass, n) {
+		return nil, false
+	}
 	return n, true
+}
+
+func headerCanEnd(pass *analysis.Pass, n *ast.ForStmt) bool {
+	if n.Cond == nil {
+		return false
+	}
+	assigned := assignedVarsIn(pass, n.Body)
+	return anyVarUsedIn(pass, n.Cond, assigned)
+}
+
+func assignedVarsIn(pass *analysis.Pass, body ast.Node) map[*types.Var]bool {
+	out := map[*types.Var]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range s.Lhs {
+				addAssignedVar(pass, lhs, out)
+			}
+		case *ast.IncDecStmt:
+			addAssignedVar(pass, s.X, out)
+		}
+		return true
+	})
+	return out
+}
+
+func addAssignedVar(pass *analysis.Pass, e ast.Expr, into map[*types.Var]bool) {
+	if id, ok := stripParens(e).(*ast.Ident); ok {
+		if v := varOf(pass.TypesInfo, id); v != nil {
+			into[v] = true
+		}
+	}
+}
+
+func anyVarUsedIn(pass *analysis.Pass, cond ast.Expr, vars map[*types.Var]bool) bool {
+	found := false
+	ast.Inspect(cond, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if v := varOf(pass.TypesInfo, id); v != nil && vars[v] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func labelsOf(cur inspector.Cursor) map[string]*ast.LabeledStmt {
@@ -187,8 +241,12 @@ func (w *blockWalk) walk(n ast.Node) {
 
 func (w *blockWalk) walkSelect(n ast.Node) bool {
 	sel, ok := n.(*ast.SelectStmt)
-	if !ok || !hasDefault(sel) {
+	if !ok {
 		return false
+	}
+	if !hasDefault(sel) {
+		w.blocked = true
+		return true
 	}
 	w.walkDefaultBody(sel)
 	return true
@@ -220,6 +278,9 @@ func (w *blockWalk) leavesLoop(n ast.Node) bool {
 	}
 	if b.Tok == token.GOTO {
 		return outsideLoop(target, w.loop)
+	}
+	if b.Tok == token.CONTINUE {
+		return target.Stmt != w.loop && wrapsLoop(target, w.loop)
 	}
 	if b.Tok != token.BREAK {
 		return false
@@ -284,11 +345,22 @@ func isBlockingOp(info *types.Info, n ast.Node) bool {
 	if _, ok := n.(*ast.SendStmt); ok {
 		return true
 	}
+	if r, ok := n.(*ast.RangeStmt); ok && isChannelType(info.TypeOf(r.X)) {
+		return true
+	}
 	if u, ok := n.(*ast.UnaryExpr); ok && u.Op == token.ARROW {
 		return true
 	}
 	call, ok := n.(*ast.CallExpr)
 	return ok && !isTypeConversion(info, call) && !isLenOrCap(info, call)
+}
+
+func isChannelType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	_, ok := t.Underlying().(*types.Chan)
+	return ok
 }
 
 func isTypeConversion(info *types.Info, call *ast.CallExpr) bool {

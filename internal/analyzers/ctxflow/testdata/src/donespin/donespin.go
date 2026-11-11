@@ -366,3 +366,57 @@ func donespinSilentPostLoop(ctx context.Context, n int) {
 		}
 	}
 }
+
+func donespinSilentContinueOuter(ctx context.Context, xs []int) int {
+	n := 0
+outer:
+	for range xs {
+		for {
+			select {
+			case <-ctx.Done():
+				return -1
+			default:
+				n++
+				continue outer
+			}
+		}
+	}
+	return n
+}
+
+func donespinSilentRangeDefault(ctx context.Context, ch <-chan int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			for v := range ch {
+				_ = v
+			}
+		}
+	}
+}
+
+func donespinSilentEmptySelect(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			select {}
+		}
+	}
+}
+
+func donespinSilentBodyAdvanced(ctx context.Context, n int) int {
+	i := 0
+	for i < n {
+		select {
+		case <-ctx.Done():
+			return i
+		default:
+			i++
+		}
+	}
+	return i
+}
