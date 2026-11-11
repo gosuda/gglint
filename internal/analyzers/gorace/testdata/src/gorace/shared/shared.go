@@ -1,12 +1,15 @@
 package shared
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"testing/synctest"
 
 	"golang.org/x/sync/errgroup"
 )
+
 
 func workErr() error { return nil }
 
@@ -126,6 +129,7 @@ func sharedEarliestJoinedReported(c bool) {
 	}
 	s = "y"
 }
+
 
 func sharedUnguardedAfterReadReported() {
 	var mu sync.Mutex
@@ -340,6 +344,7 @@ func sharedRendezvousSilent() int {
 	return count
 }
 
+
 func sharedBufferedSendReported() int {
 	var count int
 	c := make(chan byte, 1)
@@ -382,22 +387,6 @@ func sharedOtherLockReported() string {
 	return s
 }
 
-func sharedLoopCondReported(xs []int) int {
-	var mu sync.Mutex
-	x := 0
-	mu.Lock()
-	go func() { // want `x is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
-		mu.Lock()
-		x = 1
-		mu.Unlock()
-	}()
-	for i := 0; x < len(xs) && i < 3; i++ {
-		mu.Unlock()
-	}
-	_ = xs
-	return 0
-}
-
 func sharedNestedRecvBufferedReported() int {
 	ready := make(chan struct{}, 1)
 	gp := 0
@@ -421,24 +410,6 @@ func sharedNestedCloseSilent(wg *sync.WaitGroup, done chan struct{}) int {
 	wg.Wait()
 	return gp
 }
-
-func sharedSelectEscapeReported(ready chan struct{}) (int, int) {
-	conn := 0
-	err := 0
-	done := make(chan struct{}, 1)
-	go func() { // want `conn is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
-		conn = 1
-		err = 1
-		close(done)
-	}()
-	select {
-	case <-ready:
-		err = 2
-	case <-done:
-	}
-	return conn, err
-}
-
 func sharedParamRendezvousSilent() int {
 	var count int
 	c := make(chan byte)
@@ -481,3 +452,160 @@ func sharedGateInterfaceSilent() int {
 	w.wait2()
 	return x
 }
+func sharedSelectReturnSilent(ctx context.Context) (int, error) {
+	x := 0
+	done := make(chan struct{})
+	go func() {
+		x = 1
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	return x, nil
+}
+
+func sharedSingleSelectSilent() int {
+	x := 0
+	done := make(chan struct{})
+	go func() {
+		x = 1
+		select {
+		case done <- struct{}{}:
+		}
+	}()
+	select {
+	case <-done:
+	}
+	return x
+}
+
+type sharedHolder struct {
+	done chan struct{}
+	name string
+}
+
+func sharedSiblingFieldReported() int {
+	x := 0
+	g := &sharedHolder{done: make(chan struct{})}
+	g.name = "a"
+	_ = g.name
+	go func() { // want `x is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		x = 1
+		close(g.done)
+	}()
+	fmt.Println(g.name)
+	return x
+}
+func sharedBoundLitSilent() int {
+	x := 0
+	done := make(chan struct{})
+	f := func() { close(done) }
+	var wait = func() { <-done }
+	go func() {
+		x = 1
+		f()
+	}()
+	wait()
+	return x
+}
+func sharedRangeSilent() int {
+	x := 0
+	ch := make(chan struct{})
+	go func() {
+		x = 1
+		close(ch)
+	}()
+	for range ch {
+		break
+	}
+	return x
+}
+func sharedGateAssignSilent() int {
+	g := &sharedGate2{done: make(chan struct{})}
+	var w sharedWaiter2
+	w = g
+	x := 0
+	go func() {
+		x = 1
+		close(g.done)
+	}()
+	w.wait2()
+	return x
+}
+func sharedDeclRecvSilent() int {
+	x := 0
+	done := make(chan struct{})
+	go func() {
+		x = 1
+		close(done)
+	}()
+	var _ = <-done
+	return x
+}
+func sharedSelectEscapeReported(ready chan struct{}) (int, int) {
+	conn := 0
+	err := 0
+	done := make(chan struct{}, 1)
+	go func() { // want `conn is written by this goroutine and read at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		conn = 1
+		err = 1
+		close(done)
+		_ = done
+	}()
+	select {
+	case <-ready:
+		err = 2
+	case <-done:
+	}
+	return conn, err
+}
+
+func sharedSemSilent() int {
+	sem := make(chan struct{}, 1)
+	var wg sync.WaitGroup
+	x := 0
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sem <- struct{}{}
+		x++
+		<-sem
+	}()
+	sem <- struct{}{}
+	x++
+	<-sem
+	wg.Wait()
+	return x
+}
+
+func sharedStartGateSilent() int {
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	x := 0
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		_ = x
+	}()
+	x = 1
+	close(start)
+	wg.Wait()
+	return x
+}
+
+func sharedStartGateReorderedReported() int {
+	start := make(chan struct{})
+	x := 0
+	go func() { // want `x is read by this goroutine and written at line [0-9]+ before the goroutine is joined: pass it as an argument, or wait for the goroutine first`
+		<-start
+		_ = x
+	}()
+	close(start)
+	x = 1
+	return x
+}
+

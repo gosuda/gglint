@@ -22,14 +22,14 @@ var mapAnalyzer = &analysis.Analyzer{
 
 var fanoutAnalyzer = &analysis.Analyzer{
 	Name:     "fanout",
-	Doc:      "reports variables declared outside a loop that every goroutine the loop starts writes; indexed writes, guarded writes, and single-goroutine loops are not reported; a loop that waits per iteration or runs once is still reported; mutex-passing functions are skipped",
+	Doc:      "reports variables declared outside a loop that every goroutine the loop starts writes; indexed writes, guarded writes, and single-goroutine loops are not reported; a loop that waits per iteration or runs once is still reported; a write between a receive and a send, or a send and a receive, on a channel of capacity one in the goroutine counts as guarded, and the check does not verify that only one token exists; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runFanout,
 }
 
 var sharedAnalyzer = &analysis.Analyzer{
 	Name:     "shared",
-	Doc:      "reports a local variable that a goroutine outside a loop writes or reads without ordering, unless a join, channel handoff, or common lock orders it; sibling goroutines and package or parameter variables are not compared; mutex-passing functions are skipped",
+	Doc:      "reports a local variable a goroutine outside a loop reads or writes without ordering; silent when joined, when a common lock is held at both accesses, when both accesses lie between two operations on one channel (the check does not verify a single token), or when a signal and a wait on one channel, WaitGroup, or Cond can order them (the goroutine signals after its access and the parent waits before its own, or the reverse); a send counts as a wait only on a channel that is not known to be buffered; a mutex orders only when the parent holds it at the go statement; a call that is given the object can order and is not reported; sibling goroutines and package or parameter variables are not compared; mutex-passing functions are skipped",
 	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
 	Run:      runShared,
 }
@@ -48,7 +48,10 @@ var subtestAnalyzer = &analysis.Analyzer{
 	Run:      runSubtest,
 }
 
-const atomicPkgPath = "sync/atomic"
+const (
+	atomicPkgPath = "sync/atomic"
+	syncPkgPath   = "sync"
+)
 
 // Analyzers returns the five gorace analyzers.
 func Analyzers() []*analysis.Analyzer {
@@ -98,7 +101,7 @@ func isSyncType(t types.Type) bool {
 		return false
 	}
 	p := n.Obj().Pkg().Path()
-	return p == "sync" || p == atomicPkgPath
+	return p == syncPkgPath || p == atomicPkgPath
 }
 
 func isMapType(t types.Type) bool {
@@ -114,7 +117,7 @@ func isMutexNamed(t types.Type) bool {
 	if !ok || n.Obj().Pkg() == nil {
 		return false
 	}
-	if n.Obj().Pkg().Path() != "sync" {
+	if n.Obj().Pkg().Path() != syncPkgPath {
 		return false
 	}
 	name := n.Obj().Name()

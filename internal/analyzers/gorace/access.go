@@ -38,12 +38,6 @@ type sharedScope struct {
 	hasWaitCall bool
 }
 
-type pairOrder struct {
-	avoid    func(ast.Node) bool
-	buffered map[flow.Key]bool
-	order    litOrder
-}
-
 func writesInStmt(info *types.Info, stmt ast.Stmt) []varAccess {
 	var out []varAccess
 	ast.Inspect(stmt, func(n ast.Node) bool {
@@ -701,22 +695,34 @@ func checkShared(pass *analysis.Pass, fn ast.Node) {
 		sites[s.Site] = true
 	}
 	scope := &sharedScope{guardScope: newGuardScope(pass, fn), graph: g, fn: fn, parent: collectParent(info, fn, sites), hasWaitCall: isSynctestWait(pass, flow.Body(fn))}
-	buffered := bufferedChanKeys(pass, fn)
 	for _, s := range spawns {
 		if s.InLoop || s.Body == nil {
 			continue
 		}
-		scope.checkSpawn(s, buffered)
+		scope.checkSpawn(s)
 	}
 }
 
-func (m *sharedScope) checkSpawn(s flow.Spawn, buffered map[flow.Key]bool) {
+func (m *sharedScope) checkSpawn(s flow.Spawn) {
 	lit := collectLit(m.pass.TypesInfo, s.Body)
+	env := m.buildEnv(s)
 	for _, k := range sharedKeys(m.pass, m.fn, s, lit) {
-		if m.conflict(s, k, lit, buffered) {
+		if m.conflict(s, k, lit, env) {
 			return
 		}
 	}
+}
+
+func (m *sharedScope) buildEnv(s flow.Spawn) orderEnv {
+	litOps := collectLitOps(m.pass, m.fn, s)
+	parentOps := collectParentOps(m.pass, m.fn, s)
+	litGraph := flow.NewGraph(m.pass, s.Body)
+	buffered := bufferedSet(m.pass, m.fn)
+	heldMap := map[syncOpKey]bool{}
+	for _, k := range flow.HeldAt(m.pass, m.graph)(s.Site) {
+		heldMap[syncOpKey{root: k.Root, path: k.Path}] = true
+	}
+	return orderEnv{pass: m.pass, fn: m.fn, graph: m.graph, litGraph: litGraph, spawn: s, litOps: litOps, parentOps: parentOps, buffered: buffered, heldAtGo: heldMap}
 }
 
 func sharedKeys(pass *analysis.Pass, fn ast.Node, s flow.Spawn, lit []varAccess) []flow.Key {
@@ -735,18 +741,16 @@ func sharedKeys(pass *analysis.Pass, fn ast.Node, s flow.Spawn, lit []varAccess)
 	return order
 }
 
-func (m *sharedScope) conflict(s flow.Spawn, k flow.Key, lit []varAccess, buffered map[flow.Key]bool) bool {
+func (m *sharedScope) conflict(s flow.Spawn, k flow.Key, lit []varAccess, env orderEnv) bool {
 	if passesMutex(m.pass.TypesInfo, s.Body) {
 		return false
 	}
-	avoid := declAvoid(m.pass.TypesInfo, m.loops, k.Root, s.Site)
 	for _, a := range lit {
 		if a.key != k {
 			continue
 		}
-		po := pairOrder{avoid: avoid, buffered: buffered, order: scanLitOrder(m.pass, s.Body, lockNodeFor(a).Pos())}
 		for _, p := range m.parent {
-			if m.pairVoid(s, a, p, po) {
+			if m.pairVoid(s, a, p, env) {
 				continue
 			}
 			line := m.pass.Fset.Position(p.stmt.Pos()).Line
@@ -761,7 +765,7 @@ func disjointIndex(a, p varAccess) bool {
 	return a.idxConst && p.idxConst && a.idxVal != p.idxVal
 }
 
-func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess, po pairOrder) bool {
+func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess, env orderEnv) bool {
 	if p.key != a.key {
 		return true
 	}
@@ -771,27 +775,29 @@ func (m *sharedScope) pairVoid(s flow.Spawn, a, p varAccess, po pairOrder) bool 
 	if disjointIndex(a, p) {
 		return true
 	}
-	if !m.graph.Reaches(s.Site, p.stmt, po.avoid) {
+	if !m.graph.Reaches(s.Site, p.stmt, nil) {
 		return true
 	}
-	mapped := mappedOrder(m.pass, s, po.order)
-	if m.joinedOrders(s, p.stmt, mapped) {
+	if flow.Joined(m.pass, m.graph, s, p.stmt) {
 		return true
 	}
 	if m.bubbleJoined(s, p.stmt) {
 		return true
 	}
-	if m.handoff(s, p, po) {
+	if m.syncOrdered(env, a.stmt, p.stmt) {
 		return true
 	}
 	return commonKey(m.litHeld(s.Body, lockNodeFor(a)), m.parentHeld(lockNodeFor(p)))
 }
 
-func (m *sharedScope) joinedOrders(s flow.Spawn, at ast.Node, mapped litOrder) bool {
-	if !flow.Joined(m.pass, m.graph, s, at) {
-		return false
+func (m *sharedScope) syncOrdered(env orderEnv, ga, pa ast.Node) bool {
+	if forwardOrdered(env, ga, pa) {
+		return true
 	}
-	return !m.joinedBroken(s, at, mapped)
+	if backwardOrdered(env, ga, pa) {
+		return true
+	}
+	return tokenGuard(env, ga, pa)
 }
 
 func (m *sharedScope) bubbleJoined(s flow.Spawn, at ast.Node) bool {

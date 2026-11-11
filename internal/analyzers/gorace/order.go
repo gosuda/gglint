@@ -7,10 +7,150 @@ import (
 	"slices"
 
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/flow"
 )
+
+type syncKind int
+
+const (
+	kindSend syncKind = iota
+	kindRecv
+	kindClose
+	kindLock
+	kindUnlock
+	kindWait
+	kindDone
+	kindNotify
+	kindOpaque
+)
+const waitMethodName = "Wait"
+
+type syncOp struct {
+	node     ast.Node
+	key      syncOpKey
+	kind     syncKind
+	deferred bool
+}
+
+type syncOpKey struct {
+	root types.Object
+	path string
+}
+
+func (k syncOpKey) same(o syncOpKey) bool {
+	return k.root == o.root && k.path == o.path
+}
+
+var compatWaitKinds = map[syncKind][]syncKind{
+	kindSend:   {kindRecv},
+	kindClose:  {kindRecv},
+	kindDone:   {kindWait},
+	kindNotify: {kindWait},
+}
+
+func opaqueEither(sig, wait syncKind) bool {
+	return sig == kindOpaque || wait == kindOpaque
+}
+
+func recvSendOpen(sig, wait syncKind, knownBuffered bool) bool {
+	return sig == kindRecv && wait == kindSend && !knownBuffered
+}
+
+func compatible(sig, wait syncKind, knownBuffered bool) bool {
+	if opaqueEither(sig, wait) {
+		return true
+	}
+	if recvSendOpen(sig, wait, knownBuffered) {
+		return true
+	}
+	for _, w := range compatWaitKinds[sig] {
+		if w == wait {
+			return true
+		}
+	}
+	return false
+}
+
+func classifyNode(pass *analysis.Pass, s flow.Spawn, n ast.Node) []syncOp {
+	switch x := n.(type) {
+	case *ast.SendStmt:
+		return keyOps(x.Chan, x, kindSend, pass, s)
+	case *ast.UnaryExpr:
+		if x.Op == token.ARROW {
+			return keyOps(x.X, x, kindRecv, pass, s)
+		}
+	case *ast.RangeStmt:
+		return keyOps(x.X, x, kindRecv, pass, s)
+	case *ast.CallExpr:
+		return classifyCall(pass, s, x)
+	}
+	return nil
+}
+
+func classifyCall(pass *analysis.Pass, s flow.Spawn, call *ast.CallExpr) []syncOp {
+	if isCloseCall(pass.TypesInfo, call) {
+		if len(call.Args) != 1 {
+			return nil
+		}
+		return keyOps(call.Args[0], call, kindClose, pass, s)
+	}
+	if k, ok := flow.MethodKey(pass.TypesInfo, call); ok {
+		if isSyncObject(pass.TypesInfo, k) {
+			return methodOps(call, opKey(pass, s, k))
+		}
+		return []syncOp{{node: call, key: opKey(pass, s, k), kind: kindOpaque}}
+	}
+	for _, a := range call.Args {
+		key, ok := flow.KeyOf(pass.TypesInfo, a)
+		if !ok || !isSyncObject(pass.TypesInfo, key) {
+			continue
+		}
+		return []syncOp{{node: call, key: opKey(pass, s, key), kind: kindOpaque}}
+	}
+	return nil
+}
+
+func methodOps(call *ast.CallExpr, key syncOpKey) []syncOp {
+	kind, ok := methodKind(call.Fun)
+	if !ok {
+		kind = kindOpaque
+	}
+	return []syncOp{{node: call, key: key, kind: kind}}
+}
+
+func methodKind(fun ast.Expr) (syncKind, bool) {
+	sel, ok := ast.Unparen(fun).(*ast.SelectorExpr)
+	if !ok {
+		return kindOpaque, false
+	}
+	switch sel.Sel.Name {
+	case "Lock", "RLock":
+		return kindLock, true
+	case "Unlock", "RUnlock":
+		return kindUnlock, true
+	case waitMethodName:
+		return kindWait, true
+	case "Done":
+		return kindDone, true
+	case "Signal", "Broadcast":
+		return kindNotify, true
+	}
+	return kindOpaque, false
+}
+
+func keyOps(e ast.Expr, n ast.Node, k syncKind, pass *analysis.Pass, s flow.Spawn) []syncOp {
+	key, ok := flow.KeyOf(pass.TypesInfo, e)
+	if !ok || !isSyncObject(pass.TypesInfo, key) {
+		return nil
+	}
+	return []syncOp{{node: n, key: opKey(pass, s, key), kind: k}}
+}
+
+func opKey(pass *analysis.Pass, s flow.Spawn, k flow.Key) syncOpKey {
+	r := resolveSpawnParam(pass, s, k)
+	return syncOpKey{root: r.Root, path: r.Path}
+}
 
 func spawnCallArgs(s flow.Spawn) []ast.Expr {
 	if gs, ok := s.Site.(*ast.GoStmt); ok && gs.Call != nil {
@@ -68,9 +208,6 @@ func mappedOrder(pass *analysis.Pass, s flow.Spawn, o litOrder) litOrder {
 	o.recvAfterKeys = mappedKeys(pass, s, o.recvAfterKeys)
 	o.sendBeforeKeys = mappedKeys(pass, s, o.sendBeforeKeys)
 	o.sendAfterKeys = mappedKeys(pass, s, o.sendAfterKeys)
-	o.closeAfterKeys = mappedKeys(pass, s, o.closeAfterKeys)
-	o.helperSendKeys = mappedKeys(pass, s, o.helperSendKeys)
-	o.unlockAfterKeys = mappedKeys(pass, s, o.unlockAfterKeys)
 	return o
 }
 
@@ -274,321 +411,413 @@ func stmtList(n ast.Node) []ast.Stmt {
 	return nil
 }
 
-func (m *sharedScope) callsBetween(s flow.Spawn, at ast.Node, k flow.Key) bool {
-	return !m.graph.Reaches(s.Site, at, func(n ast.Node) bool {
-		if selectIgnores(m.fn, n, at) {
-			return false
-		}
-		return nodeCallWaitsOn(m.pass, m.fn, n, k)
-	})
-}
-
-func nodeCallWaitsOn(pass *analysis.Pass, fn, n ast.Node, k flow.Key) bool {
-	found := false
-	ast.Inspect(n, func(x ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := x.(*ast.FuncLit); ok {
-			return false
-		}
-		call, ok := x.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if callWaitsOn(pass, fn, call, k) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func callWaitsOn(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, k flow.Key) bool {
-	if calleeReceivesMapped(pass, call, k) {
-		return true
+func bufferedSet(pass *analysis.Pass, fn ast.Node) map[syncOpKey]bool {
+	out := map[syncOpKey]bool{}
+	for k := range bufferedChanKeys(pass, fn) {
+		out[syncOpKey{root: k.Root, path: k.Path}] = true
 	}
-	if calleeVisible(pass, call) {
-		return false
-	}
-	return callMentionsKey(pass, fn, call, k)
-}
-
-func calleeVisible(pass *analysis.Pass, call *ast.CallExpr) bool {
-	fn := typeutil.StaticCallee(pass.TypesInfo, call)
-	if fn == nil || fn.Pkg() == nil || pass.Pkg == nil {
-		return false
-	}
-	if fn.Pkg() != pass.Pkg {
-		return false
-	}
-	return funcDeclFor(pass, fn) != nil
-}
-
-func calleeReceivesMapped(pass *analysis.Pass, call *ast.CallExpr, k flow.Key) bool {
-	fn := typeutil.StaticCallee(pass.TypesInfo, call)
-	if fn == nil || fn.Pkg() == nil || pass.Pkg == nil {
-		return false
-	}
-	if fn.Pkg() != pass.Pkg {
-		return false
-	}
-	decl := funcDeclFor(pass, fn)
-	if decl == nil || decl.Body == nil {
-		return false
-	}
-	sub := receiverSubst(pass, call, decl)
-	return bodyReceivesMapped(pass, decl.Body, sub, k)
-}
-
-func bodyReceivesMapped(pass *analysis.Pass, body *ast.BlockStmt, sub map[*types.Var]flow.Key, k flow.Key) bool {
-	found := false
-	ast.Inspect(body, func(x ast.Node) bool {
-		if found {
-			return false
-		}
-		if _, ok := x.(*ast.FuncLit); ok {
-			return false
-		}
-		if recvMatches(pass, sub, x, k) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-func recvMatches(pass *analysis.Pass, sub map[*types.Var]flow.Key, x ast.Node, k flow.Key) bool {
-	u, ok := x.(*ast.UnaryExpr)
-	if !ok || u.Op != token.ARROW {
-		return false
-	}
-	ck, ok := flow.KeyOf(pass.TypesInfo, u.X)
-	if !ok {
-		return false
-	}
-	return substKey(sub, ck) == k
-}
-
-func receiverSubst(pass *analysis.Pass, call *ast.CallExpr, decl *ast.FuncDecl) map[*types.Var]flow.Key {
-	out := map[*types.Var]flow.Key{}
-	addRecvSubst(pass, call, decl, out)
-	addParamSubst(pass, call, decl, out)
 	return out
 }
 
-func addRecvSubst(pass *analysis.Pass, call *ast.CallExpr, decl *ast.FuncDecl, out map[*types.Var]flow.Key) {
-	if decl.Recv == nil {
-		return
-	}
-	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
-	if !ok {
-		return
-	}
-	rk, ok := flow.KeyOf(pass.TypesInfo, sel.X)
-	if !ok {
-		return
-	}
-	for _, f := range decl.Recv.List {
-		for _, n := range f.Names {
-			if v, ok := pass.TypesInfo.Defs[n].(*types.Var); ok {
-				out[v] = rk
-			}
-		}
-	}
-}
-
-func addParamSubst(pass *analysis.Pass, call *ast.CallExpr, decl *ast.FuncDecl, out map[*types.Var]flow.Key) {
-	if decl.Type == nil || decl.Type.Params == nil {
-		return
-	}
-	idx := 0
-	for _, f := range decl.Type.Params.List {
-		for _, n := range f.Names {
-			idx = addOneParam(pass, call, n, idx, out)
-		}
-	}
-}
-
-func addOneParam(pass *analysis.Pass, call *ast.CallExpr, n *ast.Ident, idx int, out map[*types.Var]flow.Key) int {
-	if idx >= len(call.Args) {
-		return idx + 1
-	}
-	if v, ok := pass.TypesInfo.Defs[n].(*types.Var); ok {
-		if ak, ok := flow.KeyOf(pass.TypesInfo, call.Args[idx]); ok {
-			out[v] = ak
-		}
-	}
-	return idx + 1
-}
-
-func substKey(sub map[*types.Var]flow.Key, k flow.Key) flow.Key {
-	root, ok := k.Root.(*types.Var)
-	if !ok {
-		return k
-	}
-	base, ok := sub[root]
-	if !ok {
-		return k
-	}
-	return flow.Key{Root: base.Root, Path: base.Path + k.Path}
-}
-
-func callMentionsKey(pass *analysis.Pass, fn ast.Node, call *ast.CallExpr, k flow.Key) bool {
-	aliases := varAliases(pass, fn)
-	if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
-		if mentionsExpr(pass, aliases, sel.X, k) {
-			return true
-		}
-	}
-	for _, a := range call.Args {
-		if mentionsExpr(pass, aliases, a, k) {
-			return true
-		}
-	}
-	return false
-}
-
-func mentionsExpr(pass *analysis.Pass, aliases map[*types.Var]*types.Var, e ast.Expr, k flow.Key) bool {
-	ck, ok := flow.KeyOf(pass.TypesInfo, e)
-	if !ok {
-		return false
-	}
-	if ck == k {
-		return true
-	}
-	cr, ok := ck.Root.(*types.Var)
-	if !ok {
-		return false
-	}
-	kr, ok := k.Root.(*types.Var)
-	if !ok {
-		return false
-	}
-	if cr == kr {
-		return true
-	}
-	if aliases[cr] == kr {
-		return true
-	}
-	if aliases[kr] == cr {
-		return true
-	}
-	return false
-}
-
-func varAliases(pass *analysis.Pass, fn ast.Node) map[*types.Var]*types.Var {
-	out := map[*types.Var]*types.Var{}
-	if fn == nil {
-		return out
-	}
+func collectParentOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn) []syncOp {
 	body := flow.Body(fn)
 	if body == nil {
-		return out
+		return nil
 	}
+	spawned := spawnedLits(pass, fn)
+	var out []syncOp
 	ast.Inspect(body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.FuncLit); ok && n != ast.Node(body) {
-			if _, ok := n.(*ast.FuncLit); ok {
+		if lit, ok := n.(*ast.FuncLit); ok && n != ast.Node(body) && spawned[lit] {
+			return false
+		}
+		if d, ok := n.(*ast.DeferStmt); ok {
+			out = append(out, deferredOps(pass, fn, s, d.Call)...)
+			return false
+		}
+		out = append(out, classifyNode(pass, s, n)...)
+		out = append(out, argLitOps(pass, s, n)...)
+		out = append(out, boundCallOps(pass, fn, s, n)...)
+		return true
+	})
+	return out
+}
+
+func collectLitOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn) []syncOp {
+	if s.Body == nil || s.Body.Body == nil {
+		return nil
+	}
+	var out []syncOp
+	ast.Inspect(s.Body.Body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if d, ok := n.(*ast.DeferStmt); ok {
+			out = append(out, deferredOps(pass, fn, s, d.Call)...)
+			return false
+		}
+		out = append(out, classifyNode(pass, s, n)...)
+		out = append(out, argLitOps(pass, s, n)...)
+		out = append(out, boundCallOps(pass, fn, s, n)...)
+		return true
+	})
+	return out
+}
+
+func deferredOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn, call *ast.CallExpr) []syncOp {
+	var out []syncOp
+	for _, o := range classifyCall(pass, s, call) {
+		o.deferred = true
+		o.node = ast.Node(call)
+		out = append(out, o)
+	}
+	for _, o := range argLitOps(pass, s, call) {
+		o.deferred = true
+		out = append(out, o)
+	}
+	for _, o := range boundCallOps(pass, fn, s, call) {
+		o.deferred = true
+		out = append(out, o)
+	}
+	return out
+}
+
+func argLitOps(pass *analysis.Pass, s flow.Spawn, n ast.Node) []syncOp {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	var out []syncOp
+	for _, a := range call.Args {
+		lit, ok := ast.Unparen(a).(*ast.FuncLit)
+		if !ok || lit.Body == nil {
+			continue
+		}
+		ast.Inspect(lit.Body, func(x ast.Node) bool {
+			if _, ok := x.(*ast.FuncLit); ok {
 				return false
 			}
+			for _, o := range classifyNode(pass, s, x) {
+				o.node = ast.Node(call)
+				out = append(out, o)
+			}
+			return true
+		})
+	}
+	return out
+}
+
+func boundCallOps(pass *analysis.Pass, fn ast.Node, s flow.Spawn, n ast.Node) []syncOp {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	lit := boundLitSync(pass, fn, call)
+	if lit == nil || lit.Body == nil {
+		return nil
+	}
+	var out []syncOp
+	ast.Inspect(lit.Body, func(x ast.Node) bool {
+		if _, ok := x.(*ast.FuncLit); ok {
+			return false
 		}
-		switch t := n.(type) {
-		case *ast.AssignStmt:
-			aliasAssign(pass, t.Lhs, t.Rhs, out)
-		case *ast.ValueSpec:
-			aliasValue(pass, t.Names, t.Values, out)
+		for _, o := range classifyNode(pass, s, x) {
+			o.node = ast.Node(call)
+			out = append(out, o)
 		}
 		return true
 	})
 	return out
 }
 
-func aliasAssign(pass *analysis.Pass, lhs, rhs []ast.Expr, out map[*types.Var]*types.Var) {
-	if len(lhs) != len(rhs) {
-		return
-	}
-	for i := range lhs {
-		aliasPair(pass, lhs[i], rhs[i], out)
-	}
+func nodeContains(outer, inner ast.Node) bool {
+	return outer.Pos() <= inner.Pos() && inner.End() <= outer.End()
 }
 
-func aliasValue(pass *analysis.Pass, names []*ast.Ident, values []ast.Expr, out map[*types.Var]*types.Var) {
-	if len(values) == 0 {
-		return
-	}
-	if len(names) != len(values) && len(values) != 1 {
-		return
-	}
-	for i, n := range names {
-		v := values[0]
-		if len(values) == len(names) {
-			v = values[i]
-		}
-		aliasPair(pass, n, v, out)
-	}
-}
-
-func aliasPair(pass *analysis.Pass, lhs, rhs ast.Expr, out map[*types.Var]*types.Var) {
-	lid, ok := ast.Unparen(lhs).(*ast.Ident)
-	if !ok {
-		return
-	}
-	rid, ok := ast.Unparen(rhs).(*ast.Ident)
-	if !ok {
-		return
-	}
-	lv, ok := pass.TypesInfo.Defs[lid].(*types.Var)
-	if !ok {
-		if lv, ok = pass.TypesInfo.Uses[lid].(*types.Var); !ok {
-			return
-		}
-	}
-	var rv *types.Var
-	if r, ok := pass.TypesInfo.Defs[rid].(*types.Var); ok {
-		rv = r
-	} else if r, ok := pass.TypesInfo.Uses[rid].(*types.Var); ok {
-		rv = r
-	} else {
-		return
-	}
-	out[lv] = rv
-}
-
-func (m *sharedScope) joinedBroken(s flow.Spawn, at ast.Node, o litOrder) bool {
-	keys := append(slices.Clone(o.closeAfterKeys), o.sendAfterKeys...)
-	if len(keys) == 0 {
+func crosses(graph *flow.Graph, from, to ast.Node, waits []syncOp) bool {
+	if graph == nil || from == nil || to == nil || len(waits) == 0 {
 		return false
 	}
-	for _, k := range keys {
-		if !m.breakingSelect(s.Site, at, k) {
-			return false
+	avoid := func(n ast.Node) bool {
+		for _, w := range waits {
+			if nodeContains(n, w.node) {
+				return true
+			}
 		}
+		return false
 	}
-	return true
+	return !graph.Reaches(from, to, avoid)
 }
 
-func (m *sharedScope) breakingSelect(site, at ast.Node, k flow.Key) bool {
+type orderEnv struct {
+	pass      *analysis.Pass
+	fn        ast.Node
+	graph     *flow.Graph
+	litGraph  *flow.Graph
+	spawn     flow.Spawn
+	litOps    []syncOp
+	parentOps []syncOp
+	buffered  map[syncOpKey]bool
+	heldAtGo  map[syncOpKey]bool
+}
+
+func aliasHolds(env orderEnv, holder, contained syncOpKey) bool {
+	v, ok := holder.root.(*types.Var)
+	if !ok || v == nil {
+		return false
+	}
+	alias := receiverAlias(env.pass, env.fn, v)
+	if alias == nil {
+		return false
+	}
+	resolved := syncOpKey{root: alias, path: holder.path}
+	return syncHolds(resolved, contained)
+}
+
+func syncHolds(holder, contained syncOpKey) bool {
+	if holder.root == nil || contained.root == nil || holder.root != contained.root {
+		return false
+	}
+	if holder.path == "" || holder.path == contained.path {
+		return true
+	}
+	if len(contained.path) <= len(holder.path) {
+		return false
+	}
+	if contained.path[:len(holder.path)] != holder.path {
+		return false
+	}
+	return contained.path[len(holder.path)] == '.'
+}
+
+func forwardOrdered(env orderEnv, ga, pa ast.Node) bool {
+	signals := signalsAfter(env.litOps, env.litGraph, ga)
+	for _, sig := range signals {
+		buf := env.buffered[sig.key]
+		waits := waitsFor(env, env.parentOps, sig.key)
+		if len(waits) == 0 {
+			continue
+		}
+		if mutexBaton(env, sig, waits, pa) {
+			return true
+		}
+		if checkSide(sig, waits, buf, keepNonLock, parentSide(env, env.spawn.Site, pa)) {
+			return true
+		}
+	}
+	return false
+}
+
+func backwardOrdered(env orderEnv, ga, pa ast.Node) bool {
+	signals := signalsAfter(env.parentOps, env.graph, pa)
+	for _, sig := range signals {
+		buf := env.buffered[sig.key]
+		waits := waitsFor(env, env.litOps, sig.key)
+		if len(waits) == 0 {
+			continue
+		}
+		if checkSide(sig, waits, buf, keepNonLockUnlock, litSide(env, ga)) {
+			return true
+		}
+	}
+	return false
+}
+
+func mutexBaton(env orderEnv, sig syncOp, waits []syncOp, pa ast.Node) bool {
+	if sig.kind != kindUnlock {
+		return false
+	}
+	if !env.heldAtGo[sig.key] {
+		return false
+	}
+	var locks []syncOp
+	for _, w := range waits {
+		if w.kind == kindLock {
+			locks = append(locks, w)
+		}
+	}
+	if len(locks) == 0 {
+		return false
+	}
+	if !crosses(env.graph, env.spawn.Site, pa, locks) {
+		return false
+	}
+	s := parentSide(env, env.spawn.Site, pa)
+	return !escapedIn(s, sig.key, locks)
+}
+
+func tokenGuard(env orderEnv, ga, pa ast.Node) bool {
+	seen := map[syncOpKey]bool{}
+	for _, o := range env.litOps {
+		if !isChanKey(env, o.key) {
+			continue
+		}
+		if seen[o.key] {
+			continue
+		}
+		seen[o.key] = true
+		if bracketedOn(env.litOps, litSide(env, ga), o.key) &&
+			bracketedOn(env.parentOps, parentSide(env, flow.Body(env.fn), pa), o.key) {
+			return true
+		}
+	}
+	return false
+}
+
+func isChanKey(env orderEnv, key syncOpKey) bool {
+	t := syncKeyType(env.pass.TypesInfo, flow.Key{Root: key.root, Path: key.path})
+	return isChanType(t)
+}
+
+func opOnKey(o syncOp, key syncOpKey) bool {
+	return o.key.same(key) || (o.kind == kindOpaque && syncHolds(o.key, key))
+}
+
+func opsOnKey(ops []syncOp, key syncOpKey) []syncOp {
+	var out []syncOp
+	for _, o := range ops {
+		if opOnKey(o, key) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+func hasOpAfter(ops []syncOp, graph *flow.Graph, access ast.Node, key syncOpKey) bool {
+	for _, o := range opsOnKey(ops, key) {
+		if o.deferred {
+			return true
+		}
+		if graph.Reaches(access, o.node, nil) {
+			return true
+		}
+	}
+	return false
+}
+
+type waitSide struct {
+	pass  *analysis.Pass
+	graph *flow.Graph
+	from  ast.Node
+	to    ast.Node
+	root  ast.Node
+	keep  func(*ast.SelectStmt) bool
+	fn    ast.Node
+	spawn flow.Spawn
+}
+
+func posOf(n ast.Node) token.Pos {
+	if n == nil {
+		return token.NoPos
+	}
+	return n.Pos()
+}
+
+func keepBetween(from, to ast.Node) func(*ast.SelectStmt) bool {
+	after, before := posOf(from), posOf(to)
+	return func(sel *ast.SelectStmt) bool { return sel.Pos() > after && before > sel.End() }
+}
+
+func keepBefore(ga ast.Node) func(*ast.SelectStmt) bool {
+	end := posOf(ga)
+	return func(sel *ast.SelectStmt) bool { return sel.Pos() < end }
+}
+
+func parentSide(env orderEnv, from, to ast.Node) waitSide {
+	body := flow.Body(env.fn)
+	return waitSide{
+		pass: env.pass, graph: env.graph, from: from, to: to,
+		root: body, keep: keepBetween(from, to),
+	}
+}
+
+func litSide(env orderEnv, to ast.Node) waitSide {
+	var entry, root ast.Node
+	if env.spawn.Body != nil {
+		entry = flow.Body(env.spawn.Body)
+		root = env.spawn.Body.Body
+	}
+	return waitSide{
+		pass: env.pass, graph: env.litGraph, from: entry, to: to,
+		root: root, keep: keepBefore(to), fn: env.fn, spawn: env.spawn,
+	}
+}
+
+func signalsAfter(ops []syncOp, graph *flow.Graph, access ast.Node) []syncOp {
+	var out []syncOp
+	for _, o := range ops {
+		if o.deferred {
+			out = append(out, o)
+			continue
+		}
+		if graph.Reaches(access, o.node, nil) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+func waitsFor(env orderEnv, ops []syncOp, key syncOpKey) []syncOp {
+	var out []syncOp
+	for _, o := range ops {
+		if o.deferred {
+			continue
+		}
+		if opOnKey(o, key) {
+			out = append(out, o)
+			continue
+		}
+		if o.kind == kindOpaque && aliasHolds(env, o.key, key) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+func keepNonLock(k syncKind) bool { return k != kindLock }
+
+func keepNonLockUnlock(k syncKind) bool { return k != kindLock && k != kindUnlock }
+
+func checkSide(sig syncOp, waits []syncOp, buf bool, keep func(syncKind) bool, s waitSide) bool {
+	var compat []syncOp
+	for _, w := range waits {
+		if !keep(w.kind) {
+			continue
+		}
+		if !compatible(sig.kind, w.kind, buf) {
+			continue
+		}
+		compat = append(compat, w)
+	}
+	if len(compat) == 0 {
+		return false
+	}
+	if !crosses(s.graph, s.from, s.to, compat) {
+		return false
+	}
+	return !escapedIn(s, sig.key, compat)
+}
+
+func escapedIn(s waitSide, key syncOpKey, waits []syncOp) bool {
+	if s.root == nil {
+		return false
+	}
+	kinds := map[syncKind]bool{}
+	for _, w := range waits {
+		kinds[w.kind] = true
+	}
 	found := false
-	ast.Inspect(m.fn, func(n ast.Node) bool {
+	ast.Inspect(s.root, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		if _, ok := n.(*ast.FuncLit); ok && n != m.fn {
+		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
 		sel, ok := n.(*ast.SelectStmt)
 		if !ok {
 			return true
 		}
-		if !m.selectBetween(site, at, sel) {
-			return true
-		}
-		if sel.Pos() <= at.Pos() && at.Pos() < sel.End() {
-			return true
-		}
-		if m.selectBreaks(sel, k) {
+		if escapeInSelect(s, sel, key, kinds) {
 			found = true
 			return false
 		}
@@ -597,25 +826,80 @@ func (m *sharedScope) breakingSelect(site, at ast.Node, k flow.Key) bool {
 	return found
 }
 
-func (m *sharedScope) selectBetween(site, at ast.Node, sel *ast.SelectStmt) bool {
-	if !m.graph.Reaches(site, sel, nil) {
+func escapeInSelect(s waitSide, sel *ast.SelectStmt, key syncOpKey, kinds map[syncKind]bool) bool {
+	if s.keep == nil || !s.keep(sel) {
 		return false
 	}
-	return m.graph.Reaches(sel, at, nil)
-}
-
-func (m *sharedScope) selectBreaks(sel *ast.SelectStmt, k flow.Key) bool {
 	for _, cc := range sel.Body.List {
-		c, ok := cc.(*ast.CommClause)
+		clause, ok := cc.(*ast.CommClause)
 		if !ok {
 			continue
 		}
-		if c.Comm == nil {
-			return true
+		if flow.EndsInReturn(clause.Body) {
+			continue
 		}
-		if !nodeRecvsOn(m.pass, c.Comm, k) {
+		if escapeClause(s, clause, key, kinds) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func escapeClause(s waitSide, clause *ast.CommClause, key syncOpKey, kinds map[syncKind]bool) bool {
+	if clause.Comm != nil && stmtWaits(s, clause.Comm, key, kinds) {
+		return true
+	}
+	for _, st := range clause.Body {
+		if stmtWaits(s, st, key, kinds) {
 			return true
 		}
 	}
 	return false
+}
+
+func stmtWaits(s waitSide, st ast.Node, key syncOpKey, kinds map[syncKind]bool) bool {
+	found := false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if nodeWaits(s, n, key, kinds) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func nodeWaits(s waitSide, n ast.Node, key syncOpKey, kinds map[syncKind]bool) bool {
+	for _, o := range callOpsOn(s.pass, s.fn, s.spawn, n) {
+		if o.key.same(key) && kinds[o.kind] {
+			return true
+		}
+	}
+	return false
+}
+
+func callOpsOn(pass *analysis.Pass, fn ast.Node, s flow.Spawn, n ast.Node) []syncOp {
+	var out []syncOp
+	out = append(out, classifyNode(pass, s, n)...)
+	out = append(out, argLitOps(pass, s, n)...)
+	out = append(out, boundCallOps(pass, fn, s, n)...)
+	return out
+}
+
+func bracketedOn(ops []syncOp, s waitSide, key syncOpKey) bool {
+	keyed := opsOnKey(ops, key)
+	if len(keyed) == 0 {
+		return false
+	}
+	if !crosses(s.graph, s.from, s.to, keyed) {
+		return false
+	}
+	if escapedIn(s, key, keyed) {
+		return false
+	}
+	return hasOpAfter(ops, s.graph, s.to, key)
 }
