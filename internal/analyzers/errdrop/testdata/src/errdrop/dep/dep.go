@@ -1,6 +1,9 @@
 package dep
 
-import "errors"
+import (
+	"errors"
+	"io"
+)
 
 func Never() error {
 	return nil
@@ -42,4 +45,12 @@ func FindSafe(s string) (*Safe, error) {
 		return nil, errors.New("empty")
 	}
 	return &Safe{}, nil
+}
+
+type Failure struct{}
+
+func (Failure) Error() string { return "dep failed" }
+
+func SaveFailure(w io.Writer) error {
+	return Failure{}
 }
