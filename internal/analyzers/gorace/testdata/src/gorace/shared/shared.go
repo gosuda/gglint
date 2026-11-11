@@ -808,3 +808,34 @@ func sharedEntryWriteHalfBracketReported() int {
 	<-done
 	return x
 }
+
+func sharedEntryIfInitWaitSilent(ch chan int) int {
+	s := 0
+	done := make(chan struct{})
+	go func() {
+		if v := <-ch; s > v {
+			s = v
+		}
+		close(done)
+	}()
+	s = 5
+	ch <- 1
+	<-done
+	return s
+}
+
+func sharedEntrySwitchInitWaitSilent(ch chan int) int {
+	s := 0
+	done := make(chan struct{})
+	go func() {
+		switch v := <-ch; s {
+		case 5:
+			s = v
+		}
+		close(done)
+	}()
+	s = 5
+	ch <- 1
+	<-done
+	return s
+}

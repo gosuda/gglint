@@ -238,13 +238,31 @@ func entryOrdered(s waitSide, waits []syncOp) bool {
 	if body == nil || len(body.List) == 0 {
 		return false
 	}
-	first := body.List[0]
+	first := entryStmt(body.List[0])
 	for _, w := range waits {
 		if isWaitStmt(first, w.node) {
 			return true
 		}
 	}
 	return false
+}
+
+func entryStmt(stmt ast.Stmt) ast.Stmt {
+	var init ast.Stmt
+	switch st := stmt.(type) {
+	case *ast.IfStmt:
+		init = st.Init
+	case *ast.SwitchStmt:
+		init = st.Init
+	case *ast.TypeSwitchStmt:
+		init = st.Init
+	case *ast.ForStmt:
+		init = st.Init
+	}
+	if init == nil {
+		return stmt
+	}
+	return init
 }
 
 func isWaitStmt(stmt, op ast.Node) bool {
