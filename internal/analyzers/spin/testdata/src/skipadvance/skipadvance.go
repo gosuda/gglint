@@ -192,6 +192,7 @@ func skipadvanceSilentCursorAdvance(words []string, n int) (out []int) {
 	}
 	return out
 }
+
 func skipadvanceReportedOuterWrite(xs []int, lastErr *error) {
 	i := 0
 	for i < len(xs) {
@@ -250,7 +251,6 @@ func skipadvanceReportedAttempts(xs []int) {
 		i++
 	}
 }
-
 
 var errTransient error = &ptrErr{}
 
@@ -345,6 +345,24 @@ func skipadvanceSilentBoundedRetryHeaderCopy(xs []int) {
 		}
 		if err := doStep(xs[i]); err != nil {
 			attempts++
+			continue
+		}
+		i++
+	}
+}
+
+func stepAttempt(i, attempt int) error {
+	if attempt < i%3 {
+		return errTransient
+	}
+	return nil
+}
+
+func skipadvanceSilentInitReadsAttempt(n int) {
+	i, attempt := 0, 0
+	for i < n {
+		if try := attempt; stepAttempt(i, try) != nil {
+			attempt++
 			continue
 		}
 		i++
