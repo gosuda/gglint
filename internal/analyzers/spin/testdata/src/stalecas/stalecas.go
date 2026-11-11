@@ -71,9 +71,9 @@ func stalecasSilentPostAssign(n *atomic.Int64) {
 	}
 }
 
-func stalecasSilentTwoStmtIf(n *atomic.Int64) {
+func stalecasReportedTwoStmtIf(n *atomic.Int64) {
 	old := n.Load()
-	for {
+	for { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		if n.CompareAndSwap(old, old+1) {
 			use(1)
 			use(2)
@@ -83,9 +83,9 @@ func stalecasSilentTwoStmtIf(n *atomic.Int64) {
 	use(old)
 }
 
-func stalecasSilentUseIf(n *atomic.Int64) {
+func stalecasReportedUseIf(n *atomic.Int64) {
 	old := n.Load()
-	for {
+	for { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		if n.CompareAndSwap(old, old+1) {
 			use(old)
 			break
@@ -398,6 +398,17 @@ outer:
 	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
 		if oneArg(1) {
 			continue outer
+		}
+	}
+	use(old)
+}
+
+func stalecasReportedOwnBreak(n *atomic.Int64, c bool) {
+	old := n.Load()
+outer:
+	for !n.CompareAndSwap(old, old+1) { // want `after one failed swap old is stale, so retries fail until another goroutine stores old back: load it again inside the loop`
+		if c {
+			break outer
 		}
 	}
 	use(old)

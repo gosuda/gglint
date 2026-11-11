@@ -407,10 +407,10 @@ func firstCheck(loop *ast.ForStmt) (*ast.IfStmt, bool) {
 }
 
 func exitsLoop(info *types.Info, check *ast.IfStmt) bool {
-	if len(check.Body.List) != 1 {
+	if len(check.Body.List) == 0 {
 		return false
 	}
-	switch t := check.Body.List[0].(type) {
+	switch t := check.Body.List[len(check.Body.List)-1].(type) {
 	case *ast.BranchStmt:
 		if t.Tok != token.BREAK {
 			return false
