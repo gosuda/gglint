@@ -1,10 +1,13 @@
 package gosec
 
 import (
+	"fmt"
 	"go/ast"
 	"go/token"
 	"io"
 	"log"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -38,7 +41,11 @@ func New(excluded []string) *analysis.Analyzer {
 			pkg := toPackage(pass)
 			scanner.CheckRules(pkg)
 			scanner.CheckAnalyzersWithSSA(pkg, result)
-			issues, _, _ := scanner.Report()
+			issues, _, errs := scanner.Report()
+			if len(errs) > 0 {
+				names := slices.Sorted(maps.Keys(errs))
+				return nil, fmt.Errorf("gosec: %s: %s", names[0], errs[names[0]][0].Err)
+			}
 			for _, iss := range issues {
 				report(pass, iss)
 			}
