@@ -293,33 +293,51 @@ func isNilGuardedAlloc(pass *analysis.Pass, stmt ast.Stmt, recv *types.Var) bool
 
 func guardBodyAllocates(pass *analysis.Pass, body *ast.BlockStmt, recv *types.Var) bool {
 	allocated := false
-	store := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if store {
+	allocatedTop := false
+	for _, stmt := range body.List {
+		if isTopRecvAssign(pass, stmt, recv) {
+			allocated = true
+			allocatedTop = true
+			continue
+		}
+		allocates, stores := subtreeEffect(pass, stmt, recv)
+		allocated = allocated || allocates
+		if stores && !allocatedTop {
 			return false
 		}
+	}
+	return allocated
+}
+
+func isTopRecvAssign(pass *analysis.Pass, stmt ast.Stmt, recv *types.Var) bool {
+	as, ok := stmt.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	for _, lhs := range as.Lhs {
+		if star, ok := ast.Unparen(lhs).(*ast.StarExpr); ok && isRecvIdent(pass, star.X, recv) {
+			return true
+		}
+	}
+	return false
+}
+
+func subtreeEffect(pass *analysis.Pass, stmt ast.Stmt, recv *types.Var) (allocates, stores bool) {
+	ast.Inspect(stmt, func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		allocates, stores := guardNodeEffect(pass, n, recv)
-		allocated = allocated || allocates
-		if stores {
-			store = true
-			return false
+		switch t := n.(type) {
+		case *ast.AssignStmt:
+			a, s := assignStmtEffect(pass, t, recv)
+			allocates = allocates || a
+			stores = stores || s
+		case *ast.IncDecStmt:
+			stores = stores || indexOnRecv(pass, t.X, recv)
 		}
 		return true
 	})
-	return allocated && !store
-}
-
-func guardNodeEffect(pass *analysis.Pass, n ast.Node, recv *types.Var) (allocates, stores bool) {
-	switch t := n.(type) {
-	case *ast.AssignStmt:
-		return assignStmtEffect(pass, t, recv)
-	case *ast.IncDecStmt:
-		return false, indexOnRecv(pass, t.X, recv)
-	}
-	return false, false
+	return allocates, stores
 }
 
 func assignStmtEffect(pass *analysis.Pass, t *ast.AssignStmt, recv *types.Var) (allocates, stores bool) {

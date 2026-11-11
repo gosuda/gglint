@@ -1452,6 +1452,43 @@ func valueSilentNestedLazyAlloc(p string) {
 	s.Add("x")
 }
 
+type errdropGuardStoreSet map[string]struct{}
+
+func (s *errdropGuardStoreSet) Add(k string) {
+	if *s == nil {
+		*s = errdropGuardStoreSet{}
+		(*s)[k] = struct{}{}
+	}
+	(*s)[k] = struct{}{}
+}
+
+func (s *errdropGuardStoreSet) Put(k string) error {
+	if *s == nil {
+		*s = errdropGuardStoreSet{}
+		(*s)[k] = struct{}{}
+		return nil
+	}
+	(*s)[k] = struct{}{}
+	return nil
+}
+
+func loadGuardStoreSet(p string) (errdropGuardStoreSet, error) {
+	if p == "" {
+		return nil, errors.New("empty")
+	}
+	return errdropGuardStoreSet{}, nil
+}
+
+func valueSilentGuardStore(p string) {
+	s, _ := loadGuardStoreSet(p)
+	s.Add("x")
+}
+
+func valueSilentGuardStoreReturn(p string) {
+	s, _ := loadGuardStoreSet(p)
+	s.Put("x")
+}
+
 type errdropNestCondSet map[string]struct{}
 
 func (s *errdropNestCondSet) Add(k string) {
