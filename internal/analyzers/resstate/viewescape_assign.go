@@ -246,8 +246,7 @@ func invalidCalls(pass *analysis.Pass, fn ast.Node, recvKey flow.Key, viewMethod
 }
 
 func invalidCallMatch(pass *analysis.Pass, call *ast.CallExpr, recvKey flow.Key, viewMethod string) bool {
-	name := viewInvalidName(pass, call)
-	if name == "" || name == viewMethod {
+	if _, ok := invalidName(pass, call, viewMethod); !ok {
 		return false
 	}
 	k, ok := flow.MethodKey(pass.TypesInfo, call)

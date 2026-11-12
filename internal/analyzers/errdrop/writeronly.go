@@ -83,8 +83,14 @@ func returnWriterOnly(pass *analysis.Pass, fd *ast.FuncDecl, sig *types.Signatur
 	if len(r.Results) == 0 {
 		return bareReturnWriterOnly(pass, fd, sig, pv, set)
 	}
-	for _, e := range r.Results {
-		if !resultWriterOnly(pass, fd, e, pv, set) {
+	if len(r.Results) == 1 {
+		return resultWriterOnly(pass, fd, r.Results[0], pv, set)
+	}
+	for i := range resultsLen(sig) {
+		if !isError(sig.Results().At(i).Type()) {
+			continue
+		}
+		if !resultWriterOnly(pass, fd, r.Results[i], pv, set) {
 			return false
 		}
 	}
@@ -96,7 +102,7 @@ func resultWriterOnly(pass *analysis.Pass, fd *ast.FuncDecl, e ast.Expr, pv *typ
 	if c := callOf(u); c != nil {
 		return callResultWriterOnly(pass, c, pv, set)
 	}
-	if isNilIdent(pass.TypesInfo, u) || !isError(pass.TypesInfo.TypeOf(u)) {
+	if isNilIdent(pass.TypesInfo, u) {
 		return true
 	}
 	id, isIdent := u.(*ast.Ident)
@@ -107,8 +113,8 @@ func resultWriterOnly(pass *analysis.Pass, fd *ast.FuncDecl, e ast.Expr, pv *typ
 }
 
 func callResultWriterOnly(pass *analysis.Pass, c *ast.CallExpr, pv *types.Var, set map[*types.Func]writerOnly) bool {
-	if !isRealCall(pass.TypesInfo, c) || !slicesHasError(pass, c) {
-		return true
+	if !isRealCall(pass.TypesInfo, c) {
+		return false
 	}
 	return isWriteOn(pass, c, pv) || forwardsWriter(pass, c, pv, set)
 }

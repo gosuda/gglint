@@ -1,5 +1,7 @@
 package closedrecv
 
+import "time"
+
 func use(any) {}
 
 
@@ -124,6 +126,14 @@ func closedrecvReportedInitPost() int {
 	sum := 0
 	for i := 0; ; i++ { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
 		sum += <-ch + i
+	}
+}
+
+func closedrecvReportedPostSleep() {
+	ch := make(chan int)
+	go func() { close(ch) }()
+	for ; ; time.Sleep(time.Second) { // want `after close, this receive from ch returns zero values at once, so the loop spins: use the two-value receive and stop when the second value is false`
+		<-ch
 	}
 }
 

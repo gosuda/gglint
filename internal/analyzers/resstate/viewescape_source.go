@@ -135,6 +135,10 @@ func viewInvalidRecvTable(name string) []viewRecv {
 	return nil
 }
 
+var viewMethodAdvances = map[string]bool{
+	viewReadSliceName: true,
+}
+
 func invalidMethod(name string) bool {
 	switch name {
 	case viewScanName, viewResetName, closeMethodWrite, viewWriteStringName, closeMethodRead, viewReadSliceName, viewPeekName, viewDiscardName:

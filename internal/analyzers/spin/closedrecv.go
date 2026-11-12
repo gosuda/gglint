@@ -12,7 +12,7 @@ import (
 
 var closedrecvAnalyzer = &analysis.Analyzer{
 	Name:     "closedrecv",
-	Doc:      "report a bare loop receiving once per pass from a local channel closed by a spawned literal before the loop when the loop has no exit and the channel is never reassigned; spin covers five shapes only",
+	Doc:      "report a bare loop receiving once per pass from a local channel closed by a spawned literal before the loop when the loop has no exit and the channel is never reassigned; a wait in the post statement does not end the loop, so that loop is reported too; spin covers five shapes only",
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      runClosedrecv,
 }

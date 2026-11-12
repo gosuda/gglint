@@ -1511,3 +1511,77 @@ func valueReportedNestCondWrite(p string) {
 	s, _ := loadNestCondSet(p) // want "s is used after the error of loadNestCondSet is dropped"
 	s.Add("x")
 }
+
+type concreteErr struct{}
+
+func (concreteErr) Error() string { return "boom" }
+
+func saveConcrete(w io.Writer) error {
+	return concreteErr{}
+}
+
+func saveConcretePtr(w io.Writer) error {
+	return &concreteErr{}
+}
+
+func saveConcreteVar(w io.Writer) error {
+	var f concreteErr
+	return f
+}
+
+func saveConcreteN(w io.Writer) (int, error) {
+	return 0, concreteErr{}
+}
+
+func makeConcrete() concreteErr {
+	return concreteErr{}
+}
+
+func saveConcreteCall(w io.Writer) error {
+	return makeConcrete()
+}
+
+func saveDerived(w io.Writer) error {
+	_, err := w.Write([]byte("x"))
+	return err
+}
+
+func writerValueReported(dst *bytes.Buffer) error {
+	saveConcrete(dst) // want "the error of saveConcrete is dropped and the next statement returns nil"
+	return nil
+}
+
+func writerPointerReported(dst *bytes.Buffer) error {
+	saveConcretePtr(dst) // want "the error of saveConcretePtr is dropped and the next statement returns nil"
+	return nil
+}
+
+func writerTypedVarReported(dst *bytes.Buffer) error {
+	saveConcreteVar(dst) // want "the error of saveConcreteVar is dropped and the next statement returns nil"
+	return nil
+}
+
+func writerTwoResultReported(dst *bytes.Buffer) error {
+	saveConcreteN(dst) // want "the error of saveConcreteN is dropped and the next statement returns nil"
+	return nil
+}
+
+func writerCallResultReported(dst *bytes.Buffer) error {
+	saveConcreteCall(dst) // want "the error of saveConcreteCall is dropped and the next statement returns nil"
+	return nil
+}
+
+func writerDepReported(dst *bytes.Buffer) error {
+	dep.SaveFailure(dst) // want "the error of dep.SaveFailure is dropped and the next statement returns nil"
+	return nil
+}
+
+func writerDerivedSilent(dst *bytes.Buffer) error {
+	saveDerived(dst)
+	return nil
+}
+
+func writerDerivedInterfaceReported(dst io.Writer) error {
+	saveDerived(dst) // want "the error of saveDerived is dropped and the next statement returns nil"
+	return nil
+}
