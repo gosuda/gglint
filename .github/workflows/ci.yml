@@ -91,3 +91,71 @@ jobs:
       - name: Self-lint
         if: matrix.check == 'lint'
         run: go run ./cmd/gglint run ./...
+
+  chanblock-default:
+    name: Default-select regression and pinned chi replay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        with:
+          go-version: 1.27.4
+          cache: false
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-chanblock-${{ hashFiles('go.mod', 'go.sum') }}
+
+      - name: Install verified uv
+        shell: bash
+        run: |
+          tools="$RUNNER_TEMP/chanblock-uv"
+          evidence="$RUNNER_TEMP/chanblock-setup"
+          archive="$RUNNER_TEMP/chanblock-uv.tar.gz"
+          mkdir -p "$tools" "$evidence"
+          curl --fail --silent --show-error --location --output "$archive" https://github.com/astral-sh/uv/releases/download/0.13.8/uv-x86_64-unknown-linux-gnu.tar.gz
+          printf '%s  %s\n' 5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91 "$archive" | sha256sum --check --strict - | tee "$evidence/uv-archive.txt"
+          tar -xzf "$archive" -C "$tools" --strip-components=1
+          printf '%s\n' "$tools" >> "$GITHUB_PATH"
+
+      - name: Verify the evidence checker
+        env:
+          HYPOTHESIS_STORAGE_DIRECTORY: ${{ runner.temp }}/chanblock-helper-state
+        shell: bash
+        run: |
+          helper=docs/validation/chanblock-default
+          evidence="$RUNNER_TEMP/chanblock-setup"
+          uv run --no-project --no-config --python 3.12 --no-python-downloads --with-requirements "$helper/test-requirements.txt" python -m pytest -q -p no:cacheprovider "$helper/test_check_ci.py" 2>&1 | tee "$evidence/pytest.log"
+          uv run --no-project --no-config --python 3.12 --no-python-downloads --with-requirements "$helper/test-requirements.txt" pyright "$helper/check_ci.py" "$helper/test_check_ci.py" 2>&1 | tee "$evidence/pyright.log"
+          uv run --no-project --no-config --python 3.12 --no-python-downloads --with-requirements "$helper/test-requirements.txt" ruff check --no-cache "$helper/check_ci.py" "$helper/test_check_ci.py" 2>&1 | tee "$evidence/ruff.log"
+          uv run --no-project --no-config --python 3.12 --no-python-downloads --with-requirements "$helper/test-requirements.txt" ruff format --check --no-cache "$helper/check_ci.py" "$helper/test_check_ci.py" 2>&1 | tee "$evidence/format.log"
+
+      - name: Download pinned dependencies
+        shell: bash
+        run: go mod download 2>&1 | tee "$RUNNER_TEMP/chanblock-setup/dependencies.log"
+
+      - name: Require exact historical failure and repaired replay
+        run: |
+          uv run --no-project --no-config --python 3.12 --no-python-downloads python docs/validation/chanblock-default/check_ci.py --repo "$GITHUB_WORKSPACE" --evidence "$RUNNER_TEMP/chanblock-default" --expected-head "$GITHUB_SHA"
+
+      - name: Retain raw regression evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: chanblock-default-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/chanblock-setup
+            ${{ runner.temp }}/chanblock-default
+          include-hidden-files: true
+          retention-days: 14
