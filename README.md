@@ -450,6 +450,17 @@ golangci-lint run ./...
 go test -count=1 -run TestCorpusBudget ./internal/precision/
 ```
 
+GitHub Actions runs these gates on pull requests, pushes to `main`, merge
+groups, and manual dispatches. Three Linux jobs separate linting, the race
+suite, and the memory-heavy vettool race tests. The race suite uses `-count=1`
+and includes the precision corpus once, so CI does not repeat the standalone
+corpus command above. All nine workers in the vettool concurrency test still
+run together.
+
+CI reads the Go version from `go.mod`, caches dependencies and build outputs
+separately for each job, and cancels superseded pull request runs. README
+changes also run the checks because the rule catalog tests read this file.
+
 ## License
 
 gglint is licensed under Apache-2.0; see [LICENSE](LICENSE). Code copied from gVisor keeps its file headers and is covered by [third_party/gvisor/LICENSE](third_party/gvisor/LICENSE). Test fixtures copied from loGos are covered by [third_party/logos/LICENSE](third_party/logos/LICENSE).

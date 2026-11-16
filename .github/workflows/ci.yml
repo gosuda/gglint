@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOFLAGS: -mod=readonly
+  GOTOOLCHAIN: local
+  # Tests spawn Go commands as well as analyzer goroutines.
+  GOMAXPROCS: "2"
+
+jobs:
+  check:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [race, vettool, lint]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Separate build caches keep the first lint job from occupying the
+      # immutable cache key needed by race-instrumented dependencies.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.check }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: |
+            go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.check }}-
+
+      # CLI and corpus tests build subprocesses with GOPROXY=off.
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Race tests and precision corpus
+        if: matrix.check == 'race'
+        shell: bash
+        run: |
+          packages=$(go list ./...)
+          test_packages=()
+          while IFS= read -r package; do
+            case "$package" in
+              github.com/gosuda/gglint/internal/vettool) ;;
+              *) test_packages+=("$package") ;;
+            esac
+          done <<< "$packages"
+          # The corpus builds gglint externally: cached test results can miss
+          # analyzer changes. Keep compilation caches, but rerun every test.
+          go test -race -count=1 -p 1 -parallel 2 -timeout 15m "${test_packages[@]}"
+
+      - name: Vettool race tests
+        if: matrix.check == 'vettool'
+        # The stress test still starts all nine workers. Only other test
+        # functions are serialized, and this package has its own runner.
+        run: go test -race -count=1 -p 1 -parallel 1 -timeout 15m ./internal/vettool
+
+      - name: Vet
+        if: matrix.check == 'lint'
+        run: go vet ./...
+
+      - name: Golangci-lint
+        if: matrix.check == 'lint'
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          args: ./...
+
+      - name: Self-lint
+        if: matrix.check == 'lint'
+        run: go run ./cmd/gglint run ./...
