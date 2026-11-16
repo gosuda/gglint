@@ -54,6 +54,15 @@ func (c *checker) callAcquires(call *ast.CallExpr) bool {
 	if isMutexMethod(method, "Lock") || isMutexMethod(method, "RLock") {
 		return true
 	}
+	// A function value or interface dispatch can hide an acquisition. Invoked
+	// literals are inspected by flow.call; conversions and builtins cannot lock.
+	if method == nil && !c.pass.TypesInfo.Types[call.Fun].IsType() {
+		_, builtin := typeutil.Callee(c.pass.TypesInfo, call).(*types.Builtin)
+		_, literal := ast.Unparen(call.Fun).(*ast.FuncLit)
+		if !builtin && !literal {
+			return true
+		}
+	}
 	fn := c.callee(call)
 	if c.acquires[fn] {
 		return true

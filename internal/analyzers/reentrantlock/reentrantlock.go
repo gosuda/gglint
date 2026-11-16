@@ -31,8 +31,8 @@ under that mutex, with a method value's receiver bound to the call-site
 operand. A go statement evaluates its function operand and arguments
 synchronously and runs the call in a new goroutine. After the spawn, a
 reachable Unlock of the held mutex invalidates the held state when that
-goroutine's synchronous call graph contains no recognized mutex acquisition.
-This models release-only same-package helpers and mutex handoffs, not every possible
+goroutine's synchronous call graph contains no recognized mutex acquisition or
+unresolved function call. This models release-only same-package helpers and mutex handoffs, not every possible
 deadlock involving other synchronization. A defer statement
 evaluates its function operand and arguments synchronously and runs the call
 at function exit; within a held region that reaches the end of its statement
