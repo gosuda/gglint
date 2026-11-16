@@ -62,7 +62,7 @@ Stderr carries only lines that start with `gglint: `:
 | `gglint: config <path>` | A config file was loaded. |
 | `gglint: N findings (mode M)` | `text` format with at least one finding. |
 | `gglint: <message>` | Usage or config error. |
-| `gglint: load: <error>` | `go vet` failed and printed no Go source position. |
+| `gglint: load: <error>` | `go vet` failed with stderr that is not fully explained by source diagnostics. |
 | `gglint: diff: <error>` | `-new-from-rev` could not run `git diff`. |
 | `gglint: internal: <error>` | An analyzer or gglint itself failed. |
 | `gglint: interrupted` | The run received SIGINT or SIGTERM. |
@@ -100,7 +100,7 @@ gglint omits `config`, `check`, `end_line`, `end_column`, `related`, and `fixes`
 
 Findings are sorted by path, line, column, token, and message. gglint prints identical findings once, because `go vet` analyzes a package and its test variant separately. Generated files never report.
 
-`typecheck` findings come from `go vet` itself: every stderr line of the form `file.go:line[:col]: message` becomes a finding. If `go vet` fails and prints no such line, gglint exits 3 with `gglint: load: <stderr>`.
+`typecheck` findings come from Go source diagnostics emitted by `go vet`, in the form `file.go:line[:col]: message`. When the command fails, gglint reports findings only if its complete stderr contains source diagnostics, their attached `have`/`want` type details, package headers, download notices, or blank lines. A tool failure or unrecognized stderr makes the run exit 3 with `gglint: load: <stderr>`, even alongside source diagnostics. The error retains the complete stderr context and stdout stays empty. Structured analyzer errors retain the `internal:` prefix.
 
 ## Configuration
 
