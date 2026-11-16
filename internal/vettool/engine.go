@@ -123,6 +123,12 @@ func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysi
 	if e.filtered(r, filename, d) || e.excluded(filename, r.Name, check, d.Message) {
 		return false
 	}
+	// A diagnostic outside both the analysis root and the package's own
+	// directory — a cgo build-cache artifact, a //line remap, a stdlib
+	// position — reports a file the user cannot act on.
+	if !insideDir(e.cfg.ExcludeBase, filename) && !insideDir(pkgDir(pass), filename) {
+		return false
+	}
 	file := fileAt(pass.Files, d.Pos)
 	if file == nil {
 		return true
@@ -155,6 +161,48 @@ func realName(fset *token.FileSet, pos token.Pos) string {
 		return f.Name()
 	}
 	return fset.Position(pos).Filename
+}
+
+// insideDir reports whether name resolves inside dir. A relative name is
+// treated as a path inside dir unless it climbs out with "..".
+func insideDir(dir, name string) bool {
+	if dir == "" || name == "" {
+		return false
+	}
+	if !filepath.IsAbs(name) {
+		return name != ".." && !strings.HasPrefix(name, ".."+string(filepath.Separator))
+	}
+	rel, err := filepath.Rel(dir, name)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// pkgDir returns the directory that holds the package's sources: the mode of
+// pass.Files' directories, excluding cgo build-cache artifacts so they cannot
+// win the vote even when they outnumber ordinary sources.
+func pkgDir(pass *analysis.Pass) string {
+	counts := map[string]int{}
+	for _, f := range pass.Files {
+		tf := pass.Fset.File(f.FileStart)
+		if tf == nil || isCgoArtifact(tf.Name()) {
+			continue
+		}
+		counts[filepath.Dir(tf.Name())]++
+	}
+	best, n := "", -1
+	for d, c := range counts {
+		if c > n || (c == n && d < best) {
+			best, n = d, c
+		}
+	}
+	return best
+}
+
+// isCgoArtifact reports whether name looks like a file cmd/cgo synthesizes
+// into the build cache: _cgo_gotypes.go, _cgo_import.go, _cgo_export.go, and
+// the *.cgo1.go copies of cgo sources.
+func isCgoArtifact(name string) bool {
+	base := filepath.Base(name)
+	return strings.HasPrefix(base, "_cgo_") || strings.HasSuffix(base, ".cgo1.go")
 }
 
 func fileAt(files []*ast.File, pos token.Pos) *ast.File {
