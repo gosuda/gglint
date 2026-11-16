@@ -347,6 +347,56 @@ func spawnedReplacement() {
 	first.Lock() // want `first is locked again while already held`
 }
 
+// The raw storage's identity is unknown. Keep the existing finding instead of
+// treating this unsafe operation as a proved release-only handoff.
+func opaqueUnsafeSource(raw unsafe.Pointer) {
+	var mu sync.Mutex
+	mu.Lock()
+	go func() {
+		stdatomic.StoreUintptr((*uintptr)(raw), 0)
+		mu.Unlock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func releaseAfterIteration(mu *sync.Mutex, iterator func(func() bool)) {
+	for range iterator {
+	}
+	mu.Unlock()
+}
+
+func rangeCallback() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterIteration(&mu, func(func() bool) { mu.Lock() })
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func releaseAfterLoop(mu *sync.Mutex) {
+	for {
+	}
+	mu.Unlock()
+}
+
+func neverReleasesAfterLoop() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterLoop(&mu)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func releaseAfterSelect(mu *sync.Mutex) {
+	select {}
+	mu.Unlock()
+}
+
+func neverReleasesAfterSelect() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterSelect(&mu)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
 func storedRelease() {
 	var mu sync.Mutex
 	mu.Lock()
