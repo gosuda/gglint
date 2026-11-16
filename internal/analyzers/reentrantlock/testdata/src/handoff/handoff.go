@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 	stdatomic "sync/atomic"
+	"unsafe"
 )
 
 func release(mu *sync.Mutex) { mu.Unlock() }
@@ -257,6 +258,93 @@ func copiedMethodExpression() {
 	v.mu.Lock()
 	go valueReceiver.release(v)
 	v.mu.Lock() // want `v\.mu is locked again while already held`
+}
+
+func releaseRebound(mu, other *sync.Mutex) {
+	mu = other
+	mu.Unlock()
+}
+
+func reboundParameter() {
+	var first, second sync.Mutex
+	first.Lock()
+	second.Lock()
+	go releaseRebound(&first, &second)
+	first.Lock() // want `first is locked again while already held`
+}
+
+type pointerReceiver struct{ sync.Mutex }
+
+func (p *pointerReceiver) release(other *pointerReceiver) {
+	p = other
+	p.Unlock()
+}
+
+func reboundReceiver() {
+	var first, second pointerReceiver
+	first.Lock()
+	second.Lock()
+	go first.release(&second)
+	first.Lock() // want `first\.Mutex is locked again while already held`
+}
+
+func releaseThroughAlias(mu, other *sync.Mutex) {
+	slot := &mu
+	*slot = other
+	mu.Unlock()
+}
+
+func aliasParameter() {
+	var first, second sync.Mutex
+	first.Lock()
+	second.Lock()
+	go releaseThroughAlias(&first, &second)
+	first.Lock() // want `first is locked again while already held`
+}
+
+func replacePointer(slot **sync.Mutex, other *sync.Mutex) { *slot = other }
+
+func releaseReplaced(mu, other *sync.Mutex) {
+	replacePointer(&mu, other)
+	mu.Unlock()
+}
+
+func replacedParameter() {
+	var first, second sync.Mutex
+	first.Lock()
+	second.Lock()
+	go releaseReplaced(&first, &second)
+	first.Lock() // want `first is locked again while already held`
+}
+
+func releaseThroughAtomic(mu, other *sync.Mutex) {
+	stdatomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&mu)), unsafe.Pointer(other))
+	mu.Unlock()
+}
+
+func atomicParameter() {
+	var first, second sync.Mutex
+	first.Lock()
+	second.Lock()
+	go releaseThroughAtomic(&first, &second)
+	first.Lock() // want `first is locked again while already held`
+}
+
+func releaseThroughSpawn(mu, other *sync.Mutex, done chan struct{}) {
+	go func() {
+		mu = other
+		close(done)
+	}()
+	<-done
+	mu.Unlock()
+}
+
+func spawnedReplacement() {
+	var first, second sync.Mutex
+	first.Lock()
+	second.Lock()
+	go releaseThroughSpawn(&first, &second, make(chan struct{}))
+	first.Lock() // want `first is locked again while already held`
 }
 
 func storedRelease() {
