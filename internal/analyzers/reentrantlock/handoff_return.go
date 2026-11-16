@@ -64,9 +64,8 @@ func (c *checker) returningStatement(stmt ast.Stmt, returning map[*types.Func]bo
 		return returnPaths{next: c.returningExpressions([]ast.Expr{stmt.Chan, stmt.Value}, returning)}
 	case *ast.DeclStmt, *ast.EmptyStmt, nil:
 		return returnPaths{next: true}
-	default:
-		return returnPaths{}
 	}
+	return returnPaths{}
 }
 
 func (c *checker) returningIf(stmt *ast.IfStmt, returning map[*types.Func]bool) returnPaths {

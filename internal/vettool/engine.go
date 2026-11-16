@@ -113,9 +113,6 @@ func reportPanics(analyzers []*analysis.Analyzer) []*analysis.Analyzer {
 }
 
 func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysis.Diagnostic) bool {
-	if !d.Pos.IsValid() {
-		return false
-	}
 	if pass.Fset.File(d.Pos) == nil {
 		return false
 	}
