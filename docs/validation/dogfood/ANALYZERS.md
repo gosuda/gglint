@@ -100,6 +100,16 @@ was retained. These are contract corrections, not expectations changed to fit
 an analyzer output. Twenty unexpected diagnostic instances across the analyzer
 and parity fixtures preceded the repair.
 
+The upstream contract is pinned to LoGOs commit
+`e5b95a2ecb5716814e52fbddddb0d6b491b6e1ce`. Its
+[Go fixture](https://github.com/gosuda/LoGOs/blob/e5b95a2ecb5716814e52fbddddb0d6b491b6e1ce/test/logos/lint/unclosed_io_closer_go.go)
+has no `unclosed_io_closer` expectation for `explicitClose`,
+`explicitReturnClose`, `explicitStmtClose`, or `nopCloser`. Its
+[rule implementation](https://github.com/gosuda/LoGOs/blob/e5b95a2ecb5716814e52fbddddb0d6b491b6e1ce/src/cmd/compile/internal/logos/lint/rule_unclosed_io_closer.go)
+recognizes those direct Close contexts and excludes `io.NopCloser` from
+resource acquisition. Restoring the old local expectations would contradict
+both upstream sources.
+
 ### Builtin panic identity
 
 The recursion checker treated the spelling `panic` as a terminating call.
