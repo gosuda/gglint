@@ -104,6 +104,11 @@ func (c *checker) releaseKeys(call *ast.CallExpr) []lockKey {
 // not release a lock. The caller evaluates go operands and arguments before
 // applying this effect, so a deadlock in those expressions still reports.
 func (c *checker) handsOff(call *ast.CallExpr, key lockKey, b binding) bool {
+	// The first held-callback pass supplies the acquisition path bound. Keep
+	// it conservative until the complete acquisition summaries are available.
+	if c.releases == nil {
+		return false
+	}
 	releases, acquires := false, false
 	f := &flow{c: c, onCall: func(call *ast.CallExpr) {
 		for _, k := range c.releaseKeys(call) {
