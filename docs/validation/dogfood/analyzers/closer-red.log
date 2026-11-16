@@ -1,0 +1,28 @@
+--- FAIL: TestAnalyzer (0.85s)
+    analysistest.go:654: closer/closer.go:58:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: closer/closer.go:105:2: unexpected diagnostic: c is never closed: defer c.Close() or return it
+    analysistest.go:654: directclose/directclose.go:11:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:17:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:22:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:28:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:34:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:40:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:46:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:53:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:60:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:67:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:72:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:100:2: unexpected diagnostic: g is never closed: defer g.Close() or return it
+    analysistest.go:654: directclose/directclose.go:108:3: unexpected diagnostic: f is never closed: defer f.Close() or return it
+    analysistest.go:654: directclose/directclose.go:120:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/closer	0.861s
+--- FAIL: TestLogosPorts (0.00s)
+    --- FAIL: TestLogosPorts/correctness_unclosed_io_closer (0.99s)
+        analysistest.go:654: correctness_unclosed_io_closer/unclosed_io_closer.go:49:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+        analysistest.go:654: correctness_unclosed_io_closer/unclosed_io_closer.go:56:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+        analysistest.go:654: correctness_unclosed_io_closer/unclosed_io_closer.go:64:2: unexpected diagnostic: f is never closed: defer f.Close() or return it
+        analysistest.go:654: correctness_unclosed_io_closer/unclosed_io_closer.go:96:2: unexpected diagnostic: c is never closed: defer c.Close() or return it
+FAIL
+FAIL	github.com/gosuda/gglint/internal/rules	1.056s
+FAIL

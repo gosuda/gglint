@@ -10,5 +10,5 @@ import (
 
 func TestAnalyzer(t *testing.T) {
 	t.Parallel()
-	analysistest.Run(t, analysistest.TestData(), reentrantlock.Analyzer, "reentrantlock", "heldpath")
+	analysistest.Run(t, analysistest.TestData(), reentrantlock.Analyzer, "reentrantlock", "heldpath", "handoff", "handoffflow")
 }

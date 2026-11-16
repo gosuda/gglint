@@ -1,0 +1,35 @@
+--- FAIL: TestAnalyzer (0.74s)
+    analysistest.go:713: handoff/handoff.go:120: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:127: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:137: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:150: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:164: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:174: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:187: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:198: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:209: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:222: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:232: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:242: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:253: no diagnostic was reported matching `v\.mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:260: no diagnostic was reported matching `v\.mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:273: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:288: no diagnostic was reported matching `first\.Mutex is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:302: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:317: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:330: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:347: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:359: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:372: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:385: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:397: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:410: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:422: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:436: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:452: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:462: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:475: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:485: no diagnostic was reported matching `mu is locked again while already held`
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/reentrantlock	0.756s
+FAIL

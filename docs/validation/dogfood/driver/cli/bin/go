@@ -1,0 +1,5 @@
+#!/bin/sh
+printf '%s\n' "$@" >> "$GGLINT_DRIVER_SMOKE_ARGS"
+cat "$GGLINT_DRIVER_SMOKE_STDOUT"
+cat "$GGLINT_DRIVER_SMOKE_STDERR" >&2
+exit 1

@@ -1,0 +1,2 @@
+# m/source [m/source.test]
+source.go:4:2: undefined: x

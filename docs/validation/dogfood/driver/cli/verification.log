@@ -1,0 +1,1 @@
+PASS: mixed run/fix exit 3 with empty stdout and exact stderr; source-only reports preserved.

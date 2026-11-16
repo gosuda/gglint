@@ -55,14 +55,14 @@ name<TAB>mode<TAB>origin<TAB>description
 
 Stdout carries only the report in the selected format, and only on exit 0 or 1. On exit 2 or 3, stdout is empty.
 
-Stderr carries only lines that start with `gglint: `:
+Stderr carries status lines and errors prefixed with `gglint: `. Captured tool errors can include further lines of context:
 
 | Line | When |
 |---|---|
 | `gglint: config <path>` | A config file was loaded. |
 | `gglint: N findings (mode M)` | `text` format with at least one finding. |
 | `gglint: <message>` | Usage or config error. |
-| `gglint: load: <error>` | `go vet` failed and printed no Go source position. |
+| `gglint: load: <error>` | `go vet` failed with stderr that is not fully explained by source diagnostics. |
 | `gglint: diff: <error>` | `-new-from-rev` could not run `git diff`. |
 | `gglint: internal: <error>` | An analyzer or gglint itself failed. |
 | `gglint: interrupted` | The run received SIGINT or SIGTERM. |
@@ -100,7 +100,7 @@ gglint omits `config`, `check`, `end_line`, `end_column`, `related`, and `fixes`
 
 Findings are sorted by path, line, column, token, and message. gglint prints identical findings once, because `go vet` analyzes a package and its test variant separately. Generated files never report.
 
-`typecheck` findings come from `go vet` itself: every stderr line of the form `file.go:line[:col]: message` becomes a finding. If `go vet` fails and prints no such line, gglint exits 3 with `gglint: load: <stderr>`.
+`typecheck` findings come from Go source diagnostics emitted by `go vet`, in the form `file.go:line[:col]: message`. When the command fails, gglint reports findings only if its complete stderr contains source diagnostics, their attached `have`/`want` type details, package headers, download notices, or blank lines. A tool failure or unrecognized stderr makes the run exit 3 with `gglint: load: <stderr>`, even alongside source diagnostics. The error retains the complete stderr context and stdout stays empty. Structured analyzer errors retain the `internal:` prefix.
 
 ## Configuration
 
@@ -367,7 +367,7 @@ The catalog has 104 rules. `basic` runs 51 of them, `standard` runs 92, and `str
 | `backingpin` | logos | Reports subslices and substrings that keep a backing store over 64 KiB alive past the function. |
 | `chanblock` | logos | Reports channel sends and receives that can block forever without a ctx.Done() case or buffer proof. |
 | `checklocks` | gvisor | Checks +checklocks and +checkatomic annotations and reports double acquisition of a held lock. |
-| `closer` | logos | Reports local io closers that are neither closed with defer nor handed on. |
+| `closer` | logos | Reports local io closers that are neither closed nor handed on. |
 | `contextcheck` | third-party | Reports functions that use a non-inherited context. |
 | `dupl` | third-party | Reports duplicated code fragments of 150 or more tokens. |
 | `errorlint` | third-party | Requires errors.Is and errors.As for error comparisons and assertions. |

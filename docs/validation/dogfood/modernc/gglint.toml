@@ -1,0 +1,6 @@
+mode = "basic"
+disable = ["appends", "asmdecl", "assign", "atomic", "bidichk", "bools", "buildtag", "cgocall", "checkconst", "checkescape", "checkimports", "checklinkname", "complexity", "composites", "copylocks", "defers", "directive", "errorsas", "framepointer", "gocheckcompilerdirectives", "gofixdirective", "hostport", "httpresponse", "ifaceassert", "ineffassign", "infinite_recursion", "loopclosure", "lostcancel", "nilfunc", "nolint", "printf", "shift", "sigchanyzer", "slog", "stackaddr", "staticcheck", "stdmethods", "stdversion", "stringintconv", "structtag", "testinggoroutine", "tests", "timeformat", "unmarshal", "unreachable", "unsafeptr", "unused", "unusedresult", "waitgroup"]
+
+[run]
+tests = true
+build_tags = []

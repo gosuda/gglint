@@ -1,0 +1,2 @@
+reentrant_withlock_deadlock	basic	logos	Reports locking a sync mutex the goroutine already holds, directly or through same-package calls.
+typecheck	basic	gglint	Reports package load and type errors; it cannot be disabled or suppressed.

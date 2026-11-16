@@ -1,0 +1,7 @@
+--- FAIL: TestAnalyzer (0.91s)
+    analysistest.go:654: handoffflow/handoffflow.go:599:20: unexpected diagnostic: call to lockAndValue locks mu while it is already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:713: handoffflow/handoffflow.go:583: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:593: no diagnostic was reported matching `mu is locked again while already held`
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/reentrantlock	0.929s
+FAIL

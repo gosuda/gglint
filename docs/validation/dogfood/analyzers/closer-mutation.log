@@ -1,0 +1,7 @@
+--- FAIL: TestAnalyzer (0.63s)
+    analysistest.go:713: directclose/directclose.go:115: no diagnostic was reported matching `f is never closed`
+    analysistest.go:713: directclose/directclose.go:89: no diagnostic was reported matching `f is never closed`
+    analysistest.go:713: directclose/directclose.go:94: no diagnostic was reported matching `f is never closed`
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/closer	0.637s
+FAIL

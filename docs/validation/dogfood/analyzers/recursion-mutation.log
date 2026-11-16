@@ -1,0 +1,10 @@
+--- FAIL: TestAnalyzer (0.63s)
+    analysistest.go:713: panicfunction/panicfunction.go:15: no diagnostic was reported matching `function branch calls itself with its own arguments on every path`
+    analysistest.go:713: panicfunction/panicfunction.go:5: no diagnostic was reported matching `function direct calls itself with its own arguments on every path`
+    analysistest.go:713: panicvariable/panicvariable.go:15: no diagnostic was reported matching `function local calls itself with its own arguments on every path`
+    analysistest.go:713: panicvariable/panicvariable.go:5: no diagnostic was reported matching `function direct calls itself with its own arguments on every path`
+    analysistest.go:654: panicbuiltin/panicbuiltin.go:14:6: unexpected diagnostic: function parenthesized calls itself with its own arguments on every path
+    analysistest.go:654: panicbuiltin/panicbuiltin.go:19:6: unexpected diagnostic: function branch calls itself with its own arguments on every path
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/infiniterecursion	0.648s
+FAIL

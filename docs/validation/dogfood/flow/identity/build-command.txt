@@ -1,0 +1,12 @@
+Working directory: /workspace/scratch/93e0563596d1/gglint
+Source state before build: clean 058707e12ac1894cd468a3c24d361aa2b9a2392b
+
+env PATH=/workspace/scratch/3a94cc7b50af/toolchains/go1.27.4/bin:/usr/bin:/bin \
+  GOENV=off GOFLAGS=-mod=readonly GOWORK=off GOPROXY=off GOSUMDB=off \
+  GOTOOLCHAIN=local CGO_ENABLED=1 GOMAXPROCS=1 GOMEMLIMIT=384MiB GOGC=30 \
+  GOCACHE=/workspace/scratch/93e0563596d1/cache-gglint \
+  GOMODCACHE=/home/agent/go/pkg/mod \
+  TMPDIR=/dev/shm/gglint-driver-build-93e0563596d1 \
+  /workspace/scratch/3a94cc7b50af/toolchains/go1.27.4/bin/go build -p=1 \
+  -o /workspace/scratch/93e0563596d1/bin/gglint-final ./cmd/gglint \
+  > /workspace/scratch/93e0563596d1/mutex-flow-evidence/flow/identity/build.log 2>&1

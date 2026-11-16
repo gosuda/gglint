@@ -1,0 +1,3 @@
+/workspace/scratch/93e0563596d1/driver-stderr-variadic.go:5:27: not enough arguments in call to f
+	have ([]bool...)
+	want (int, string, ...bool)

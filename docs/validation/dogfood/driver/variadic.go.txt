@@ -1,0 +1,5 @@
+package p
+
+func f(int, string, ...bool) {}
+
+func bad(args []bool) { f(args...) }

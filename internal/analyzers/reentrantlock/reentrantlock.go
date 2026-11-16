@@ -29,13 +29,28 @@ function that calls one of its function parameters while it holds a mutex
 runs the function literal, named function, or method value passed there
 under that mutex, with a method value's receiver bound to the call-site
 operand. A go statement evaluates its function operand and arguments
-synchronously and runs the call in a new goroutine. A defer statement
-evaluates its function operand and arguments synchronously and runs the call
+synchronously and runs the call in a new goroutine. After the spawn, a
+reachable Unlock of the held mutex invalidates the held state when that
+goroutine's synchronous call graph contains no mutex acquisition, mutation,
+loop, switch, select, branch, nested spawn, unsafe operation, or opaque call.
+An unconditional return cannot precede another statement. Only same-package
+helpers, non-mutating builtins, mutex releases, and scalar sync/atomic operations
+are modeled. Value receivers are not release aliases. This models
+mutex handoffs, not every possible deadlock involving other synchronization.
+Each alternative starts with its incoming held state; a join retains any
+continuing path that still holds the mutex. Conditional operands and loops
+that may execute zero times do not export a release. A typed constant-counter
+condition can prove first-iteration entry. Unknown branch transfers retain
+conservative state. A defer statement evaluates its function operand and
+arguments synchronously and runs the call
 at function exit; within a held region that reaches the end of its statement
 list, the call runs under the mutex unless a later deferred Unlock of the
-same mutex, written directly in that region, runs first. A function literal that
-is neither invoked directly nor passed to a parameter its callee invokes is
-skipped. Two receivers match when they name the same variable through the
+same mutex, written directly in that region, runs first. Effects inside that
+deferred call do not change the following synchronous statements. A function
+literal that is neither invoked directly nor passed to a parameter its callee invokes is
+skipped. Invoked callback arguments are checked in isolated state because
+possible invocation does not prove its execution path or order. Two receivers
+match when they name the same variable through the
 same chain of field selections, ignoring address-of and dereference; any
 other receiver never matches. A parameter that is not a pointer receives a
 copy, so a mutex reached through it never matches.`,
@@ -48,14 +63,16 @@ type heldCall struct {
 }
 
 type checker struct {
-	pass      *analysis.Pass
-	order     []*types.Func
-	decls     map[*types.Func]*ast.FuncDecl
-	invokes   map[*types.Func]map[int]bool
-	heldCalls map[*types.Func][]heldCall
-	summaries map[*types.Func]map[lockKey]bool
-	limit     int
-	reported  map[*ast.CallExpr]bool
+	pass           *analysis.Pass
+	order          []*types.Func
+	decls          map[*types.Func]*ast.FuncDecl
+	invokes        map[*types.Func]map[int]bool
+	heldCalls      map[*types.Func][]heldCall
+	summaries      map[*types.Func]map[lockKey]bool
+	releases       map[*types.Func]map[lockKey]bool
+	releaseBarrier map[*types.Func]bool
+	limit          int
+	reported       map[*ast.CallExpr]bool
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -68,7 +85,8 @@ func run(pass *analysis.Pass) (any, error) {
 	c.index()
 	c.invokes = c.findInvokes()
 	c.heldCalls = c.findHeldCalls()
-	c.summarize()
+	c.summarizeReleases(c.summarize())
+	c.heldCalls = c.findHeldCalls()
 	for _, fn := range c.order {
 		c.check(c.decls[fn])
 	}
@@ -186,11 +204,13 @@ func (c *checker) findHeldCalls() map[*types.Func][]heldCall {
 func (c *checker) regionHeldCalls(fn *types.Func, key lockKey, region, tail []ast.Stmt) []heldCall {
 	var found []heldCall
 	sig := fn.Signature()
-	f := &flow{c: c, deferHeld: c.deferHeldIn(key, region, tail), onCall: func(call *ast.CallExpr) {
-		if i := c.paramIndex(sig, call.Fun); i >= 0 {
+	f := c.heldFlow(key, binding{})
+	f.deferHeld = c.deferHeldIn(key, region, tail)
+	f.onCall = func(call *ast.CallExpr) {
+		if i := c.paramIndex(sig, call.Fun); f.state.held && i >= 0 {
 			found = append(found, heldCall{key: key, param: i})
 		}
-	}}
+	}
 	f.walkStmts(region)
 	return found
 }
@@ -201,11 +221,18 @@ func (c *checker) deferHeldIn(key lockKey, region, tail []ast.Stmt) func(*ast.De
 	}
 }
 
-func (c *checker) summarize() {
+func (c *checker) summarize() map[*types.Func][]*ast.CallExpr {
 	calls := make(map[*types.Func][]*ast.CallExpr)
+	c.releaseBarrier = make(map[*types.Func]bool)
 	for _, fn := range c.order {
 		f := &flow{c: c, onCall: func(call *ast.CallExpr) {
 			calls[fn] = append(calls[fn], call)
+		}, onGo: func(*ast.GoStmt) {
+			c.releaseBarrier[fn] = true
+		}, onBarrier: func() {
+			c.releaseBarrier[fn] = true
+		}, onStmts: func(list []ast.Stmt) {
+			c.releaseBarrier[fn] = c.releaseBarrier[fn] || hasEarlyReturn(list)
 		}}
 		f.walk(c.decls[fn].Body)
 		c.summaries[fn] = make(map[lockKey]bool)
@@ -214,6 +241,7 @@ func (c *checker) summarize() {
 	for grew := true; grew; {
 		grew = c.grow(calls)
 	}
+	return calls
 }
 
 func (c *checker) pathLimit(calls map[*types.Func][]*ast.CallExpr) int {
@@ -347,9 +375,18 @@ func (c *checker) check(decl *ast.FuncDecl) {
 }
 
 func (c *checker) heldFlow(key lockKey, b binding) *flow {
-	return &flow{c: c, onCall: func(call *ast.CallExpr) {
-		c.checkInner(call, key, b)
-	}}
+	f := &flow{c: c, state: pathState{held: true}}
+	f.onCall = func(call *ast.CallExpr) {
+		if f.state.held {
+			c.checkInner(call, key, b)
+		}
+	}
+	f.onGo = func(g *ast.GoStmt) {
+		if !f.state.opaque {
+			f.state.held = f.state.held && !c.handsOff(g.Call, key, b)
+		}
+	}
+	return f
 }
 
 func (c *checker) checkHeldCallbacks(call *ast.CallExpr) {

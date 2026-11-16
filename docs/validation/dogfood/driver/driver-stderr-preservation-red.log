@@ -1,0 +1,14 @@
+--- FAIL: TestFailedCommandsKeepOrdinarySourceReports (0.09s)
+    --- FAIL: TestFailedCommandsKeepOrdinarySourceReports/multiple_packages_and_progress (0.01s)
+        stderr_test.go:119: load: go: downloading example.com/x v1.0.0
+            	 
+            # m/a
+            # [m/a]
+            /w/a.go:4:2: undefined: x
+            # m/b [m/b.test]
+            vet: /w/b.go:5:3: undefined: y
+--- FAIL: TestFailedVetKeepsJSONAnalyzerError (0.00s)
+    stderr_test.go:163: Vet = [], load: # m/z; want no findings and the existing internal: analyzer error
+FAIL
+FAIL	github.com/gosuda/gglint/internal/driver	0.100s
+FAIL

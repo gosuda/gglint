@@ -1,0 +1,1 @@
+/workspace/scratch/3a94cc7b50af/toolchains/go1.27.4/bin/go vet -vettool=/workspace/scratch/93e0563596d1/bin/gglint-candidate -json -config=/home/agent/.cache/gglint/config-78cf13695cfcb9d89b94bbd48679ab0b478524b7b47fbbc239b9e4e27675acfe.json . 
