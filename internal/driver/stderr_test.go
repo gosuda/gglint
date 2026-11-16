@@ -38,6 +38,8 @@ func TestFailedCommandsPreserveMixedToolErrors(t *testing.T) {
 		{"method followed by fatal error", "\twant M(int) fatal error: stopped\n"},
 		{"tuple followed by a result", "\thave (int) bool\n"},
 		{"continuation followed by a comment", "\thave (int) // panic: hidden failure\n"},
+		{"comment within a tuple", "\thave (int /* panic: hidden failure */)\n"},
+		{"comment within a method", "\twant M(/* fatal error: stopped */ int) error\n"},
 		{"function body in continuation", "\thave M(int) { panic(\"hidden\") }\n"},
 	}
 	for _, tc := range cases {
@@ -122,6 +124,11 @@ func TestFailedCommandsKeepOrdinarySourceReports(t *testing.T) {
 		{
 			"package annotation within a type",
 			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M(struct{x int /* package example.com/a */})\n\t\twant M(struct{x int /* package example.com/b */})\n",
+			[]string{"T does not implement I"},
+		},
+		{
+			"struct tag containing error text",
+			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M(struct{x int `panic: hidden failure`})\n\t\twant M(struct{x int `fatal error: stopped`})\n",
 			[]string{"T does not implement I"},
 		},
 		{
