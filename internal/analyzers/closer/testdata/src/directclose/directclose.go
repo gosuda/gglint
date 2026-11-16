@@ -5,7 +5,7 @@ import "io"
 type resource struct{}
 
 func (resource) Close() error { return nil }
-func openResource() resource { return resource{} }
+func openResource() resource  { return resource{} }
 
 func assignment() {
 	f := openResource()
