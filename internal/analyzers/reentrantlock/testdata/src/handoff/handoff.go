@@ -133,6 +133,33 @@ func acquiredInLiteral() {
 	mu.Lock() // want `mu is locked again while already held`
 }
 
+func releaseAfterAliasLock(mu *sync.Mutex) {
+	alias := mu
+	alias.Lock()
+	mu.Unlock()
+}
+
+func aliasedAcquire() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterAliasLock(&mu)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func pointer(mu *sync.Mutex) *sync.Mutex { return mu }
+
+func releaseAfterIndirectLock(mu *sync.Mutex) {
+	pointer(mu).Lock()
+	mu.Unlock()
+}
+
+func indirectAcquire() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterIndirectLock(&mu)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
 func storedRelease() {
 	var mu sync.Mutex
 	mu.Lock()
