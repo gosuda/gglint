@@ -32,9 +32,10 @@ operand. A go statement evaluates its function operand and arguments
 synchronously and runs the call in a new goroutine. After the spawn, a
 reachable Unlock of the held mutex invalidates the held state when that
 goroutine's synchronous call graph contains no mutex acquisition, mutation,
-loop, select, nested spawn, unsafe operation, or opaque call. Only same-package helpers,
-non-mutating builtins, mutex releases, and scalar sync/atomic operations are
-modeled. Value receivers are not release aliases. This models
+loop, switch, select, branch, nested spawn, unsafe operation, or opaque call.
+An unconditional return cannot precede another statement. Only same-package
+helpers, non-mutating builtins, mutex releases, and scalar sync/atomic operations
+are modeled. Value receivers are not release aliases. This models
 mutex handoffs, not every possible deadlock involving other synchronization.
 A defer statement
 evaluates its function operand and arguments synchronously and runs the call
@@ -224,6 +225,8 @@ func (c *checker) summarize() map[*types.Func][]*ast.CallExpr {
 			c.releaseBarrier[fn] = true
 		}, onBarrier: func() {
 			c.releaseBarrier[fn] = true
+		}, onStmts: func(list []ast.Stmt) {
+			c.releaseBarrier[fn] = c.releaseBarrier[fn] || hasEarlyReturn(list)
 		}}
 		f.walk(c.decls[fn].Body)
 		c.summaries[fn] = make(map[lockKey]bool)

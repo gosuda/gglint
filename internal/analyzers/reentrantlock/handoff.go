@@ -83,7 +83,7 @@ func (c *checker) safeCallOperand(call *ast.CallExpr) bool {
 		return false
 	}
 	switch builtin.Name() {
-	case "append", "clear", "copy", "delete":
+	case "append", "clear", "copy", "delete", "panic", "recover":
 		return false
 	default:
 		return true
@@ -96,6 +96,33 @@ func safeConversionType(t types.Type) bool {
 	}
 	basic, ok := t.Underlying().(*types.Basic)
 	return !ok || basic.Kind() != types.UnsafePointer
+}
+
+// Do not infer a release from a statement after an unconditional return. This
+// recognizes straight-line blocks and if/else arms; other branch constructs
+// already prevent release inference rather than requiring a control-flow model.
+func hasEarlyReturn(list []ast.Stmt) bool {
+	for i, s := range list {
+		if i+1 < len(list) && alwaysReturns(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func alwaysReturns(s ast.Stmt) bool {
+	switch s := s.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.BlockStmt:
+		return len(s.List) != 0 && alwaysReturns(s.List[len(s.List)-1])
+	case *ast.IfStmt:
+		return s.Else != nil && alwaysReturns(s.Body) && alwaysReturns(s.Else)
+	case *ast.LabeledStmt:
+		return alwaysReturns(s.Stmt)
+	default:
+		return false
+	}
 }
 
 // Scalar atomics cannot retarget a pointer carrier. Pointer and Value atomics
@@ -174,6 +201,8 @@ func (c *checker) handsOff(call *ast.CallExpr, key lockKey, b binding) bool {
 		blocked = true
 	}, onBarrier: func() {
 		blocked = true
+	}, onStmts: func(list []ast.Stmt) {
+		blocked = blocked || hasEarlyReturn(list)
 	}}
 	f.call(call)
 	return releases && !blocked

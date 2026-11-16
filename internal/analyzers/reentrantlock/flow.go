@@ -37,7 +37,8 @@ func (f *flow) visit(n ast.Node) bool {
 	case *ast.CallExpr:
 		f.call(n)
 		return false
-	case *ast.AssignStmt, *ast.IncDecStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SelectStmt:
+	case *ast.AssignStmt, *ast.IncDecStmt, *ast.ForStmt, *ast.RangeStmt,
+		*ast.SelectStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.BranchStmt:
 		f.barrier()
 	case *ast.ValueSpec:
 		if len(n.Values) != 0 {
