@@ -170,6 +170,30 @@ func readAcquireBeforeRelease() {
 	mu.Lock() // want `mu is locked again while already held`
 }
 
+func callbackThenRelease(mu *sync.Mutex, before func()) {
+	before()
+	mu.Unlock()
+}
+
+func unknownCallback() {
+	var mu sync.Mutex
+	mu.Lock()
+	before := func() { mu.Lock() }
+	go callbackThenRelease(&mu, before)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func indirectCallback() {
+	var mu sync.Mutex
+	mu.Lock()
+	before := func() { mu.Lock() }
+	go func() {
+		before()
+		mu.Unlock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
 func storedRelease() {
 	var mu sync.Mutex
 	mu.Lock()
