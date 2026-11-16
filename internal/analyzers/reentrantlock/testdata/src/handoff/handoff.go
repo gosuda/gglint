@@ -160,6 +160,16 @@ func indirectAcquire() {
 	mu.Lock() // want `mu is locked again while already held`
 }
 
+func readAcquireBeforeRelease() {
+	var mu sync.RWMutex
+	mu.Lock()
+	go func() {
+		mu.RLock()
+		mu.Unlock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
 func storedRelease() {
 	var mu sync.Mutex
 	mu.Lock()
