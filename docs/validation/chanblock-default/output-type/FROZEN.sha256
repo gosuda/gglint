@@ -1,0 +1,6 @@
+d9580b25375ccef44d53f2b227fdf7eb71cce4e275a72a6089865d2fd47dd8e4  docs/validation/chanblock-default/output-type/README.md
+1d983d8eb9a6e990159cb6546f8066aef7f90e088ea84071e8d08d8d6c64bd97  docs/validation/chanblock-default/output-type/failed-hosted-evidence.tar.gz
+02e79608d2913039bab552b8084afaed593f873378d3190f7269aaa5eb9bb061  docs/validation/chanblock-default/output-type/frozen.json
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  docs/validation/chanblock-default/output-type/red.stderr
+2b2ea4dc6f557ab2b7222e1e4ac31401a692ac3f2f5f7b400a9e0755386c5b5b  docs/validation/chanblock-default/output-type/red.stdout
+3fa07e626803beb0ca438ba82df81040fdce41c6f5a2736f626c9b60dafb84ba  docs/validation/chanblock-default/test_check_ci.py

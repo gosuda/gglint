@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
 import sys
+import tarfile
 from pathlib import Path
 
 import check_ci as check
@@ -16,6 +18,97 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 Event = dict[str, object]
+
+
+@pytest.fixture(scope="module")
+def hosted_evidence() -> dict[str, bytes]:
+    directory = Path(__file__).parent / "output-type"
+    manifest_path = directory / "frozen.json"
+    assert check.digest(manifest_path) == (
+        "02e79608d2913039bab552b8084afaed593f873378d3190f7269aaa5eb9bb061"
+    )
+    manifest = check.mapping(check.decode(manifest_path.read_text()))
+    archive = directory / "failed-hosted-evidence.tar.gz"
+    assert check.digest(archive) == (
+        "1d983d8eb9a6e990159cb6546f8066aef7f90e088ea84071e8d08d8d6c64bd97"
+    )
+    files = check.mapping(manifest["files"])
+    result: dict[str, bytes] = {}
+    with tarfile.open(archive, "r:gz") as source:
+        for entry in source:
+            assert entry.isfile() and entry.name not in result
+            stream = source.extractfile(entry)
+            assert stream is not None
+            with stream:
+                data = stream.read()
+            expected = check.mapping(files[entry.name])
+            assert hashlib.sha256(data).hexdigest() == expected["sha256"]
+            assert len(data) == expected["bytes"]
+            result[entry.name] = data
+    assert set(result) == set(files)
+    return result
+
+
+def hosted_stream(evidence: dict[str, bytes], label: str) -> tuple[str, bytes, int]:
+    prefix = f"artifact/chanblock-default/{label}"
+    receipt = check.mapping(check.decode(evidence[f"{prefix}.run.json"].decode()))
+    stdout, stderr = evidence[f"{prefix}.stdout"], evidence[f"{prefix}.stderr"]
+    assert receipt["timed_out"] is False and receipt["error"] == ""
+    assert hashlib.sha256(stdout).hexdigest() == receipt["stdout_sha256"]
+    assert hashlib.sha256(stderr).hexdigest() == receipt["stderr_sha256"]
+    code = receipt["returncode"]
+    assert type(code) is int
+    return stdout.decode(), stderr, code
+
+
+@pytest.mark.parametrize(
+    "label,package,names,code",
+    (
+        (
+            "old-production",
+            check.ANALYZER,
+            frozenset((check.ROOT, check.NEGATIVE)),
+            1,
+        ),
+        ("positive", check.ANALYZER, check.ANALYZER_NAMES, 0),
+        ("race", check.ANALYZER, check.ANALYZER_NAMES, 0),
+        ("parity", check.RULES, check.PARITY_NAMES, 0),
+    ),
+)
+def test_observed_go1274_test_streams(
+    hosted_evidence: dict[str, bytes],
+    label: str,
+    package: str,
+    names: frozenset[str],
+    code: int,
+) -> None:
+    stdout, stderr, recorded_code = hosted_stream(hosted_evidence, label)
+    assert recorded_code == code
+    check.check_test_output(
+        stdout,
+        stderr,
+        code,
+        package,
+        names,
+        negative=label == "old-production",
+    )
+
+
+@pytest.mark.parametrize("mode", ("basic", "standard", "strict"))
+@pytest.mark.parametrize("copy_name", ("primary", "repeat"))
+def test_observed_six_chi_comparisons(
+    hosted_evidence: dict[str, bytes], mode: str, copy_name: str
+) -> None:
+    stdout, stderr, code = hosted_stream(hosted_evidence, f"chi-{mode}-{copy_name}")
+    directory = Path(__file__).parent
+    expected = (
+        check.decode((directory / "expected-chi-strict-findings.json").read_text())
+        if mode == "strict"
+        else check.mapping(
+            check.decode((directory / f"evidence/gglint-{mode}.stdout").read_text())
+        )["findings"]
+    )
+    check.check_cli_output(stdout, stderr, code, mode, "../chi.toml", expected)
 
 
 def event(
@@ -114,6 +207,59 @@ def test_exact_positive_and_negative() -> None:
         check.RULES,
         check.PARITY_NAMES,
     )
+
+
+@pytest.mark.parametrize("output_type", ("", "frame", "error", "error-continue"))
+def test_documented_output_types(output_type: str) -> None:
+    events = negative()
+    events[3]["OutputType"] = output_type
+    accept(events, old=True)
+
+
+@pytest.mark.parametrize(
+    "value", (None, False, 1, 0.0, [], {}, "unknown", "Frame", "error\n")
+)
+def test_invalid_output_type(value: object) -> None:
+    events = negative()
+    events[3]["OutputType"] = value
+    with pytest.raises((TypeError, ValueError)):
+        accept(events, old=True)
+
+
+@pytest.mark.parametrize("action", ("start", "run", "pause", "cont", "pass"))
+@pytest.mark.parametrize("output_type", ("", "frame", "error", "error-continue"))
+def test_output_type_requires_output_action(action: str, output_type: str) -> None:
+    events = positive()
+    next(item for item in events if item["Action"] == action)["OutputType"] = (
+        output_type
+    )
+    with pytest.raises(ValueError):
+        accept(events)
+
+
+def test_output_type_requires_output_text() -> None:
+    events = negative()
+    events[3]["OutputType"] = "error"
+    del events[3]["Output"]
+    with pytest.raises((TypeError, ValueError)):
+        accept(events, old=True)
+
+
+def test_output_type_does_not_admit_unknown_fields() -> None:
+    events = negative()
+    events[3].update({"OutputType": "error", "Unknown": "ignored data"})
+    with pytest.raises(ValueError, match="unknown test event field"):
+        accept(events, old=True)
+
+
+@pytest.mark.parametrize("output_type", ("", "frame", "error", "error-continue"))
+def test_output_type_does_not_hide_crash(output_type: str) -> None:
+    events = positive()
+    crash = event("output", "TestAnalyzer", output="panic: broken\n")
+    crash["OutputType"] = output_type
+    events.insert(4, crash)
+    with pytest.raises(ValueError):
+        accept(events)
 
 
 @pytest.mark.parametrize("name", sorted(check.ANALYZER_NAMES))
