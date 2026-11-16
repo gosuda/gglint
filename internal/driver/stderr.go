@@ -12,11 +12,12 @@ import (
 )
 
 var (
-	typecheckLine     = regexp.MustCompile(`^(?:vet: )?(.+\.go):(\d+)(?::(\d+))?: (.+)$`)
-	packageHeader     = regexp.MustCompile(`^# [^[:space:]:]+(?: \[[^[:space:]:]+\.test\])?$`)
-	moduleDownload    = regexp.MustCompile(`^go: downloading [^[:space:]]+ v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$`)
-	toolchainDownload = regexp.MustCompile(`^go: downloading go[0-9][0-9A-Za-z.]* \([a-z0-9]+/[a-z0-9]+\)$`)
-	packageAnnotation = regexp.MustCompile(`^/\* package [^[:space:]:*]+ \*/$`)
+	typecheckLine           = regexp.MustCompile(`^(?:vet: )?(.+\.go):(\d+)(?::(\d+))?: (.+)$`)
+	packageHeader           = regexp.MustCompile(`^# [^[:space:]:]+(?: \[[^[:space:]:]+\.test\])?$`)
+	moduleDownload          = regexp.MustCompile(`^go: downloading [^[:space:]]+ v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$`)
+	toolchainDownload       = regexp.MustCompile(`^go: downloading go[0-9][0-9A-Za-z.]* \([a-z0-9]+/[a-z0-9]+\)$`)
+	packageAnnotation       = regexp.MustCompile(`^/\* package [^[:space:]:*]+ \*/$`)
+	typeParameterAnnotation = regexp.MustCompile(`^/\* with [[:alpha:]_][[:alnum:]_]* declared at .+:[0-9]+(?::[0-9]+)?(?:\[.+:[0-9]+(?::[0-9]+)?\])? \*/$`)
 )
 
 // parseStderr maps source positions as before and reports whether the complete
@@ -32,7 +33,7 @@ func parseStderr(stderr []byte, workDir string) (findings []finding.Finding, sou
 				continue
 			}
 			attached = false
-			if !diagnosticMetadata(line) {
+			if !stderrProgress(line) {
 				known = false
 			}
 			continue
@@ -50,7 +51,7 @@ func parseStderr(stderr []byte, workDir string) (findings []finding.Finding, sou
 	return findings, known && len(findings) != 0
 }
 
-func diagnosticMetadata(line string) bool {
+func stderrProgress(line string) bool {
 	return strings.TrimSpace(line) == "" || packageHeader.MatchString(line) ||
 		moduleDownload.MatchString(line) || toolchainDownload.MatchString(line)
 }
@@ -66,28 +67,27 @@ func toolFailureMessage(message string) bool {
 // Go type errors print argument tuples or method signatures after have/want.
 // Indentation or those words alone do not establish a diagnostic continuation.
 func typecheckContinuation(line string) bool {
-	kind, signature, ok := splitDiagnosticContinuation(line)
-	if !ok {
+	if line == "" || line[0] != '\t' && line[0] != ' ' {
 		return false
 	}
+	kind, signature, ok := strings.Cut(strings.TrimLeft(line, " \t"), " ")
+	if !ok || kind != "have" && kind != "want" {
+		return false
+	}
+	return typecheckSignature(signature, kind == "have")
+}
+
+func typecheckSignature(signature string, allowExpansion bool) bool {
 	name, params, ok := strings.Cut(signature, "(")
 	if !ok || name != "" && !token.IsIdentifier(name) {
 		return false
 	}
 	// An expanded final argument is printed as T... in have tuples. The
 	// element remains a type after removing that formatter-only suffix.
-	if kind == "have" && name == "" && strings.HasSuffix(params, "...)") {
+	if allowExpansion && name == "" && strings.HasSuffix(params, "...)") {
 		params = strings.TrimSuffix(params, "...)") + ")"
 	}
 	return validDiagnosticSignature("func("+params, name != "")
-}
-
-func splitDiagnosticContinuation(line string) (kind, signature string, ok bool) {
-	if line == "" || line[0] != '\t' && line[0] != ' ' {
-		return "", "", false
-	}
-	kind, signature, ok = strings.Cut(strings.TrimLeft(line, " \t"), " ")
-	return kind, signature, ok && (kind == "have" || kind == "want")
 }
 
 // validDiagnosticSignature requires the complete text to describe one function
@@ -108,9 +108,8 @@ func validDiagnosticSignature(source string, allowResults bool) bool {
 }
 
 // go/types uses quoted package qualifiers and pseudo-types in diagnostics.
-// Normalize only those tokens so the Go parser can check the full signature.
-// Preserve struct tags and the formatter's package annotations. Other comments
-// are not diagnostic types and could hide a tool error from the parser.
+// Normalize those tokens and type-parameter annotations so the Go parser can
+// check the full signature. Other comments could hide a tool error.
 func normalizeDiagnosticTypes(source string) (string, bool) {
 	var scan scanner.Scanner
 	file := token.NewFileSet().AddFile("", -1, len(source))
@@ -119,18 +118,21 @@ func normalizeDiagnosticTypes(source string) (string, bool) {
 	cursor := 0
 	pos, tok, lit := scan.Scan()
 	for tok != token.EOF {
-		if tok == token.COMMENT && !packageAnnotation.MatchString(lit) {
-			return "", false
-		}
 		nextPos, nextTok, nextLit := scan.Scan()
-		start := file.Offset(pos)
-		replacement, paired := diagnosticTypeReplacement(tok, lit, nextTok)
+		replacement, consumeNext := diagnosticTypeReplacement(tok, lit, nextTok)
+		if tok == token.COMMENT && !packageAnnotation.MatchString(lit) {
+			if lit != "/* type parameter */" && !typeParameterAnnotation.MatchString(lit) {
+				return "", false
+			}
+			replacement = " "
+		}
 		if replacement != "" {
+			start := file.Offset(pos)
 			out.WriteString(source[cursor:start])
 			out.WriteString(replacement)
 			cursor = start + len(lit)
-			if paired {
-				cursor = file.Offset(nextPos) + len("type")
+			if consumeNext {
+				cursor = file.Offset(nextPos) + len(nextLit)
 				pos, tok, lit = scan.Scan()
 				continue
 			}
@@ -144,7 +146,7 @@ func normalizeDiagnosticTypes(source string) (string, bool) {
 	return out.String(), true
 }
 
-func diagnosticTypeReplacement(tok token.Token, lit string, next token.Token) (replacement string, paired bool) {
+func diagnosticTypeReplacement(tok token.Token, lit string, next token.Token) (replacement string, consumeNext bool) {
 	if tok == token.STRING && strings.HasPrefix(lit, `"`) && next == token.PERIOD {
 		return "gglintPackage", false
 	}

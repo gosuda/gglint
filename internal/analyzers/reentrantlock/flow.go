@@ -13,10 +13,11 @@ type flow struct {
 	onStmts   func([]ast.Stmt)
 	deferHeld func(*ast.DeferStmt) bool
 	state     pathState
+	jumps     map[token.Pos]pathState
 }
 
 func (f *flow) walk(n ast.Node) {
-	if n == nil || f.state.stopped {
+	if n == nil {
 		return
 	}
 	ast.Inspect(n, f.visit)
@@ -29,17 +30,20 @@ func (f *flow) walkStmts(list []ast.Stmt) {
 }
 
 func (f *flow) visit(n ast.Node) bool {
+	if label, ok := n.(*ast.LabeledStmt); ok {
+		f.labeled(label)
+		return false
+	}
 	if f.state.stopped || f.invocation(n) || f.control(n) {
 		return false
 	}
-	return f.descend(n)
+	return f.statement(n)
 }
 
-func (f *flow) descend(n ast.Node) bool {
+func (f *flow) statement(n ast.Node) bool {
 	switch n := n.(type) {
 	case *ast.BranchStmt:
-		f.state.opaque = true
-		f.barrier()
+		f.branch(n)
 	case *ast.AssignStmt, *ast.IncDecStmt:
 		f.barrier()
 	case *ast.ValueSpec:
@@ -95,12 +99,12 @@ func (f *flow) control(n ast.Node) bool {
 		f.state.returnedHeld = f.state.returnedHeld || f.state.held
 		f.state.stopped = true
 	default:
-		return f.barrierControl(n)
+		return f.compound(n)
 	}
 	return true
 }
 
-func (f *flow) barrierControl(n ast.Node) bool {
+func (f *flow) compound(n ast.Node) bool {
 	switch n := n.(type) {
 	case *ast.ForStmt:
 		f.barrier()
@@ -115,7 +119,7 @@ func (f *flow) barrierControl(n ast.Node) bool {
 		f.barrier()
 		f.walk(n.Init)
 		f.walk(n.Assign)
-		f.cases(n.Body.List)
+		f.cases(caseClauses(n.Body), nil)
 	case *ast.SelectStmt:
 		f.barrier()
 		f.selectStmt(n)

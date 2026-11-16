@@ -4,10 +4,7 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/token"
-	"go/types"
 	"slices"
-
-	"github.com/gosuda/gglint/internal/inspection"
 )
 
 // A held path is retained if any continuing predecessor still holds the mutex.
@@ -43,11 +40,47 @@ func (f *flow) invokeLiteral(e ast.Expr) {
 		return
 	}
 	before := f.state
+	jumps := f.jumps
+	f.jumps = nil
 	f.state.returnedHeld = false
 	f.walk(lit.Body)
 	held := f.state.returnedHeld || !f.state.stopped && f.state.held
 	f.state = before
 	f.state.held = held
+	f.jumps = jumps
+}
+
+func (f *flow) branch(s *ast.BranchStmt) {
+	f.barrier()
+	if s.Tok == token.FALLTHROUGH {
+		return
+	}
+	if s.Tok != token.GOTO {
+		f.state.opaque = true
+		return
+	}
+	target := f.c.pass.TypesInfo.ObjectOf(s.Label).Pos()
+	if target <= s.Pos() {
+		f.state.opaque = true
+		return
+	}
+	if f.jumps == nil {
+		f.jumps = make(map[token.Pos]pathState)
+	}
+	if previous, ok := f.jumps[target]; ok {
+		f.jumps[target] = previous.join(f.state)
+	} else {
+		f.jumps[target] = f.state
+	}
+	f.state.stopped = true
+}
+
+func (f *flow) labeled(s *ast.LabeledStmt) {
+	if incoming, ok := f.jumps[s.Label.Pos()]; ok {
+		f.state = f.state.join(incoming)
+		delete(f.jumps, s.Label.Pos())
+	}
+	f.walk(s.Stmt)
 }
 
 func (f *flow) conditional(s *ast.IfStmt) {
@@ -78,12 +111,12 @@ func (f *flow) shortCircuit(e *ast.BinaryExpr) {
 	f.state = f.state.join(right)
 }
 
-func (c *checker) boolean(e ast.Expr) (value, known bool) {
-	constantValue := c.pass.TypesInfo.Types[e].Value
-	if constantValue == nil || constantValue.Kind() != constant.Bool {
+func (c *checker) boolean(e ast.Expr) (truth, known bool) {
+	value := c.pass.TypesInfo.Types[e].Value
+	if value == nil || value.Kind() != constant.Bool {
 		return false, false
 	}
-	return constant.BoolVal(constantValue), true
+	return constant.BoolVal(value), true
 }
 
 func (f *flow) loop(s *ast.ForStmt) {
@@ -110,26 +143,29 @@ func (c *checker) firstIteration(s *ast.ForStmt) (enters, known bool) {
 	if s.Cond == nil {
 		return true, true
 	}
-	if value, known := c.boolean(s.Cond); known {
+	if value, constantCondition := c.boolean(s.Cond); constantCondition {
 		return value, true
 	}
-	cond, ok := ast.Unparen(s.Cond).(*ast.BinaryExpr)
-	if !ok || !comparisonOperator(cond.Op) {
+	name, start := c.loopStart(s.Init)
+	if start == nil {
 		return false, false
 	}
-	counter, start := c.initialCounter(s.Init)
+	cond, ok := ast.Unparen(s.Cond).(*ast.BinaryExpr)
+	if !ok || !slices.Contains([]token.Token{token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ}, cond.Op) {
+		return false, false
+	}
 	id, ok := ast.Unparen(cond.X).(*ast.Ident)
-	if !ok || c.pass.TypesInfo.ObjectOf(id) != counter {
+	if !ok || c.pass.TypesInfo.ObjectOf(id) != c.pass.TypesInfo.ObjectOf(name) {
 		return false, false
 	}
 	bound := c.pass.TypesInfo.Types[cond.Y].Value
-	if start == nil || bound == nil {
+	if bound == nil {
 		return false, false
 	}
 	return constant.Compare(start, cond.Op, bound), true
 }
 
-func (c *checker) initialCounter(s ast.Stmt) (counter types.Object, value constant.Value) {
+func (c *checker) loopStart(s ast.Stmt) (*ast.Ident, constant.Value) {
 	init, ok := s.(*ast.AssignStmt)
 	if !ok || (init.Tok != token.ASSIGN && init.Tok != token.DEFINE) ||
 		len(init.Lhs) != 1 || len(init.Rhs) != 1 {
@@ -139,12 +175,7 @@ func (c *checker) initialCounter(s ast.Stmt) (counter types.Object, value consta
 	if !ok {
 		return nil, nil
 	}
-	return c.pass.TypesInfo.ObjectOf(name), c.pass.TypesInfo.Types[init.Rhs[0]].Value
-}
-
-func comparisonOperator(op token.Token) bool {
-	return op == token.EQL || op == token.NEQ || op == token.LSS ||
-		op == token.LEQ || op == token.GTR || op == token.GEQ
+	return name, c.pass.TypesInfo.Types[init.Rhs[0]].Value
 }
 
 func (f *flow) rangeLoop(s *ast.RangeStmt) {
@@ -160,18 +191,11 @@ func (f *flow) rangeLoop(s *ast.RangeStmt) {
 func (f *flow) switchStmt(s *ast.SwitchStmt) {
 	f.walk(s.Init)
 	f.walk(s.Tag)
-	if choice, known := f.c.constantCase(s); known {
-		for choice >= 0 && choice < len(s.Body.List) && !f.state.stopped {
-			clause := inspection.As[*ast.CaseClause](s.Body.List[choice])
-			f.clauseBody(clause.Body)
-			if !fallsThrough(clause.Body) {
-				break
-			}
-			choice++
-		}
-		return
+	tag := constant.MakeBool(true)
+	if s.Tag != nil {
+		tag = f.c.pass.TypesInfo.Types[s.Tag].Value
 	}
-	f.cases(s.Body.List)
+	f.cases(caseClauses(s.Body), tag)
 }
 
 func fallsThrough(list []ast.Stmt) bool {
@@ -192,49 +216,74 @@ func fallsThrough(list []ast.Stmt) bool {
 	return false
 }
 
-func (c *checker) constantCase(s *ast.SwitchStmt) (int, bool) {
-	tag := constant.MakeBool(true)
-	if s.Tag != nil {
-		tag = c.pass.TypesInfo.Types[s.Tag].Value
-		if tag == nil {
-			return 0, false
+func caseClauses(body *ast.BlockStmt) []*ast.CaseClause {
+	clauses := make([]*ast.CaseClause, 0, len(body.List))
+	for _, statement := range body.List {
+		clause, ok := statement.(*ast.CaseClause)
+		if !ok {
+			panic("switch body contains a non-case statement")
 		}
+		clauses = append(clauses, clause)
 	}
-	choice := -1
-	for i, node := range s.Body.List {
-		clause := inspection.As[*ast.CaseClause](node)
-		if clause.List == nil {
-			choice = i
-		}
-		for _, expr := range clause.List {
-			value := c.pass.TypesInfo.Types[expr].Value
-			if value == nil {
-				return 0, false
-			}
-			if constant.Compare(tag, token.EQL, value) {
-				return i, true
-			}
-		}
-	}
-	return choice, true
+	return clauses
 }
 
-func (f *flow) cases(list []ast.Stmt) {
-	joined := pathState{stopped: true, returnedHeld: f.state.returnedHeld}
-	defaultCase := false
-	for _, node := range list {
-		clause := inspection.As[*ast.CaseClause](node)
-		defaultCase = defaultCase || clause.List == nil
-		for _, expr := range clause.List {
-			f.fork(func() { f.walk(expr) })
+func (f *flow) cases(clauses []*ast.CaseClause, tag constant.Value) {
+	entries, joined := f.caseEntries(clauses, tag)
+	next := pathState{stopped: true}
+	for i, clause := range clauses {
+		f.state = entries[i].join(next)
+		f.clauseBody(clause.Body)
+		if fallsThrough(clause.Body) {
+			next = f.state
+		} else {
+			joined = joined.join(f.state)
+			next = pathState{stopped: true}
 		}
-		arm := f.fork(func() { f.clauseBody(clause.Body) })
-		joined = joined.join(arm)
-	}
-	if !defaultCase {
-		joined = joined.join(f.state)
 	}
 	f.state = joined
+}
+
+func (f *flow) caseEntries(clauses []*ast.CaseClause, tag constant.Value) ([]pathState, pathState) {
+	entries := make([]pathState, len(clauses))
+	defaultIndex := -1
+	for i, clause := range clauses {
+		if clause.List == nil {
+			defaultIndex = i
+		} else {
+			entries[i] = f.caseExpressions(clause.List, tag)
+		}
+	}
+	unmatched := f.state
+	if defaultIndex >= 0 {
+		entries[defaultIndex] = unmatched
+		unmatched.stopped = true
+	}
+	return entries, unmatched
+}
+
+func (f *flow) caseExpressions(expressions []ast.Expr, tag constant.Value) pathState {
+	matched := pathState{stopped: true, returnedHeld: f.state.returnedHeld}
+	for _, expression := range expressions {
+		f.walk(expression)
+		matches, known := f.c.caseMatch(tag, expression)
+		if !known || matches {
+			matched = matched.join(f.state)
+		}
+		if known && matches {
+			f.state.stopped = true
+			break
+		}
+	}
+	return matched
+}
+
+func (c *checker) caseMatch(tag constant.Value, expression ast.Expr) (matches, known bool) {
+	value := c.pass.TypesInfo.Types[expression].Value
+	if tag == nil || value == nil {
+		return false, false
+	}
+	return constant.Compare(tag, token.EQL, value), true
 }
 
 func (f *flow) clauseBody(list []ast.Stmt) {
@@ -246,8 +295,8 @@ func (f *flow) clauseBody(list []ast.Stmt) {
 }
 
 func (f *flow) selectStmt(s *ast.SelectStmt) {
-	for _, node := range s.Body.List {
-		clause := inspection.As[*ast.CommClause](node)
+	clauses := commClauses(s.Body)
+	for _, clause := range clauses {
 		switch comm := clause.Comm.(type) {
 		case *ast.SendStmt:
 			f.walk(comm.Chan)
@@ -261,8 +310,7 @@ func (f *flow) selectStmt(s *ast.SelectStmt) {
 		}
 	}
 	joined := pathState{stopped: true, returnedHeld: f.state.returnedHeld}
-	for _, node := range s.Body.List {
-		clause := inspection.As[*ast.CommClause](node)
+	for _, clause := range clauses {
 		arm := f.fork(func() {
 			if comm, ok := clause.Comm.(*ast.AssignStmt); ok {
 				for _, lhs := range comm.Lhs {
@@ -274,4 +322,16 @@ func (f *flow) selectStmt(s *ast.SelectStmt) {
 		joined = joined.join(arm)
 	}
 	f.state = joined
+}
+
+func commClauses(body *ast.BlockStmt) []*ast.CommClause {
+	clauses := make([]*ast.CommClause, 0, len(body.List))
+	for _, statement := range body.List {
+		clause, ok := statement.(*ast.CommClause)
+		if !ok {
+			panic("select body contains a non-communication statement")
+		}
+		clauses = append(clauses, clause)
+	}
+	return clauses
 }

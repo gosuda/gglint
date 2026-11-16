@@ -17,6 +17,10 @@ func (c *checker) summarizeReleases(calls map[*types.Func][]*ast.CallExpr) {
 	for grew := true; grew; {
 		grew = c.growBarriers(calls)
 	}
+	c.blockNonReturning()
+	for grew := true; grew; {
+		grew = c.growBarriers(calls)
+	}
 	c.releases = make(map[*types.Func]map[lockKey]bool)
 	for grew := true; grew; {
 		grew = c.growReleases(calls)

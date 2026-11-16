@@ -40,6 +40,12 @@ func TestFailedCommandsPreserveMixedToolErrors(t *testing.T) {
 		{"continuation followed by a comment", "\thave (int) // panic: hidden failure\n"},
 		{"comment within a tuple", "\thave (int /* panic: hidden failure */)\n"},
 		{"comment within a method", "\twant M(/* fatal error: stopped */ int) error\n"},
+		{"type parameter without declaration position", "\thave (int /* with int declared at */)\n"},
+		{"type parameter with invalid declaration position", "\thave (int /* with int declared at /w/a.go:line:column */)\n"},
+		{"type parameter annotation containing a failure", "\thave (int /* with int declared at /w/a.go:3:8 panic: hidden failure */)\n"},
+		{"type parameter annotation followed by a comment", "\thave (int /* with int declared at /w/a.go:3:8 */) // panic: hidden failure\n"},
+		{"type parameter annotation followed by a failure", "\thave (int /* with int declared at /w/a.go:3:8 */) panic: hidden failure\n"},
+		{"go/types annotation followed by a failure", "\thave (int/* type parameter */) fatal error: stopped\n"},
 		{"function body in continuation", "\thave M(int) { panic(\"hidden\") }\n"},
 	}
 	for _, tc := range cases {
@@ -51,22 +57,16 @@ func TestFailedCommandsPreserveMixedToolErrors(t *testing.T) {
 				}
 				t.Run(name, func(t *testing.T) {
 					stderr = "\n" + stderr + "\n"
-					path := installGo(t, goRun{stdout: unrelatedFinding, stderr: stderr, code: 1}) + string(os.PathListSeparator) + os.Getenv("PATH")
+					t.Setenv("PATH", installGo(t, goRun{stdout: unrelatedFinding, stderr: stderr, code: 1})+string(os.PathListSeparator)+os.Getenv("PATH"))
 					inv := invocation(t.TempDir())
 					want := "load: " + strings.TrimSpace(stderr)
-					t.Run("Vet", func(t *testing.T) {
-						t.Setenv("PATH", path)
-						got, err := driver.Vet(t.Context(), inv)
-						if err == nil || err.Error() != want || got != nil {
-							t.Fatalf("Vet = %+v, %v; want no partial findings and %q", got, err, want)
-						}
-					})
-					t.Run("Fix", func(t *testing.T) {
-						t.Setenv("PATH", path)
-						if err := driver.Fix(t.Context(), inv); err == nil || err.Error() != want {
-							t.Fatalf("Fix error = %v; want %q", err, want)
-						}
-					})
+					got, err := driver.Vet(t.Context(), inv)
+					if err == nil || err.Error() != want || got != nil {
+						t.Fatalf("Vet = %+v, %v; want no partial findings and %q", got, err, want)
+					}
+					if err := driver.Fix(t.Context(), inv); err == nil || err.Error() != want {
+						t.Fatalf("Fix error = %v; want %q", err, want)
+					}
 				})
 			}
 		})
@@ -132,6 +132,26 @@ func TestFailedCommandsKeepOrdinarySourceReports(t *testing.T) {
 			"package annotation within a type",
 			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M(struct{x int /* package example.com/a */})\n\t\twant M(struct{x int /* package example.com/b */})\n",
 			[]string{"T does not implement I"},
+		},
+		{
+			"compiler type parameter annotation",
+			"# m/a\n/w/a.go:4:2: not enough arguments in call to f\n\thave (int /* with int declared at /w/a.go:3:8 */)\n\twant (int, string)\n",
+			[]string{"not enough arguments in call to f"},
+		},
+		{
+			"go/types type parameter annotation",
+			"# m/a\n/w/a.go:4:2: not enough arguments in call to f\n\thave (int/* type parameter */)\n\twant (int, string)\n",
+			[]string{"not enough arguments in call to f"},
+		},
+		{
+			"type parameter annotations in method signatures",
+			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M([]int /* with int declared at C:\\work dir\\a.go:3:8 */) string /* with string declared at C:\\work dir\\a.go:3:17 */\n\t\twant M([]int) string\n",
+			[]string{"T does not implement I"},
+		},
+		{
+			"type parameter annotation with line directive",
+			"# m/a\n/w/a.go:4:2: not enough arguments in call to f\n\thave (int /* with int declared at generated source:100[/w/a.go:3:8] */)\n\twant (int, string)\n",
+			[]string{"not enough arguments in call to f"},
 		},
 		{
 			"struct tag containing error text",

@@ -326,3 +326,71 @@ func TestFilteredFindingLeavesNolintDirectiveUnused(t *testing.T) {
 		t.Fatalf("nolint reported %q, want %q", messages, []string{"unused nolint directive for probe"})
 	}
 }
+
+func TestPositionOutsidePackageFilesDroppedOutsideRoot(t *testing.T) {
+	t.Parallel()
+	e := newTestEngine(t, config.Config{Mode: config.Standard, ExcludeBase: "/work"})
+	pass := newPass(t, "/work/p/a.go", "package p\n\nvar X = 1\n", nil)
+	r := probeRule()
+
+	// A diagnostic on a file that is in the fileset but not in pass.Files,
+	// like a cgo artifact under the build cache.
+	outside := pass.Fset.AddFile("/tmp/go-build1328574828/b001/_cgo_import.go", -1, 100)
+	inside := pass.Fset.AddFile("/work/p/generated_other.go", -1, 100)
+	othermod := pass.Fset.AddFile("/elsewhere/m/x.go", -1, 100)
+	cases := []struct {
+		name string
+		pos  token.Pos
+		want bool
+	}{
+		{name: "build-cache file dropped", pos: token.Pos(outside.Base()), want: false},
+		{name: "in-root file kept", pos: token.Pos(inside.Base()), want: true},
+	}
+	for _, tc := range cases {
+		if got := e.keep(pass, r, "", analysis.Diagnostic{Pos: tc.pos, Message: "probe finding"}); got != tc.want {
+			t.Errorf("%s: keep = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// Outside the exclude base but inside the package's own dir: kept, so
+	// `run /abs/other` still reports on that module.
+	othermodFile := pass.Fset.File(token.Pos(othermod.Base()))
+	if othermodFile == nil {
+		t.Fatal("othermod file not in fileset")
+	}
+	pass2 := &analysis.Pass{Fset: pass.Fset, Files: []*ast.File{}}
+	parsed, err := parser.ParseFile(pass.Fset, "/elsewhere/m/a.go", "package m\n\nvar Y = 1\n", 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	pass2.Files = []*ast.File{parsed}
+	if got := e.keep(pass2, r, "", analysis.Diagnostic{Pos: token.Pos(othermod.Base()), Message: "probe finding"}); !got {
+		t.Error("in-package file outside exclude base dropped, want kept")
+	}
+	_ = othermodFile
+
+	// When cgo artifacts outnumber ordinary sources, the package dir vote
+	// must still land on the source dir, not the build cache.
+	fset3 := token.NewFileSet()
+	mustParse := func(name string) *ast.File {
+		f, err := parser.ParseFile(fset3, name, "package p\n", 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		return f
+	}
+	pass3 := &analysis.Pass{Fset: fset3, Files: []*ast.File{
+		mustParse("/tmp/go-build1328574828/b001/_cgo_gotypes.go"),
+		mustParse("/tmp/go-build1328574828/b001/sqlite3.cgo1.go"),
+		mustParse("/out/p/real.go"),
+	}}
+	target := fset3.AddFile("/out/p/other.go", -1, 100)
+	if got := e.keep(pass3, r, "", analysis.Diagnostic{Pos: token.Pos(target.Base()), Message: "probe finding"}); !got {
+		t.Error("source-dir file dropped when artifacts outnumber sources, want kept")
+	}
+	for _, tc := range cases {
+		if got := e.keep(pass, r, "", analysis.Diagnostic{Pos: tc.pos, Message: "probe finding"}); got != tc.want {
+			t.Errorf("%s: keep = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
