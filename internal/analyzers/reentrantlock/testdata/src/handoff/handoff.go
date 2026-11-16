@@ -1,8 +1,11 @@
 package handoff
 
 import (
+	atomic "handoffatomic"
+	"handoffext"
+	"sort"
 	"sync"
-	"sync/atomic"
+	stdatomic "sync/atomic"
 )
 
 func release(mu *sync.Mutex) { mu.Unlock() }
@@ -38,7 +41,7 @@ func literal() {
 
 type wakeMutex struct {
 	sync.Mutex
-	woken atomic.Bool
+	woken stdatomic.Bool
 }
 
 func (m *wakeMutex) wake() bool {
@@ -192,6 +195,68 @@ func indirectCallback() {
 		mu.Unlock()
 	}()
 	mu.Lock() // want `mu is locked again while already held`
+}
+
+func onceCallback() {
+	var mu sync.Mutex
+	var once sync.Once
+	mu.Lock()
+	go func() {
+		once.Do(mu.Lock)
+		mu.Unlock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func sortCallback() {
+	var mu sync.Mutex
+	mu.Lock()
+	go func() {
+		sort.Slice([]int{2, 1}, func(i, j int) bool {
+			mu.Lock()
+			return i < j
+		})
+		mu.Unlock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func importedAcquire() {
+	var mu sync.Mutex
+	mu.Lock()
+	go func() {
+		handoffext.Lock(&mu)
+		mu.Unlock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func atomicNameSpoof() {
+	var mu sync.Mutex
+	mu.Lock()
+	go func() {
+		atomic.Store(&mu)
+		mu.Unlock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+type valueReceiver struct{ mu sync.Mutex }
+
+func (v valueReceiver) release() { v.mu.Unlock() }
+
+func copiedReceiver() {
+	var v valueReceiver
+	v.mu.Lock()
+	go v.release()
+	v.mu.Lock() // want `v\.mu is locked again while already held`
+}
+
+func copiedMethodExpression() {
+	var v valueReceiver
+	v.mu.Lock()
+	go valueReceiver.release(v)
+	v.mu.Lock() // want `v\.mu is locked again while already held`
 }
 
 func storedRelease() {
