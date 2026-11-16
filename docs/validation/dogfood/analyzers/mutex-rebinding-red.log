@@ -1,0 +1,10 @@
+--- FAIL: TestAnalyzer (1.11s)
+    analysistest.go:713: handoff/handoff.go:273: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:288: no diagnostic was reported matching `first\.Mutex is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:302: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:317: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:330: no diagnostic was reported matching `first is locked again while already held`
+    analysistest.go:713: handoff/handoff.go:347: no diagnostic was reported matching `first is locked again while already held`
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/reentrantlock	1.124s
+FAIL

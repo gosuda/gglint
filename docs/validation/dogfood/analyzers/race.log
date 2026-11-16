@@ -1,0 +1,3 @@
+ok  	github.com/gosuda/gglint/internal/analyzers/reentrantlock	2.582s
+ok  	github.com/gosuda/gglint/internal/analyzers/closer	3.148s
+ok  	github.com/gosuda/gglint/internal/analyzers/infiniterecursion	3.436s

@@ -1,0 +1,14 @@
+--- FAIL: TestAnalyzer (1.07s)
+    analysistest.go:654: handoff/handoff.go:19:2: unexpected diagnostic: mu is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:27:2: unexpected diagnostic: mu is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:35:2: unexpected diagnostic: mu is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:61:2: unexpected diagnostic: m.Mutex is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:71:2: unexpected diagnostic: m.Mutex is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:89:2: unexpected diagnostic: mu is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:99:2: unexpected diagnostic: mu is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:107:2: unexpected diagnostic: mu is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:176:3: unexpected diagnostic: mu is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+    analysistest.go:654: handoff/handoff.go:189:3: unexpected diagnostic: mu is locked again while already held: sync mutexes are not reentrant, so this deadlocks
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/reentrantlock	1.076s
+FAIL
