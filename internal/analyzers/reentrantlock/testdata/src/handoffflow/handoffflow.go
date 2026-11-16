@@ -1,6 +1,9 @@
 package handoffflow
 
-import "sync"
+import (
+	"sync"
+	"unsafe"
+)
 
 func withLock(mu *sync.Mutex, callback func()) {
 	mu.Lock()
@@ -568,4 +571,54 @@ func callbackOrderIsNotArgumentOrder() {
 	secondBeforeFirst(func() { go mu.Unlock() }, func() {
 		mu.Lock() // want `mu is locked again while already held`
 	})
+}
+
+func constantSizeofDoesNotSpawn() {
+	var mu sync.Mutex
+	mu.Lock()
+	_ = unsafe.Sizeof(func() int {
+		go mu.Unlock()
+		return 0
+	}())
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func constantAlignofDoesNotSpawn() {
+	var mu sync.Mutex
+	mu.Lock()
+	_ = unsafe.Alignof(func() int {
+		go mu.Unlock()
+		return 0
+	}())
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func constantSizeofDoesNotLock() {
+	var mu sync.Mutex
+	mu.Lock()
+	_ = unsafe.Sizeof(lockAndValue(&mu))
+	mu.Unlock()
+}
+
+func Sizeof(int) uintptr { return 0 }
+
+func shadowedSizeofEvaluatesArguments() {
+	unsafe := struct{ Sizeof func(int) uintptr }{Sizeof}
+	var mu sync.Mutex
+	mu.Lock()
+	_ = unsafe.Sizeof(func() int {
+		go mu.Unlock()
+		return 0
+	}())
+	mu.Lock()
+}
+
+func genericSizeofEvaluatesArgument[T any](value T) {
+	var mu sync.Mutex
+	mu.Lock()
+	_ = unsafe.Sizeof(func() T {
+		go mu.Unlock()
+		return value
+	}())
+	mu.Lock()
 }
