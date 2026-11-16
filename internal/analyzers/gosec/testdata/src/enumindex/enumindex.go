@@ -117,3 +117,16 @@ func LoopBeforeGuard(t token, again bool) string {
 		}
 	}
 }
+
+func SignedToUnsigned(t signedToken) string {
+	names := [...]string{"light", "dark"}
+	if t >= signedToken(tokenCount) {
+		return "unknown"
+	}
+	index := token(t)    // want "G115: integer overflow conversion int8 -> uint8"
+	name := names[index] // want "G602: slice index out of range"
+	if index >= tokenCount {
+		return "unknown"
+	}
+	return name
+}
