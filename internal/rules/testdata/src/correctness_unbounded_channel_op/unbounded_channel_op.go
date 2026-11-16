@@ -61,7 +61,7 @@ func selectNoDone(a, b chan int) int {
 
 func selectDefault(a chan int) {
 	select {
-	case a <- 1: // want "channel send can block forever"
+	case a <- 1:
 	default:
 	}
 }
@@ -222,7 +222,7 @@ func selectCounts() {
 	ch := make(chan int, 1)
 	ch <- 1 // want "channel send can block forever"
 	select {
-	case ch <- 2: // want "channel send can block forever"
+	case ch <- 2:
 	default:
 	}
 }

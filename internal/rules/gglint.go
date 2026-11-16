@@ -46,7 +46,7 @@ func gglintRules() []Rule {
 			return []*analysis.Analyzer{placeholder.New(cfg.Mode)}
 		}},
 		{"typednil", config.Strict, originLogos, "Reports a typed nil pointer returned as an interface, which is never nil.", ReportEverywhere, single(typednil.Analyzer)},
-		{"chanblock", config.Strict, originLogos, "Reports channel sends and receives that can block forever without a ctx.Done() case or buffer proof.", ReportOutsideTests, single(chanblock.Analyzer)},
+		{"chanblock", config.Strict, originLogos, "Reports channel sends and receives that can block forever without a default or ctx.Done() select case or buffer proof.", ReportOutsideTests, single(chanblock.Analyzer)},
 		{"closer", config.Strict, originLogos, "Reports local io closers that are neither closed nor handed on.", ReportOutsideTests, single(closer.Analyzer)},
 		{"errdrop", config.Standard, originGglint, "Reports a dropped error that later code depends on, a written file's Close error, or an error dropped before return nil.", ReportOutsideTests, single(errdrop.Analyzer)},
 		{"chanstate", config.Standard, originGglint, "Reports channel operations that panic, deadlock, or strand a sender, on channels the function declares.", ReportEverywhere, func(config.Config) []*analysis.Analyzer { return chanstate.Analyzers() }},
