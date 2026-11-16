@@ -1,0 +1,1 @@
+{"mode":"basic","config":"../gglint.toml","findings":[{"rule":"reentrant_withlock_deadlock","path":"sharedcache_test.go","line":591,"column":3,"end_line":591,"end_column":11,"message":"m.Mutex is locked again while already held: sync mutexes are not reentrant, so this deadlocks"}]}
