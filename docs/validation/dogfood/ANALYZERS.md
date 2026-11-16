@@ -1,5 +1,10 @@
 # Analyzer hardening evidence
 
+This is the earlier release-effect checkpoint. The subsequent executed-path
+repair and its current source manifest are recorded in [PATH-FLOW.md](PATH-FLOW.md).
+The historical `ANALYZERS.sha256` applies to the source revision below; use
+`CURRENT.sha256` to verify the current follow-up sources.
+
 This record covers the mutex handoff, explicit closer, and recursion-exit
 repairs. The focused normal, race, parity, formatting, vet, and self-lint gates
 passed. It does not establish that the whole repository or every upstream

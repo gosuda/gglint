@@ -1,0 +1,1 @@
+{"mode":"standard","config":"gglint.toml","findings":[{"rule":"complexity","path":"internal/driver/stderr.go","line":63,"column":6,"end_line":92,"end_column":2,"message":"function typecheckContinuation is too complex: cyclomatic complexity 18 exceeds 15"}]}
