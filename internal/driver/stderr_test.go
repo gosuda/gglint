@@ -117,6 +117,11 @@ func TestFailedCommandsKeepOrdinarySourceReports(t *testing.T) {
 			[]string{"too many arguments in call to f"},
 		},
 		{
+			"expanded variadic argument",
+			"# m/a\n/w/a.go:4:2: not enough arguments in call to f\n\thave ([]bool...)\n\twant (int, string, ...bool)\n",
+			[]string{"not enough arguments in call to f"},
+		},
+		{
 			"quoted package qualifiers",
 			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M(\"example.com/a\".T) \"example.com/a\".U\n\t\twant M(\"example.com/b\".T) \"example.com/b\".U\n",
 			[]string{"T does not implement I"},
