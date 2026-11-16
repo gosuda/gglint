@@ -244,8 +244,8 @@ func (f *flow) cases(clauses []*ast.CaseClause, tag constant.Value) {
 	f.state = joined
 }
 
-func (f *flow) caseEntries(clauses []*ast.CaseClause, tag constant.Value) ([]pathState, pathState) {
-	entries := make([]pathState, len(clauses))
+func (f *flow) caseEntries(clauses []*ast.CaseClause, tag constant.Value) (entries []pathState, unmatched pathState) {
+	entries = make([]pathState, len(clauses))
 	defaultIndex := -1
 	for i, clause := range clauses {
 		if clause.List == nil {
@@ -254,7 +254,7 @@ func (f *flow) caseEntries(clauses []*ast.CaseClause, tag constant.Value) ([]pat
 			entries[i] = f.caseExpressions(clause.List, tag)
 		}
 	}
-	unmatched := f.state
+	unmatched = f.state
 	if defaultIndex >= 0 {
 		entries[defaultIndex] = unmatched
 		unmatched.stopped = true

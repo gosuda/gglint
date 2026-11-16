@@ -17,7 +17,7 @@ var (
 	moduleDownload          = regexp.MustCompile(`^go: downloading [^[:space:]]+ v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?$`)
 	toolchainDownload       = regexp.MustCompile(`^go: downloading go[0-9][0-9A-Za-z.]* \([a-z0-9]+/[a-z0-9]+\)$`)
 	packageAnnotation       = regexp.MustCompile(`^/\* package [^[:space:]:*]+ \*/$`)
-	typeParameterAnnotation = regexp.MustCompile(`^/\* with [[:alpha:]_][[:alnum:]_]* declared at .+:[0-9]+(?::[0-9]+)?(?:\[.+:[0-9]+(?::[0-9]+)?\])? \*/$`)
+	typeParameterAnnotation = regexp.MustCompile(`^/\* with [[:alpha:]_][[:alnum:]_]* declared at .*:[0-9]+(?::[0-9]+)?(?:\[.+:[0-9]+(?::[0-9]+)?\])? \*/$`)
 )
 
 // parseStderr maps source positions as before and reports whether the complete
