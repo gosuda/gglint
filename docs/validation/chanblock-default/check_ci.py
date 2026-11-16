@@ -194,10 +194,25 @@ def check_test_output(
         action = string(event.get("Action"))
         if action.startswith("build-") or "FailedBuild" in event:
             raise ValueError("build event cannot establish test evidence")
-        if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+        if set(event) - {
+            "Time",
+            "Action",
+            "Package",
+            "Test",
+            "Elapsed",
+            "Output",
+            "OutputType",
+        }:
             raise ValueError("unknown test event field")
-        if "Output" in event and action != "output":
+        if ("Output" in event or "OutputType" in event) and action != "output":
             raise ValueError("output attached to a non-output event")
+        if "OutputType" in event and string(event["OutputType"]) not in (
+            "",
+            "frame",
+            "error",
+            "error-continue",
+        ):
+            raise ValueError("unknown output classification")
         if event.get("Package") != package:
             raise ValueError("unexpected package")
         if finished:

@@ -47,6 +47,11 @@ after the run and fails on drift.
    must match the frozen 101-finding array. JSON types, field sets, mode,
    relative configuration path, stderr, and exit status are checked too.
 
+Go 1.27.4 may classify output events with `OutputType`. The checker accepts
+only the documented string values: empty, `frame`, `error`, and
+`error-continue`. The field is invalid on any other action, and other unknown
+fields remain invalid. Classification never bypasses output-content checks.
+
 The new profile uses Linux/amd64, `GOAMD64=v1`, `GOMAXPROCS=2`, readonly module
 resolution, no workspace, no Go experiment/debug overrides, and offline Go
 dependency resolution after CI downloads the pinned dependencies. Normal and
@@ -75,3 +80,16 @@ JSON comparison error: Python treats `1`, `1.0`, and `true` as equal in ordinary
 container comparisons; the checker now compares canonical JSON so those
 types cannot be substituted in diagnostic records. Hosted Go results remain
 pending until this commit runs in CI.
+
+The first hosted run, `43960061537`, completed the lint, full race, and isolated
+vettool jobs successfully. Its regression job failed at the checker schema:
+Go's `OutputType` field was absent from the allowlist. The four underlying test
+commands had their required exits, and all six chi comparisons passed, but the
+original overall report remains rejected. The complete raw command evidence
+and the old checker are frozen under `output-type/`.
+
+The focused schema correction was prepared without running Go locally. Its
+frozen Python controls first produced eight failures and 100 passes against
+the old checker, then all 108 passed after the correction. Strict Pyright,
+Ruff, formatting, and both frozen manifests passed. A fresh hosted run of the
+corrected tree must pass before the candidate is used by the corpus job.
