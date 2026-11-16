@@ -1,0 +1,279 @@
+--- FAIL: TestFailedCommandsPreserveMixedToolErrors (0.49s)
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/killed_child (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/killed_child/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/killed_child/diagnostic_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\n/opt/gglint: signal: killed"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/killed_child/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\n/opt/gglint: signal: killed"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/killed_child/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/killed_child/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/dependency\n/opt/gglint: signal: killed\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/killed_child/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/dependency\n/opt/gglint: signal: killed\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/panic_and_stack (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/panic_and_stack/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/panic_and_stack/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\npanic: missing facts\n\ngoroutine 18 [running]:\nchecker.run()\n\t/w/analyzer.go:42 +0x81"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/panic_and_stack/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\npanic: missing facts\n\ngoroutine 18 [running]:\nchecker.run()\n\t/w/analyzer.go:42 +0x81"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/panic_and_stack/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/panic_and_stack/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/dependency\npanic: missing facts\n\ngoroutine 18 [running]:\nchecker.run()\n\t/w/analyzer.go:42 +0x81\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/panic_and_stack/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/dependency\npanic: missing facts\n\ngoroutine 18 [running]:\nchecker.run()\n\t/w/analyzer.go:42 +0x81\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_panic (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_panic/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_panic/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\tpanic: missing facts"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_panic/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\tpanic: missing facts"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_panic/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_panic/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: panic: missing facts\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_panic/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: panic: missing facts\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/runtime_failure (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/runtime_failure/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/runtime_failure/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\nfatal error: runtime: out of memory\n\nruntime stack:"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/runtime_failure/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\nfatal error: runtime: out of memory\n\nruntime stack:"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/runtime_failure/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/runtime_failure/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: fatal error: runtime: out of memory\n\nruntime stack:\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/runtime_failure/fatal_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: fatal error: runtime: out of memory\n\nruntime stack:\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/compiler_ICE (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/compiler_ICE/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/compiler_ICE/diagnostic_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\n<unknown line number>: internal compiler error: unexpected object\n\nPlease file a bug report."
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/compiler_ICE/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\n<unknown line number>: internal compiler error: unexpected object\n\nPlease file a bug report."
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/compiler_ICE/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/compiler_ICE/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/dependency\n<unknown line number>: internal compiler error: unexpected object\n\nPlease file a bug report.\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/compiler_ICE/fatal_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/dependency\n<unknown line number>: internal compiler error: unexpected object\n\nPlease file a bug report.\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_compiler_ICE (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_compiler_ICE/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_compiler_ICE/diagnostic_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:internal compiler error: unexpected object Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\n/w/dep.go:12:9: internal compiler error: unexpected object"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_compiler_ICE/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\n/w/dep.go:12:9: internal compiler error: unexpected object"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_compiler_ICE/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_compiler_ICE/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:internal compiler error: unexpected object Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/dependency\n/w/dep.go:12:9: internal compiler error: unexpected object\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_compiler_ICE/fatal_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/dependency\n/w/dep.go:12:9: internal compiler error: unexpected object\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_vet_ICE (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_vet_ICE/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_vet_ICE/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:internal compiler error: unexpected object Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\nvet: /w/dep.go:12:9: internal compiler error: unexpected object"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_vet_ICE/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\nvet: /w/dep.go:12:9: internal compiler error: unexpected object"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_vet_ICE/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_vet_ICE/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:internal compiler error: unexpected object Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: vet: /w/dep.go:12:9: internal compiler error: unexpected object\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_vet_ICE/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: vet: /w/dep.go:12:9: internal compiler error: unexpected object\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_panic (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_panic/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_panic/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:panic: missing facts Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n/w/dep.go:12:9: panic: missing facts"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_panic/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n/w/dep.go:12:9: panic: missing facts"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_panic/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_panic/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:panic: missing facts Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: /w/dep.go:12:9: panic: missing facts\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_panic/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: /w/dep.go:12:9: panic: missing facts\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_runtime_failure (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_runtime_failure/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_runtime_failure/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:fatal error: runtime: out of memory Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n/w/dep.go:12:9: fatal error: runtime: out of memory"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_runtime_failure/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n/w/dep.go:12:9: fatal error: runtime: out of memory"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_runtime_failure/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_runtime_failure/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:fatal error: runtime: out of memory Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: /w/dep.go:12:9: fatal error: runtime: out of memory\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_runtime_failure/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: /w/dep.go:12:9: fatal error: runtime: out of memory\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_killed_child (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_killed_child/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_killed_child/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:/opt/gglint: signal: killed Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n/w/dep.go:12:9: /opt/gglint: signal: killed"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_killed_child/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n/w/dep.go:12:9: /opt/gglint: signal: killed"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_killed_child/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_killed_child/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:/opt/gglint: signal: killed Pos:{Path:/w/dep.go Line:12 Column:9} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: /w/dep.go:12:9: /opt/gglint: signal: killed\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/positioned_killed_child/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: /w/dep.go:12:9: /opt/gglint: signal: killed\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unknown_failure (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unknown_failure/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unknown_failure/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\nunrecognized tool failure\n  additional context"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unknown_failure/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\nunrecognized tool failure\n  additional context"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unknown_failure/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unknown_failure/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/dependency\nunrecognized tool failure\n  additional context\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unknown_failure/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/dependency\nunrecognized tool failure\n  additional context\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_unknown_failure (0.03s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_unknown_failure/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_unknown_failure/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\tunrecognized tool failure"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_unknown_failure/diagnostic_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\tunrecognized tool failure"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_unknown_failure/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_unknown_failure/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: unrecognized tool failure\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/indented_unknown_failure/fatal_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: unrecognized tool failure\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/stack_frame_without_heading (0.03s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/stack_frame_without_heading/diagnostic_first (0.02s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/stack_frame_without_heading/diagnostic_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\t/w/analyzer.go:42 +0x81"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/stack_frame_without_heading/diagnostic_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\t/w/analyzer.go:42 +0x81"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/stack_frame_without_heading/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/stack_frame_without_heading/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: /w/analyzer.go:42 +0x81\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/stack_frame_without_heading/fatal_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: /w/analyzer.go:42 +0x81\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/header_with_error_text (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/header_with_error_text/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/header_with_error_text/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency: signal: killed"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/header_with_error_text/diagnostic_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency: signal: killed"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/header_with_error_text/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/header_with_error_text/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/dependency: signal: killed\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/header_with_error_text/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/dependency: signal: killed\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/download_with_error_text (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/download_with_error_text/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/download_with_error_text/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\ngo: downloading example.com/x v1.0.0: connection reset"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/download_with_error_text/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\ngo: downloading example.com/x v1.0.0: connection reset"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/download_with_error_text/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/download_with_error_text/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: go: downloading example.com/x v1.0.0: connection reset\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/download_with_error_text/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: go: downloading example.com/x v1.0.0: connection reset\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unattached_have_want (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unattached_have_want/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unattached_have_want/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\n\thave (int)\n\twant (string)"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unattached_have_want/diagnostic_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n# m/dependency\n\thave (int)\n\twant (string)"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unattached_have_want/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unattached_have_want/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/dependency\n\thave (int)\n\twant (string)\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/unattached_have_want/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/dependency\n\thave (int)\n\twant (string)\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/have_prefix_on_a_failure (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/have_prefix_on_a_failure/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/have_prefix_on_a_failure/diagnostic_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave panic: missing facts"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/have_prefix_on_a_failure/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave panic: missing facts"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/have_prefix_on_a_failure/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/have_prefix_on_a_failure/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: have panic: missing facts\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/have_prefix_on_a_failure/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: have panic: missing facts\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/want_prefix_on_a_failure (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/want_prefix_on_a_failure/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/want_prefix_on_a_failure/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\twant tool failed"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/want_prefix_on_a_failure/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\twant tool failed"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/want_prefix_on_a_failure/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/want_prefix_on_a_failure/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: want tool failed\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/want_prefix_on_a_failure/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: want tool failed\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_panic (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_panic/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_panic/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int) panic: hidden failure"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_panic/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int) panic: hidden failure"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_panic/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_panic/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: have (int) panic: hidden failure\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_panic/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: have (int) panic: hidden failure\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/method_followed_by_fatal_error (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/method_followed_by_fatal_error/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/method_followed_by_fatal_error/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\twant M(int) fatal error: stopped"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/method_followed_by_fatal_error/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\twant M(int) fatal error: stopped"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/method_followed_by_fatal_error/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/method_followed_by_fatal_error/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: want M(int) fatal error: stopped\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/method_followed_by_fatal_error/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: want M(int) fatal error: stopped\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_a_result (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_a_result/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_a_result/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int) bool"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_a_result/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int) bool"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_a_result/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_a_result/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: have (int) bool\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/tuple_followed_by_a_result/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: have (int) bool\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/continuation_followed_by_a_comment (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/continuation_followed_by_a_comment/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/continuation_followed_by_a_comment/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int) // panic: hidden failure"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/continuation_followed_by_a_comment/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int) // panic: hidden failure"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/continuation_followed_by_a_comment/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/continuation_followed_by_a_comment/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: have (int) // panic: hidden failure\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/continuation_followed_by_a_comment/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: have (int) // panic: hidden failure\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int /* panic: hidden failure */)"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int /* panic: hidden failure */)"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: have (int /* panic: hidden failure */)\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: have (int /* panic: hidden failure */)\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\twant M(/* fatal error: stopped */ int) error"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\twant M(/* fatal error: stopped */ int) error"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/fatal_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: want M(/* fatal error: stopped */ int) error\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: want M(/* fatal error: stopped */ int) error\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/function_body_in_continuation (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/function_body_in_continuation/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/function_body_in_continuation/diagnostic_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave M(int) { panic(\"hidden\") }"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/function_body_in_continuation/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave M(int) { panic(\"hidden\") }"
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/function_body_in_continuation/fatal_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/function_body_in_continuation/fatal_first/Vet (0.00s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: have M(int) { panic(\"hidden\") }\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/function_body_in_continuation/fatal_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: have M(int) { panic(\"hidden\") }\n# m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x"
+FAIL
+FAIL	github.com/gosuda/gglint/internal/driver	0.496s
+FAIL

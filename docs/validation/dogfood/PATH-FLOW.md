@@ -89,8 +89,8 @@ sha256sum -c docs/validation/dogfood/CURRENT.sha256
 
 `ANALYZERS.md` and `ANALYZERS.sha256` retain the earlier release-effect checkpoint.
 They do not describe the later path-flow source hashes. `CURRENT.sha256` is the
-source manifest for this follow-up. The driver source remains byte-identical to
-its separately retained `DRIVER.sha256` record.
+source manifest for this follow-up. The final driver checkpoint below records
+the later signature-validator extraction; `DRIVER.sha256` remains historical.
 
 ## Broader limits
 
@@ -141,3 +141,32 @@ compound-loop fixture failed against the pre-fix analyzer compiled by that run.
 The complete raw log is `path-flow/initial-full-nonfinal.log`. The cause of the
 process terminations was not established by these logs. The existing nine-engine
 vettool stress workload and its assertions remain unchanged.
+
+## Self-lint and the final driver checkpoint
+
+Standard-mode self-lint of the four changed analyzer/driver packages found one
+issue in the recovered driver: `typecheckContinuation` had cyclomatic complexity
+18 against the unchanged limit of 15. The original finding is retained in
+`path-flow/selflint-before-refactor.json`.
+
+Commit `38be7742c18ca634db02b84527701190d03367db` separates recognition of the
+indented `have`/`want` header from validation of one complete function signature.
+The helper names the grammar invariant. The classification logic, diagnostic
+syntax, tests, and thresholds are unchanged. No further analyzer change follows
+`136119a`.
+
+The complete driver normal and race suites passed again, as did driver vet.
+Repeating the existing residual-classification mutation against the extracted
+version failed all 100 required mixed-output assertions; clean restoration
+passed. Those raw results are the `v2-driver-*` files under `path-flow`.
+
+The separate final executable has SHA-256
+`625120495f2ab131024ccfff69db08a9c4df43597dc8f48fd646a7b97e308d9a`.
+Its `v2-buildinfo.txt` records clean source revision `38be774`. The earlier
+executable remains untouched so earlier corpus observations retain their exact
+binary identity. `CURRENT.sha256` identifies the final combined sources;
+`DRIVER.sha256` remains the historical pre-extraction source checkpoint.
+
+The final executable's standard-mode self-lint then completed with exit 0 and
+`findings: []` across all four changed analyzer/driver packages. The complete
+JSON and stderr records are `path-flow/v2-selflint.json` and `.stderr`.
