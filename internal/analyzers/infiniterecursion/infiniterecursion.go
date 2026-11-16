@@ -380,10 +380,11 @@ func (r *recursion) leavesSequence(n ast.Node) bool {
 }
 
 func (r *recursion) endsProcess(call *ast.CallExpr) bool {
-	if name, ok := call.Fun.(*ast.Ident); ok && name.Name == "panic" {
+	callee := typeutil.Callee(r.info, call)
+	if callee == types.Universe.Lookup("panic") {
 		return true
 	}
-	fn, ok := typeutil.Callee(r.info, call).(*types.Func)
+	fn, ok := callee.(*types.Func)
 	if !ok {
 		return false
 	}
