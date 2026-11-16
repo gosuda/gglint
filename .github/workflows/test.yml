@@ -1,0 +1,62 @@
+name: Go test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOMAXPROCS: "2"
+  GOMEMLIMIT: 256MiB
+  GOGC: "25"
+  GOTOOLCHAIN: local
+  GOENV: "off"
+  GIT_TERMINAL_PROMPT: "0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Fetch the event revision
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git fetch --no-tags --depth=1 https://github.com/gosuda/gglint.git "$GITHUB_REF"
+          git checkout --detach FETCH_HEAD
+          checked_out_sha=$(git rev-parse HEAD)
+          printf 'Event ref: %s\nChecked out: %s\n' "$GITHUB_REF" "$checked_out_sha"
+          test "$checked_out_sha" = "$GITHUB_SHA"
+
+      - name: Install Go 1.27.4
+        run: |
+          set -euo pipefail
+          gglint_go_dir=$(mktemp -d "$RUNNER_TEMP/gglint-go.XXXXXX")
+          go_archive="$gglint_go_dir/go1.27.4.linux-amd64.tar.gz"
+          curl --fail --location --retry 3 --output "$go_archive" https://go.dev/dl/go1.27.4.linux-amd64.tar.gz
+          printf '%s  %s\n' 7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840 "$go_archive" | sha256sum --check
+          tar -xzf "$go_archive" -C "$gglint_go_dir"
+          printf '%s\n' "$gglint_go_dir/go/bin" >> "$GITHUB_PATH"
+          printf 'GOROOT=%s\n' "$gglint_go_dir/go" >> "$GITHUB_ENV"
+          "$gglint_go_dir/go/bin/go" version
+
+      - name: Run the full suite
+        run: |
+          set -euo pipefail
+          go version
+          cat /proc/meminfo
+          test_command=(go test -v -p=1 -parallel=1 -count=1 -timeout=10m ./...)
+          if [[ -x /usr/bin/time ]]; then
+            /usr/bin/time -v "${test_command[@]}"
+          else
+            "${test_command[@]}"
+          fi
