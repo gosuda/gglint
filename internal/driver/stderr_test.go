@@ -34,6 +34,11 @@ func TestFailedCommandsPreserveMixedToolErrors(t *testing.T) {
 		{"unattached have want", "# m/dependency\n\thave (int)\n\twant (string)\n"},
 		{"have prefix on a failure", "\thave panic: missing facts\n"},
 		{"want prefix on a failure", "\twant tool failed\n"},
+		{"tuple followed by panic", "\thave (int) panic: hidden failure\n"},
+		{"method followed by fatal error", "\twant M(int) fatal error: stopped\n"},
+		{"tuple followed by a result", "\thave (int) bool\n"},
+		{"continuation followed by a comment", "\thave (int) // panic: hidden failure\n"},
+		{"function body in continuation", "\thave M(int) { panic(\"hidden\") }\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -98,6 +103,26 @@ func TestFailedCommandsKeepOrdinarySourceReports(t *testing.T) {
 			"unicode method name",
 			"# m/a\n/w/a.go:4:2: T does not implement I (wrong type for method Δ)\n\t\thave Δ(int)\n\t\twant Δ(string)\n",
 			[]string{"T does not implement I (wrong type for method Δ)"},
+		},
+		{
+			"nested signatures and method results",
+			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M(func(int) string, interface{ N() }) (chan<- int, error)\n\t\twant M(func(string) bool, interface{ N() }) error\n",
+			[]string{"T does not implement I"},
+		},
+		{
+			"unknown argument type",
+			"# m/a\n/w/a.go:4:2: too many arguments in call to f\n\thave (unknown type, number)\n\twant (int)\n",
+			[]string{"too many arguments in call to f"},
+		},
+		{
+			"quoted package qualifiers",
+			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M(\"example.com/a\".T) \"example.com/a\".U\n\t\twant M(\"example.com/b\".T) \"example.com/b\".U\n",
+			[]string{"T does not implement I"},
+		},
+		{
+			"package annotation within a type",
+			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M(struct{x int /* package example.com/a */})\n\t\twant M(struct{x int /* package example.com/b */})\n",
+			[]string{"T does not implement I"},
 		},
 		{
 			"secondary declaration position",
