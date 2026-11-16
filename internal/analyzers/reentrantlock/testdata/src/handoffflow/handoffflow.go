@@ -457,3 +457,89 @@ func switchCaseExpressionIsConditional(cond bool) {
 		noop()
 	}
 }
+
+func literalReturnBeforeEmptySelect(cond bool) {
+	var mu sync.Mutex
+	mu.Lock()
+	func() {
+		if cond {
+			return
+		}
+		select {}
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func constantSwitchFallthrough() {
+	var mu sync.Mutex
+	mu.Lock()
+	switch 0 {
+	case 0:
+		fallthrough
+	case 1:
+		mu.Lock() // want `mu is locked again while already held`
+	}
+}
+
+func constantSwitchKnownArm() {
+	var mu sync.Mutex
+	mu.Lock()
+	switch 0 {
+	case 0:
+		go mu.Unlock()
+	case 1:
+		mu.Lock()
+	}
+	mu.Lock()
+}
+
+func constantSwitchNoMatch() {
+	var mu sync.Mutex
+	mu.Lock()
+	switch 0 {
+	case 1:
+		go mu.Unlock()
+	}
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func countedLoopMayBreak(cond bool) {
+	var mu sync.Mutex
+	mu.Lock()
+	for i := 0; i < 1; i++ {
+		if cond {
+			break
+		}
+		go mu.Unlock()
+	}
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func counterConditionUsesAnotherVariable(n int) {
+	var mu sync.Mutex
+	mu.Lock()
+	for i := 0; n < 1; i++ {
+		go mu.Unlock()
+	}
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func constantNameIsShadowed(true bool) {
+	var mu sync.Mutex
+	mu.Lock()
+	if true {
+		go mu.Unlock()
+	} else {
+		mu.Lock() // want `mu is locked again while already held`
+	}
+}
+
+func handoffRemainsLocalToDeferredBody() {
+	var mu sync.Mutex
+	mu.Lock()
+	defer func() {
+		go mu.Unlock()
+		mu.Lock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
