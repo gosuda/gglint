@@ -177,13 +177,10 @@ func directCloseContext(cur inspector.Cursor) bool {
 	for cur.ParentEdgeKind() == edge.ParenExpr_X {
 		cur = cur.Parent()
 	}
-	switch cur.ParentEdgeKind() {
-	case edge.DeferStmt_Call, edge.ExprStmt_X, edge.ReturnStmt_Results,
-		edge.AssignStmt_Rhs, edge.ValueSpec_Values:
-		return true
-	default:
-		return false
-	}
+	kind := cur.ParentEdgeKind()
+	return kind == edge.DeferStmt_Call || kind == edge.ExprStmt_X ||
+		kind == edge.ReturnStmt_Results || kind == edge.AssignStmt_Rhs ||
+		kind == edge.ValueSpec_Values
 }
 
 func (s *scan) noteClose(call *ast.CallExpr) {
