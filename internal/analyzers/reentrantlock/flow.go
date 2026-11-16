@@ -5,6 +5,7 @@ import "go/ast"
 type flow struct {
 	c         *checker
 	onCall    func(*ast.CallExpr)
+	onGo      func(*ast.GoStmt)
 	onStmts   func([]ast.Stmt)
 	deferHeld func(*ast.DeferStmt) bool
 }
@@ -26,6 +27,9 @@ func (f *flow) visit(n ast.Node) bool {
 		return false
 	case *ast.GoStmt:
 		f.async(n.Call)
+		if f.onGo != nil {
+			f.onGo(n)
+		}
 		return false
 	case *ast.FuncLit:
 		return false

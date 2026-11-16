@@ -29,7 +29,11 @@ function that calls one of its function parameters while it holds a mutex
 runs the function literal, named function, or method value passed there
 under that mutex, with a method value's receiver bound to the call-site
 operand. A go statement evaluates its function operand and arguments
-synchronously and runs the call in a new goroutine. A defer statement
+synchronously and runs the call in a new goroutine. After the spawn, a
+reachable Unlock of the held mutex invalidates the held state when that
+goroutine's synchronous call graph contains no recognized mutex acquisition.
+This models release-only same-package helpers and mutex handoffs, not every possible
+deadlock involving other synchronization. A defer statement
 evaluates its function operand and arguments synchronously and runs the call
 at function exit; within a held region that reaches the end of its statement
 list, the call runs under the mutex unless a later deferred Unlock of the
@@ -54,6 +58,8 @@ type checker struct {
 	invokes   map[*types.Func]map[int]bool
 	heldCalls map[*types.Func][]heldCall
 	summaries map[*types.Func]map[lockKey]bool
+	releases  map[*types.Func]map[lockKey]bool
+	acquires  map[*types.Func]bool
 	limit     int
 	reported  map[*ast.CallExpr]bool
 }
@@ -68,7 +74,8 @@ func run(pass *analysis.Pass) (any, error) {
 	c.index()
 	c.invokes = c.findInvokes()
 	c.heldCalls = c.findHeldCalls()
-	c.summarize()
+	c.summarizeReleases(c.summarize())
+	c.heldCalls = c.findHeldCalls()
 	for _, fn := range c.order {
 		c.check(c.decls[fn])
 	}
@@ -186,10 +193,13 @@ func (c *checker) findHeldCalls() map[*types.Func][]heldCall {
 func (c *checker) regionHeldCalls(fn *types.Func, key lockKey, region, tail []ast.Stmt) []heldCall {
 	var found []heldCall
 	sig := fn.Signature()
+	held := true
 	f := &flow{c: c, deferHeld: c.deferHeldIn(key, region, tail), onCall: func(call *ast.CallExpr) {
-		if i := c.paramIndex(sig, call.Fun); i >= 0 {
+		if i := c.paramIndex(sig, call.Fun); held && i >= 0 {
 			found = append(found, heldCall{key: key, param: i})
 		}
+	}, onGo: func(g *ast.GoStmt) {
+		held = held && !c.handsOff(g.Call, key, binding{})
 	}}
 	f.walkStmts(region)
 	return found
@@ -201,7 +211,7 @@ func (c *checker) deferHeldIn(key lockKey, region, tail []ast.Stmt) func(*ast.De
 	}
 }
 
-func (c *checker) summarize() {
+func (c *checker) summarize() map[*types.Func][]*ast.CallExpr {
 	calls := make(map[*types.Func][]*ast.CallExpr)
 	for _, fn := range c.order {
 		f := &flow{c: c, onCall: func(call *ast.CallExpr) {
@@ -214,6 +224,7 @@ func (c *checker) summarize() {
 	for grew := true; grew; {
 		grew = c.grow(calls)
 	}
+	return calls
 }
 
 func (c *checker) pathLimit(calls map[*types.Func][]*ast.CallExpr) int {
@@ -347,8 +358,13 @@ func (c *checker) check(decl *ast.FuncDecl) {
 }
 
 func (c *checker) heldFlow(key lockKey, b binding) *flow {
+	held := true
 	return &flow{c: c, onCall: func(call *ast.CallExpr) {
-		c.checkInner(call, key, b)
+		if held {
+			c.checkInner(call, key, b)
+		}
+	}, onGo: func(g *ast.GoStmt) {
+		held = held && !c.handsOff(g.Call, key, b)
 	}}
 }
 
