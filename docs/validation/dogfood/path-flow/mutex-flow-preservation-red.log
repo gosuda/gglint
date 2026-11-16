@@ -1,0 +1,6 @@
+--- FAIL: TestAnalyzer (1.03s)
+    analysistest.go:713: handoffflow/handoffflow.go:470: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:480: no diagnostic was reported matching `mu is locked again while already held`
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/reentrantlock	1.039s
+FAIL

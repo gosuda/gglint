@@ -1,0 +1,51 @@
+?   	github.com/gosuda/gglint/cmd/gglint	[no test files]
+ok  	github.com/gosuda/gglint/internal/analyzers/alias	1.183s
+ok  	github.com/gosuda/gglint/internal/analyzers/backingpin	0.120s
+ok  	github.com/gosuda/gglint/internal/analyzers/chanblock	0.573s
+ok  	github.com/gosuda/gglint/internal/analyzers/chanstate	3.911s
+ok  	github.com/gosuda/gglint/internal/analyzers/checkconst	0.117s
+ok  	github.com/gosuda/gglint/internal/analyzers/checkescape	1.882s
+ok  	github.com/gosuda/gglint/internal/analyzers/checkimports	1.957s
+ok  	github.com/gosuda/gglint/internal/analyzers/checklinkname	0.928s
+ok  	github.com/gosuda/gglint/internal/analyzers/checklocks	1.538s
+ok  	github.com/gosuda/gglint/internal/analyzers/closer	0.864s
+ok  	github.com/gosuda/gglint/internal/analyzers/complexity	1.961s
+ok  	github.com/gosuda/gglint/internal/analyzers/ctxflow	32.916s
+ok  	github.com/gosuda/gglint/internal/analyzers/dupl	1.702s
+ok  	github.com/gosuda/gglint/internal/analyzers/errchainreset	1.710s
+signal: killed
+FAIL	github.com/gosuda/gglint/internal/analyzers/errdrop	6.739s
+ok  	github.com/gosuda/gglint/internal/analyzers/gofumpt	0.517s
+signal: killed
+FAIL	github.com/gosuda/gglint/internal/analyzers/gorace	12.090s
+ok  	github.com/gosuda/gglint/internal/analyzers/goroutine	2.845s
+ok  	github.com/gosuda/gglint/internal/analyzers/gosec	3.964s
+ok  	github.com/gosuda/gglint/internal/analyzers/infiniterecursion	1.624s
+signal: killed
+FAIL	github.com/gosuda/gglint/internal/analyzers/lockstate	12.773s
+ok  	github.com/gosuda/gglint/internal/analyzers/misspell	0.290s
+ok  	github.com/gosuda/gglint/internal/analyzers/placeholder	4.408s
+--- FAIL: TestAnalyzer (0.95s)
+    analysistest.go:713: handoffflow/handoffflow.go:633: no diagnostic was reported matching `mu is locked again while already held`
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/reentrantlock	0.973s
+ok  	github.com/gosuda/gglint/internal/analyzers/resstate	7.684s
+ok  	github.com/gosuda/gglint/internal/analyzers/spin	8.119s
+ok  	github.com/gosuda/gglint/internal/analyzers/stackaddr	0.138s
+ok  	github.com/gosuda/gglint/internal/analyzers/timeafter	1.254s
+ok  	github.com/gosuda/gglint/internal/analyzers/typednil	0.807s
+ok  	github.com/gosuda/gglint/internal/analyzers/unparam	0.129s
+ok  	github.com/gosuda/gglint/internal/analyzers/wgstate	5.885s
+?   	github.com/gosuda/gglint/internal/analyzertest	[no test files]
+ok  	github.com/gosuda/gglint/internal/cli	102.814s
+ok  	github.com/gosuda/gglint/internal/config	0.041s
+ok  	github.com/gosuda/gglint/internal/driver	0.668s
+ok  	github.com/gosuda/gglint/internal/finding	0.047s
+ok  	github.com/gosuda/gglint/internal/flow	19.437s
+?   	github.com/gosuda/gglint/internal/inspection	[no test files]
+ok  	github.com/gosuda/gglint/internal/precision	43.296s
+ok  	github.com/gosuda/gglint/internal/report	0.003s
+ok  	github.com/gosuda/gglint/internal/rules	10.038s
+signal: killed
+FAIL	github.com/gosuda/gglint/internal/vettool	20.062s
+FAIL

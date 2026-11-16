@@ -111,7 +111,8 @@ func (c *checker) firstIteration(s *ast.ForStmt) (bool, bool) {
 		return value, true
 	}
 	init, ok := s.Init.(*ast.AssignStmt)
-	if !ok || len(init.Lhs) != 1 || len(init.Rhs) != 1 {
+	if !ok || (init.Tok != token.ASSIGN && init.Tok != token.DEFINE) ||
+		len(init.Lhs) != 1 || len(init.Rhs) != 1 {
 		return false, false
 	}
 	name, ok := ast.Unparen(init.Lhs[0]).(*ast.Ident)

@@ -1,5 +1,10 @@
 # Analyzer hardening evidence
 
+This is the earlier release-effect checkpoint. The subsequent executed-path
+repair and its current source manifest are recorded in [PATH-FLOW.md](PATH-FLOW.md).
+The historical `ANALYZERS.sha256` applies to the source revision below; use
+`CURRENT.sha256` to verify the current follow-up sources.
+
 This record covers the mutex handoff, explicit closer, and recursion-exit
 repairs. The focused normal, race, parity, formatting, vet, and self-lint gates
 passed. It does not establish that the whole repository or every upstream
@@ -18,8 +23,10 @@ source and test files. Documentation-only changes do not alter those inputs.
 This record and its source manifest retain that historical identity. The later
 [execution-path correction](FLOW.md) has its own frozen regressions, normal and
 race gates, complete rules retry, mutation controls, and final executable hash.
-Use `FLOW.sha256` for the current reentrant source; checking `ANALYZERS.sha256`
-requires the earlier source snapshot named above.
+Its `FLOW.sha256` applies to the recorded `058707e` checkpoint; checking
+`ANALYZERS.sha256` requires the earlier source snapshot named above. The further
+[compound-initialization and driver follow-up](PATH-FLOW.md) supplies the final
+combined source manifest, `CURRENT.sha256`.
 
 The toolchain reports `go1.27.4 linux/amd64`. Its `go` executable SHA-256 is
 `de0ae3e082ce7599eae4fb69fa2ef1e43b8f31ffd3fce62cdf81930aa9005050`.
@@ -122,7 +129,7 @@ its barrier and release fixed points and used `slices.ContainsFunc`.
 No complexity threshold or exclusion changed.
 
 Replay these historical focused gates from the source snapshot above with Go
-1.27.4. The later flow record supplies the current reentrant commands and hashes.
+1.27.4. The later flow records supply their own commands and source hashes.
 
 ```sh
 GOTOOLCHAIN=local GOMAXPROCS=2 go test -count=1 \

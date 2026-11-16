@@ -77,7 +77,13 @@ func typecheckContinuation(line string) bool {
 	if kind == "have" && name == "" && strings.HasSuffix(params, "...)") {
 		params = strings.TrimSuffix(params, "...)") + ")"
 	}
-	source, ok := normalizeDiagnosticTypes("func(" + params)
+	return validDiagnosticSignature("func("+params, name != "")
+}
+
+// validDiagnosticSignature requires the complete text to describe one function
+// type. Only method signatures may have results after the parameter tuple.
+func validDiagnosticSignature(source string, allowResults bool) bool {
+	source, ok := normalizeDiagnosticTypes(source)
 	if !ok {
 		return false
 	}
@@ -87,7 +93,7 @@ func typecheckContinuation(line string) bool {
 		return false
 	}
 	sig, ok := expr.(*ast.FuncType)
-	return ok && (name != "" || sig.Results == nil) &&
+	return ok && (allowResults || sig.Results == nil) &&
 		strings.TrimSpace(source[fset.Position(sig.End()).Offset:]) == ""
 }
 
