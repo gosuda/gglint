@@ -46,10 +46,23 @@ func pairUse() error {
 }
 
 func explicitClose() {
-	f := mustOpen() // want "f is never closed"
+	f := mustOpen()
 	if err := f.Close(); err != nil {
 		panic(err)
 	}
+}
+
+func explicitReturnClose() error {
+	f, err := os.Open("x")
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+func explicitStmtClose() {
+	f := mustOpen()
+	f.Close()
 }
 
 func declType() {
@@ -80,7 +93,7 @@ func inLiteral() {
 }
 
 func nopCloser(r io.Reader) {
-	c := io.NopCloser(r) // want "c is never closed"
+	c := io.NopCloser(r)
 	if c == nil {
 		panic("nil")
 	}

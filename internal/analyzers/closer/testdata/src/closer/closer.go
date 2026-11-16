@@ -55,7 +55,7 @@ func create() {
 }
 
 func closedWithoutDefer() {
-	f := mustOpen() // want `f is never closed`
+	f := mustOpen()
 	if err := f.Close(); err != nil {
 		panic(err)
 	}
@@ -102,7 +102,7 @@ func shadowed() {
 }
 
 func nopCloser(r io.Reader) {
-	c := io.NopCloser(r) // want `c is never closed`
+	c := io.NopCloser(r)
 	if c == nil {
 		panic("nil")
 	}
