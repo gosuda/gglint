@@ -1,0 +1,5 @@
+vet
+-vettool=/workspace/scratch/93e0563596d1/bin/gglint-driver-candidate
+-json
+-config=/workspace/scratch/93e0563596d1/driver-stderr-cli/cache/gglint/config-16a3b041eee082c2d72ac40c02d506be54034b5472aaca68a948ca1c1c8ec406.json
+./...

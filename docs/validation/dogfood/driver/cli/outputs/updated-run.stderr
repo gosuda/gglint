@@ -1,0 +1,6 @@
+gglint: load: # m/source [m/source.test]
+source.go:4:2: undefined: x
+# m/dependency
+/opt/gglint: signal: killed
+
+additional tool context

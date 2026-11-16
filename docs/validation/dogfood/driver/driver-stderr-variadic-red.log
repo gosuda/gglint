@@ -1,0 +1,9 @@
+--- FAIL: TestFailedCommandsKeepOrdinarySourceReports (0.12s)
+    --- FAIL: TestFailedCommandsKeepOrdinarySourceReports/expanded_variadic_argument (0.00s)
+        stderr_test.go:156: load: # m/a
+            /w/a.go:4:2: not enough arguments in call to f
+            	have ([]bool...)
+            	want (int, string, ...bool)
+FAIL
+FAIL	github.com/gosuda/gglint/internal/driver	0.841s
+FAIL

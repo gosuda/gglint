@@ -55,7 +55,7 @@ name<TAB>mode<TAB>origin<TAB>description
 
 Stdout carries only the report in the selected format, and only on exit 0 or 1. On exit 2 or 3, stdout is empty.
 
-Stderr carries only lines that start with `gglint: `:
+Stderr carries status lines and errors prefixed with `gglint: `. Captured tool errors can include further lines of context:
 
 | Line | When |
 |---|---|
