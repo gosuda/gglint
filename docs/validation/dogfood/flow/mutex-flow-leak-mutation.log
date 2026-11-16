@@ -1,0 +1,26 @@
+--- FAIL: TestAnalyzer (0.85s)
+    analysistest.go:713: handoffflow/handoffflow.go:136: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:156: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:166: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:183: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:193: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:227: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:238: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:249: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:27: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:34: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:355: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:391: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:418: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:41: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:446: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:457: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:527: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:536: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:547: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:54: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:560: no diagnostic was reported matching `mu is locked again while already held`
+    analysistest.go:713: handoffflow/handoffflow.go:572: no diagnostic was reported matching `mu is locked again while already held`
+FAIL
+FAIL	github.com/gosuda/gglint/internal/analyzers/reentrantlock	0.857s
+FAIL

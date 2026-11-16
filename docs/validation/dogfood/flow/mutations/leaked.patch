@@ -1,0 +1,7 @@
+diff --git a/internal/analyzers/reentrantlock/paths.go b/workspace/scratch/93e0563596d1/mutex-flow-mutations/leaked-paths.go
+index d2e5adb..cfc33c5 100644
+--- a/internal/analyzers/reentrantlock/paths.go
++++ b/workspace/scratch/93e0563596d1/mutex-flow-mutations/leaked-paths.go
+@@ -33 +33 @@ func (f *flow) fork(walk func()) pathState {
+-	f.state = before
++	f.state = before; f.state.held = after.held

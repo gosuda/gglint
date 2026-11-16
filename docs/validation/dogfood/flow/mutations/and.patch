@@ -1,0 +1,7 @@
+diff --git a/internal/analyzers/reentrantlock/paths.go b/workspace/scratch/93e0563596d1/mutex-flow-mutations/and-paths.go
+index d2e5adb..80d43bc 100644
+--- a/internal/analyzers/reentrantlock/paths.go
++++ b/workspace/scratch/93e0563596d1/mutex-flow-mutations/and-paths.go
+@@ -22 +22 @@ func (s pathState) join(t pathState) pathState {
+-		held:         !s.stopped && s.held || !t.stopped && t.held,
++		held:         !s.stopped && s.held && !t.stopped && t.held,
