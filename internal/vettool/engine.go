@@ -177,13 +177,16 @@ func insideDir(dir, name string) bool {
 }
 
 // pkgDir returns the directory that holds the package's sources: the mode of
-// pass.Files' directories, so cgo build-cache artifacts cannot win it.
+// pass.Files' directories, excluding cgo build-cache artifacts so they cannot
+// win the vote even when they outnumber ordinary sources.
 func pkgDir(pass *analysis.Pass) string {
 	counts := map[string]int{}
 	for _, f := range pass.Files {
-		if tf := pass.Fset.File(f.FileStart); tf != nil {
-			counts[filepath.Dir(tf.Name())]++
+		tf := pass.Fset.File(f.FileStart)
+		if tf == nil || isCgoArtifact(tf.Name()) {
+			continue
 		}
+		counts[filepath.Dir(tf.Name())]++
 	}
 	best, n := "", -1
 	for d, c := range counts {
@@ -192,6 +195,14 @@ func pkgDir(pass *analysis.Pass) string {
 		}
 	}
 	return best
+}
+
+// isCgoArtifact reports whether name looks like a file cmd/cgo synthesizes
+// into the build cache: _cgo_gotypes.go, _cgo_import.go, _cgo_export.go, and
+// the *.cgo1.go copies of cgo sources.
+func isCgoArtifact(name string) bool {
+	base := filepath.Base(name)
+	return strings.HasPrefix(base, "_cgo_") || strings.HasSuffix(base, ".cgo1.go")
 }
 
 func fileAt(files []*ast.File, pos token.Pos) *ast.File {

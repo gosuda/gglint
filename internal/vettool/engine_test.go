@@ -368,6 +368,26 @@ func TestPositionOutsidePackageFilesDroppedOutsideRoot(t *testing.T) {
 		t.Error("in-package file outside exclude base dropped, want kept")
 	}
 	_ = othermodFile
+
+	// When cgo artifacts outnumber ordinary sources, the package dir vote
+	// must still land on the source dir, not the build cache.
+	fset3 := token.NewFileSet()
+	mustParse := func(name string) *ast.File {
+		f, err := parser.ParseFile(fset3, name, "package p\n", 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		return f
+	}
+	pass3 := &analysis.Pass{Fset: fset3, Files: []*ast.File{
+		mustParse("/tmp/go-build1328574828/b001/_cgo_gotypes.go"),
+		mustParse("/tmp/go-build1328574828/b001/sqlite3.cgo1.go"),
+		mustParse("/out/p/real.go"),
+	}}
+	target := fset3.AddFile("/out/p/other.go", -1, 100)
+	if got := e.keep(pass3, r, "", analysis.Diagnostic{Pos: token.Pos(target.Base()), Message: "probe finding"}); !got {
+		t.Error("source-dir file dropped when artifacts outnumber sources, want kept")
+	}
 	for _, tc := range cases {
 		if got := e.keep(pass, r, "", analysis.Diagnostic{Pos: tc.pos, Message: "probe finding"}); got != tc.want {
 			t.Errorf("%s: keep = %v, want %v", tc.name, got, tc.want)
