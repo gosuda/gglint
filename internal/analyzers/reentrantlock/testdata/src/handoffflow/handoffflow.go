@@ -622,3 +622,23 @@ func genericSizeofEvaluatesArgument[T any](value T) {
 	}())
 	mu.Lock()
 }
+
+func compoundLoopInitMayNotEnter() {
+	var mu sync.Mutex
+	mu.Lock()
+	i := 2
+	for i += 0; i < 1; i++ {
+		go mu.Unlock()
+	}
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func assignmentLoopInitStillEnters() {
+	var mu sync.Mutex
+	mu.Lock()
+	i := 2
+	for i = 0; i < 1; i++ {
+		go mu.Unlock()
+	}
+	mu.Lock()
+}
