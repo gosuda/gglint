@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/gosuda/gglint/internal/finding"
@@ -19,8 +18,6 @@ type Invocation struct {
 	BuildTags  []string
 	Patterns   []string
 }
-
-var typecheckLine = regexp.MustCompile(`^(?:vet: )?(.+\.go):(\d+)(?::(\d+))?: (.+)$`)
 
 func loadError(message string) error {
 	return errors.New("load: " + message)
@@ -35,8 +32,8 @@ func Vet(ctx context.Context, inv Invocation) ([]finding.Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	typecheck := typecheckFindings(out.stderr, inv.WorkDir)
-	if out.failed && len(typecheck) == 0 {
+	typecheck, sourceOnly := parseStderr(out.stderr, inv.WorkDir)
+	if out.failed && !sourceOnly {
 		return nil, loadError(strings.TrimSpace(string(out.stderr)))
 	}
 	return append(typecheck, findings...), nil
@@ -47,7 +44,8 @@ func Fix(ctx context.Context, inv Invocation) error {
 	if err != nil {
 		return err
 	}
-	if out.failed && len(typecheckFindings(out.stderr, inv.WorkDir)) == 0 {
+	_, sourceOnly := parseStderr(out.stderr, inv.WorkDir)
+	if out.failed && !sourceOnly {
 		return loadError(strings.TrimSpace(string(out.stderr)))
 	}
 	return nil
@@ -76,22 +74,6 @@ func execute(ctx context.Context, inv Invocation, modeFlag string) (output, erro
 		return output{}, loadError(err.Error())
 	}
 	return output{stdout: stdout.Bytes(), stderr: stderr.Bytes(), failed: err != nil}, nil
-}
-
-func typecheckFindings(stderr []byte, workDir string) []finding.Finding {
-	var out []finding.Finding
-	for line := range strings.SplitSeq(string(stderr), "\n") {
-		m := typecheckLine.FindStringSubmatch(strings.TrimRight(line, "\r"))
-		if m == nil {
-			continue
-		}
-		out = append(out, finding.Finding{
-			Rule:    finding.TypecheckRule,
-			Message: m[4],
-			Pos:     finding.Position{Path: absolute(m[1], workDir), Line: number(m[2]), Column: number(m[3])},
-		})
-	}
-	return out
 }
 
 func absolute(path, workDir string) string {
