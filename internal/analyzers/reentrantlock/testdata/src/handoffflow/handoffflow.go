@@ -543,3 +543,29 @@ func handoffRemainsLocalToDeferredBody() {
 	}()
 	mu.Lock() // want `mu is locked again while already held`
 }
+
+func maybeInvoke(cond bool, callback func()) {
+	if cond {
+		callback()
+	}
+}
+
+func callbackMayNotRun(cond bool) {
+	var mu sync.Mutex
+	mu.Lock()
+	maybeInvoke(cond, func() { go mu.Unlock() })
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func secondBeforeFirst(first, second func()) {
+	second()
+	first()
+}
+
+func callbackOrderIsNotArgumentOrder() {
+	var mu sync.Mutex
+	mu.Lock()
+	secondBeforeFirst(func() { go mu.Unlock() }, func() {
+		mu.Lock() // want `mu is locked again while already held`
+	})
+}
