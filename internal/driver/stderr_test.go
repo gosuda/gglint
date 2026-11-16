@@ -71,7 +71,7 @@ func TestFailedCommandsKeepOrdinarySourceReports(t *testing.T) {
 	}{
 		{
 			"multiple packages and progress",
-			"go: downloading example.com/x v1.0.0\n\n# m/a\n/w/a.go:4:2: undefined: x\n# m/b [m/b.test]\nvet: /w/b.go:5:3: undefined: y\n",
+			"go: downloading example.com/x v1.0.0\n\t \n# m/a\n# [m/a]\n/w/a.go:4:2: undefined: x\n# m/b [m/b.test]\nvet: /w/b.go:5:3: undefined: y\n",
 			[]string{"undefined: x", "undefined: y"},
 		},
 		{
@@ -149,5 +149,17 @@ func TestSuccessfulCommandsKeepStderrHandling(t *testing.T) {
 	}
 	if err := driver.Fix(t.Context(), inv); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFailedVetKeepsJSONAnalyzerError(t *testing.T) {
+	t.Setenv("PATH", installGo(t, goRun{
+		stdout: `{"m/z":{"nilness":{"error":"boom"}}}`,
+		stderr: "# m/z\n",
+		code:   1,
+	})+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := driver.Vet(t.Context(), invocation(t.TempDir()))
+	if err == nil || err.Error() != "internal: m/z: nilness: boom" || got != nil {
+		t.Fatalf("Vet = %+v, %v; want no findings and the existing internal: analyzer error", got, err)
 	}
 }
