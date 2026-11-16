@@ -1,0 +1,5 @@
+ok  	github.com/gosuda/gglint/internal/analyzers/reentrantlock	1.322s
+signal: killed
+FAIL	github.com/gosuda/gglint/internal/rules	10.086s
+ok  	github.com/gosuda/gglint/internal/driver	0.784s
+FAIL

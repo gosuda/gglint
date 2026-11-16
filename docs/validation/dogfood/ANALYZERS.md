@@ -12,13 +12,21 @@ package is correct. The wider corpus campaign records its own executed cases.
 
 ## Source identity
 
-The baseline is `8cb0b8d95bc44514deeea5c8ba0e97a1cd218ad8`. The final analyzer
-implementation was validated at local commit
+The baseline is `8cb0b8d95bc44514deeea5c8ba0e97a1cd218ad8`. The initial analyzer
+repair was validated at local commit
 `badfdb4d096529d72b8d1bb578153b962de0aec8`, tree
 `04591bdf52f4d1ca6055647afbe54c45dea048eb`. These are workspace Git identities;
 publishing commits through another transport may change their metadata.
 [ANALYZERS.sha256](ANALYZERS.sha256) independently identifies the 18 changed
 source and test files. Documentation-only changes do not alter those inputs.
+
+This record and its source manifest retain that historical identity. The later
+[execution-path correction](FLOW.md) has its own frozen regressions, normal and
+race gates, complete rules retry, mutation controls, and final executable hash.
+Its `FLOW.sha256` applies to the recorded `058707e` checkpoint; checking
+`ANALYZERS.sha256` requires the earlier source snapshot named above. The further
+[compound-initialization and driver follow-up](PATH-FLOW.md) supplies the final
+combined source manifest, `CURRENT.sha256`.
 
 The toolchain reports `go1.27.4 linux/amd64`. Its `go` executable SHA-256 is
 `de0ae3e082ce7599eae4fb69fa2ef1e43b8f31ffd3fce62cdf81930aa9005050`.
@@ -120,7 +128,8 @@ its barrier and release fixed points and used `slices.ContainsFunc`.
 [The original two findings](analyzers/selflint-before.json) remain recorded.
 No complexity threshold or exclusion changed.
 
-Replay the focused gates from the repository root with Go 1.27.4:
+Replay these historical focused gates from the source snapshot above with Go
+1.27.4. The later flow records supply their own commands and source hashes.
 
 ```sh
 GOTOOLCHAIN=local GOMAXPROCS=2 go test -count=1 \

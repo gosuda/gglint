@@ -170,3 +170,18 @@ binary identity. `CURRENT.sha256` identifies the final combined sources;
 The final executable's standard-mode self-lint then completed with exit 0 and
 `findings: []` across all four changed analyzer/driver packages. The complete
 JSON and stderr records are `path-flow/v2-selflint.json` and `.stderr`.
+
+## Concurrent publication merge
+
+While this follow-up was being verified, PR #9 independently advanced to
+`6ad020c83dc1bb9a0c78246b53ddd4b138f678d4`. Its recovered implementation matched
+the original `058707e` checkpoint and added the historical `FLOW.md`,
+`FLOW.sha256`, `FLOW-EVIDENCE.sha256`, and `flow/` records. A normal merge retained
+that complete evidence unchanged and preserved both parent histories.
+
+The merge keeps the already verified compound-initialization restriction, its
+paired fixture, and the driver signature-validator extraction. Every Go source
+file is byte-identical to local pre-merge revision `12d48e8`; no additional
+production or test change was introduced by conflict resolution. Both recorded
+executables remain unchanged. `CURRENT.sha256` verifies the combined sources,
+and `FLOW-EVIDENCE.sha256` verifies the concurrently published historical record.
