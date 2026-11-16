@@ -144,6 +144,16 @@ func TestFailedCommandsKeepOrdinarySourceReports(t *testing.T) {
 			[]string{"not enough arguments in call to f"},
 		},
 		{
+			"type parameter annotation with empty relative filename",
+			"# m/a\n/w/a.go:4:2: not enough arguments in call to f\n\thave (int /* with int declared at :100[/w/a.go:3:8] */)\n\twant (int, string)\n",
+			[]string{"not enough arguments in call to f"},
+		},
+		{
+			"type parameter annotation with inherited empty filename",
+			"# m/a\n/w/a.go:4:2: not enough arguments in call to f\n\thave (int /* with int declared at :100:8[/w/a.go:4:8] */)\n\twant (int, string)\n",
+			[]string{"not enough arguments in call to f"},
+		},
+		{
 			"type parameter annotations in method signatures",
 			"# m/a\n/w/a.go:4:2: T does not implement I\n\t\thave M([]int /* with int declared at C:\\work dir\\a.go:3:8 */) string /* with string declared at C:\\work dir\\a.go:3:17 */\n\t\twant M([]int) string\n",
 			[]string{"T does not implement I"},
