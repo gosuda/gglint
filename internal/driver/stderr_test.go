@@ -51,16 +51,18 @@ func TestFailedCommandsPreserveMixedToolErrors(t *testing.T) {
 				}
 				t.Run(name, func(t *testing.T) {
 					stderr = "\n" + stderr + "\n"
-					t.Setenv("PATH", installGo(t, goRun{stdout: unrelatedFinding, stderr: stderr, code: 1})+string(os.PathListSeparator)+os.Getenv("PATH"))
+					path := installGo(t, goRun{stdout: unrelatedFinding, stderr: stderr, code: 1}) + string(os.PathListSeparator) + os.Getenv("PATH")
 					inv := invocation(t.TempDir())
 					want := "load: " + strings.TrimSpace(stderr)
 					t.Run("Vet", func(t *testing.T) {
+						t.Setenv("PATH", path)
 						got, err := driver.Vet(t.Context(), inv)
 						if err == nil || err.Error() != want || got != nil {
 							t.Fatalf("Vet = %+v, %v; want no partial findings and %q", got, err, want)
 						}
 					})
 					t.Run("Fix", func(t *testing.T) {
+						t.Setenv("PATH", path)
 						if err := driver.Fix(t.Context(), inv); err == nil || err.Error() != want {
 							t.Fatalf("Fix error = %v; want %q", err, want)
 						}

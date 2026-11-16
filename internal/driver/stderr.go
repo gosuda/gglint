@@ -32,7 +32,7 @@ func parseStderr(stderr []byte, workDir string) (findings []finding.Finding, sou
 				continue
 			}
 			attached = false
-			if strings.TrimSpace(line) != "" && !packageHeader.MatchString(line) && !moduleDownload.MatchString(line) && !toolchainDownload.MatchString(line) {
+			if !diagnosticMetadata(line) {
 				known = false
 			}
 			continue
@@ -50,6 +50,11 @@ func parseStderr(stderr []byte, workDir string) (findings []finding.Finding, sou
 	return findings, known && len(findings) != 0
 }
 
+func diagnosticMetadata(line string) bool {
+	return strings.TrimSpace(line) == "" || packageHeader.MatchString(line) ||
+		moduleDownload.MatchString(line) || toolchainDownload.MatchString(line)
+}
+
 func toolFailureMessage(message string) bool {
 	message = strings.TrimSpace(message)
 	return strings.HasPrefix(message, "internal compiler error:") ||
@@ -61,11 +66,8 @@ func toolFailureMessage(message string) bool {
 // Go type errors print argument tuples or method signatures after have/want.
 // Indentation or those words alone do not establish a diagnostic continuation.
 func typecheckContinuation(line string) bool {
-	if line == "" || line[0] != '\t' && line[0] != ' ' {
-		return false
-	}
-	kind, signature, ok := strings.Cut(strings.TrimLeft(line, " \t"), " ")
-	if !ok || kind != "have" && kind != "want" {
+	kind, signature, ok := splitDiagnosticContinuation(line)
+	if !ok {
 		return false
 	}
 	name, params, ok := strings.Cut(signature, "(")
@@ -78,6 +80,14 @@ func typecheckContinuation(line string) bool {
 		params = strings.TrimSuffix(params, "...)") + ")"
 	}
 	return validDiagnosticSignature("func("+params, name != "")
+}
+
+func splitDiagnosticContinuation(line string) (kind, signature string, ok bool) {
+	if line == "" || line[0] != '\t' && line[0] != ' ' {
+		return "", "", false
+	}
+	kind, signature, ok = strings.Cut(strings.TrimLeft(line, " \t"), " ")
+	return kind, signature, ok && (kind == "have" || kind == "want")
 }
 
 // validDiagnosticSignature requires the complete text to describe one function
@@ -114,16 +124,16 @@ func normalizeDiagnosticTypes(source string) (string, bool) {
 		}
 		nextPos, nextTok, nextLit := scan.Scan()
 		start := file.Offset(pos)
-		if tok == token.STRING && strings.HasPrefix(lit, `"`) && nextTok == token.PERIOD {
+		replacement, paired := diagnosticTypeReplacement(tok, lit, nextTok)
+		if replacement != "" {
 			out.WriteString(source[cursor:start])
-			out.WriteString("gglintPackage")
+			out.WriteString(replacement)
 			cursor = start + len(lit)
-		} else if tok == token.IDENT && (lit == "unknown" || lit == "invalid") && nextTok == token.TYPE {
-			out.WriteString(source[cursor:start])
-			out.WriteString("gglintDiagnosticType")
-			cursor = file.Offset(nextPos) + len("type")
-			pos, tok, lit = scan.Scan()
-			continue
+			if paired {
+				cursor = file.Offset(nextPos) + len("type")
+				pos, tok, lit = scan.Scan()
+				continue
+			}
 		}
 		pos, tok, lit = nextPos, nextTok, nextLit
 	}
@@ -132,4 +142,14 @@ func normalizeDiagnosticTypes(source string) (string, bool) {
 	}
 	out.WriteString(source[cursor:])
 	return out.String(), true
+}
+
+func diagnosticTypeReplacement(tok token.Token, lit string, next token.Token) (replacement string, paired bool) {
+	if tok == token.STRING && strings.HasPrefix(lit, `"`) && next == token.PERIOD {
+		return "gglintPackage", false
+	}
+	if tok == token.IDENT && (lit == "unknown" || lit == "invalid") && next == token.TYPE {
+		return "gglintDiagnosticType", true
+	}
+	return "", false
 }

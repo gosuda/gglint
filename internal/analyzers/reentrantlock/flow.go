@@ -32,6 +32,10 @@ func (f *flow) visit(n ast.Node) bool {
 	if f.state.stopped || f.invocation(n) || f.control(n) {
 		return false
 	}
+	return f.descend(n)
+}
+
+func (f *flow) descend(n ast.Node) bool {
 	switch n := n.(type) {
 	case *ast.BranchStmt:
 		f.state.opaque = true
@@ -84,6 +88,20 @@ func (f *flow) control(n ast.Node) bool {
 			return false
 		}
 		f.shortCircuit(n)
+	case *ast.ReturnStmt:
+		for _, result := range n.Results {
+			f.walk(result)
+		}
+		f.state.returnedHeld = f.state.returnedHeld || f.state.held
+		f.state.stopped = true
+	default:
+		return f.barrierControl(n)
+	}
+	return true
+}
+
+func (f *flow) barrierControl(n ast.Node) bool {
+	switch n := n.(type) {
 	case *ast.ForStmt:
 		f.barrier()
 		f.loop(n)
@@ -101,12 +119,6 @@ func (f *flow) control(n ast.Node) bool {
 	case *ast.SelectStmt:
 		f.barrier()
 		f.selectStmt(n)
-	case *ast.ReturnStmt:
-		for _, result := range n.Results {
-			f.walk(result)
-		}
-		f.state.returnedHeld = f.state.returnedHeld || f.state.held
-		f.state.stopped = true
 	default:
 		return false
 	}
