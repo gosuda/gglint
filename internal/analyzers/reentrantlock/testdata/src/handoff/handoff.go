@@ -397,6 +397,84 @@ func neverReleasesAfterSelect() {
 	mu.Lock() // want `mu is locked again while already held`
 }
 
+func releaseAfterGoto(mu *sync.Mutex) {
+again:
+	goto again
+	mu.Unlock()
+}
+
+func neverReleasesAfterGoto() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterGoto(&mu)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func releaseAfterReturn(mu *sync.Mutex) {
+	return
+	mu.Unlock()
+}
+
+func neverReleasesAfterReturn() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterReturn(&mu)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func releaseAfterNestedReturn(mu *sync.Mutex) {
+	{
+		return
+	}
+	mu.Unlock()
+}
+
+func neverReleasesAfterNestedReturn() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterNestedReturn(&mu)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func releaseAfterBranches(mu *sync.Mutex, choose bool) {
+	if choose {
+		return
+	} else {
+		return
+	}
+	mu.Unlock()
+}
+
+func neverReleasesAfterBranches() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterBranches(&mu, true)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func neverReleasesAfterLiteralReturn() {
+	var mu sync.Mutex
+	mu.Lock()
+	go func() {
+		return
+		mu.Unlock()
+	}()
+	mu.Lock() // want `mu is locked again while already held`
+}
+
+func releaseAfterRecoveredPanic(mu *sync.Mutex) {
+	defer func() { recover() }()
+	panic("stop")
+	mu.Unlock()
+}
+
+func neverReleasesAfterRecoveredPanic() {
+	var mu sync.Mutex
+	mu.Lock()
+	go releaseAfterRecoveredPanic(&mu)
+	mu.Lock() // want `mu is locked again while already held`
+}
+
 func storedRelease() {
 	var mu sync.Mutex
 	mu.Lock()
