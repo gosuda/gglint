@@ -9,6 +9,7 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/edge"
 	"golang.org/x/tools/go/ast/inspector"
+	"golang.org/x/tools/go/types/typeutil"
 
 	"github.com/gosuda/gglint/internal/inspection"
 )
@@ -19,12 +20,13 @@ var Analyzer = &analysis.Analyzer{
 
 A local variable declared in a function (not a parameter or named result) that
 is set from a call whose result type has a Close() error method must be closed by
-defer v.Close(), or by v.Close() inside a deferred function literal, or handed
+defer v.Close(), by a direct Close call in a statement, return, assignment or
+declaration, or by v.Close() inside a deferred function literal, or handed
 on: returned, stored, sent, passed as an argument, aliased, taken as a method
 value, or captured by a function literal. A method call, a field selection, a
 comparison with == or !=, an assignment to the variable, and _ = v neither
 close nor hand on. One finding is reported per variable, at its first
-assignment from a call.`,
+assignment from a call. io.NopCloser does not acquire a resource.`,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
@@ -125,7 +127,8 @@ func (s *scan) isCall(e ast.Expr) bool {
 		return false
 	}
 	fun := s.pass.TypesInfo.Types[call.Fun]
-	return !fun.IsType() && !fun.IsBuiltin()
+	fn := typeutil.StaticCallee(s.pass.TypesInfo, call)
+	return !fun.IsType() && !fun.IsBuiltin() && (fn == nil || fn.FullName() != "io.NopCloser")
 }
 
 func (s *scan) declaredHere(v *types.Var) bool {
@@ -145,12 +148,14 @@ func hasClose(t types.Type) bool {
 }
 
 func (s *scan) collectReleases() {
-	for cur := range s.fn.Preorder((*ast.Ident)(nil), (*ast.DeferStmt)(nil)) {
+	for cur := range s.fn.Preorder((*ast.Ident)(nil), (*ast.CallExpr)(nil)) {
 		switch n := cur.Node().(type) {
 		case *ast.Ident:
 			s.noteUse(cur, n)
-		case *ast.DeferStmt:
-			s.noteDeferredClose(n.Call)
+		case *ast.CallExpr:
+			if directCloseContext(cur) {
+				s.noteClose(n)
+			}
 		}
 	}
 }
@@ -165,7 +170,23 @@ func (s *scan) noteUse(cur inspector.Cursor, id *ast.Ident) {
 	}
 }
 
-func (s *scan) noteDeferredClose(call *ast.CallExpr) {
+// A direct call executes before its result is assigned or returned. Calls
+// nested in a short-circuit expression and calls launched by go do not establish
+// that this function closed the resource.
+func directCloseContext(cur inspector.Cursor) bool {
+	for cur.ParentEdgeKind() == edge.ParenExpr_X {
+		cur = cur.Parent()
+	}
+	switch cur.ParentEdgeKind() {
+	case edge.DeferStmt_Call, edge.ExprStmt_X, edge.ReturnStmt_Results,
+		edge.AssignStmt_Rhs, edge.ValueSpec_Values:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *scan) noteClose(call *ast.CallExpr) {
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != "Close" || len(call.Args) != 0 {
 		return
