@@ -169,6 +169,13 @@ the passing result. A compile failure would not satisfy this control.
 
 ## Remaining campaign gate
 
+The [actual-source modernc replay](modernc/README.md) additionally compares the
+baseline and candidate on the complete pinned SQLite source tree with tests
+enabled and only the mutex rule plus mandatory type checking selected. The
+baseline reports `TestMutexWakeOnce`'s second lock; the candidate reports none.
+That focused result does not replace the full modernc matrix's separate
+dependency-loading failures.
+
 The full-repository test gate remains incomplete. The pre-existing test that
 loads and runs nine vettool engines was killed on both the candidate and the
 pristine `8cb0b8d` baseline in this environment. That is not a pass and does not
