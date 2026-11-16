@@ -1,0 +1,16 @@
+--- FAIL: TestFailedCommandsPreserveMixedToolErrors (0.48s)
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/diagnostic_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int /* panic: hidden failure */)"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_tuple/diagnostic_first/Fix (0.00s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\thave (int /* panic: hidden failure */)"
+    --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method (0.02s)
+        --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/diagnostic_first (0.01s)
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/diagnostic_first/Vet (0.01s)
+                stderr_test.go:60: Vet = [{Rule:typecheck Check: Message:undefined: x Pos:{Path:/w/source.go Line:4 Column:2} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false} {Rule:printf Check: Message:bad verb Pos:{Path:/w/ok.go Line:1 Column:1} End:{Path: Line:0 Column:0} Related:[] Fixes:[] Fixable:false}], <nil>; want no partial findings and "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\twant M(/* fatal error: stopped */ int) error"
+            --- FAIL: TestFailedCommandsPreserveMixedToolErrors/comment_within_a_method/diagnostic_first/Fix (0.01s)
+                stderr_test.go:65: Fix error = <nil>; want "load: # m/source [m/source.test]\r\n/w/source.go:4:2: undefined: x\r\n\twant M(/* fatal error: stopped */ int) error"
+FAIL
+FAIL	github.com/gosuda/gglint/internal/driver	0.831s
+FAIL

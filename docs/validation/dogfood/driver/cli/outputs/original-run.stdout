@@ -1,0 +1,1 @@
+{"mode":"basic","findings":[{"rule":"printf","path":"ok.go","line":1,"column":1,"message":"bad verb"},{"rule":"typecheck","path":"source.go","line":4,"column":2,"message":"undefined: x"}]}
