@@ -6,6 +6,7 @@ type flow struct {
 	c         *checker
 	onCall    func(*ast.CallExpr)
 	onGo      func(*ast.GoStmt)
+	onBarrier func()
 	onStmts   func([]ast.Stmt)
 	deferHeld func(*ast.DeferStmt) bool
 }
@@ -36,6 +37,12 @@ func (f *flow) visit(n ast.Node) bool {
 	case *ast.CallExpr:
 		f.call(n)
 		return false
+	case *ast.AssignStmt, *ast.IncDecStmt, *ast.ForStmt, *ast.RangeStmt, *ast.SelectStmt:
+		f.barrier()
+	case *ast.ValueSpec:
+		if len(n.Values) != 0 {
+			f.barrier()
+		}
 	case *ast.BlockStmt:
 		f.stmts(n.List)
 	case *ast.CaseClause:
@@ -44,6 +51,12 @@ func (f *flow) visit(n ast.Node) bool {
 		f.stmts(n.Body)
 	}
 	return true
+}
+
+func (f *flow) barrier() {
+	if f.onBarrier != nil {
+		f.onBarrier()
+	}
 }
 
 func (f *flow) deferred(d *ast.DeferStmt) {

@@ -31,9 +31,12 @@ under that mutex, with a method value's receiver bound to the call-site
 operand. A go statement evaluates its function operand and arguments
 synchronously and runs the call in a new goroutine. After the spawn, a
 reachable Unlock of the held mutex invalidates the held state when that
-goroutine's synchronous call graph contains no recognized mutex acquisition or
-unresolved function call. This models release-only same-package helpers and mutex handoffs, not every possible
-deadlock involving other synchronization. A defer statement
+goroutine's synchronous call graph contains no mutex acquisition, mutation,
+loop, select, nested spawn, unsafe operation, or opaque call. Only same-package helpers,
+non-mutating builtins, mutex releases, and scalar sync/atomic operations are
+modeled. Value receivers are not release aliases. This models
+mutex handoffs, not every possible deadlock involving other synchronization.
+A defer statement
 evaluates its function operand and arguments synchronously and runs the call
 at function exit; within a held region that reaches the end of its statement
 list, the call runs under the mutex unless a later deferred Unlock of the
@@ -52,16 +55,16 @@ type heldCall struct {
 }
 
 type checker struct {
-	pass      *analysis.Pass
-	order     []*types.Func
-	decls     map[*types.Func]*ast.FuncDecl
-	invokes   map[*types.Func]map[int]bool
-	heldCalls map[*types.Func][]heldCall
-	summaries map[*types.Func]map[lockKey]bool
-	releases  map[*types.Func]map[lockKey]bool
-	acquires  map[*types.Func]bool
-	limit     int
-	reported  map[*ast.CallExpr]bool
+	pass           *analysis.Pass
+	order          []*types.Func
+	decls          map[*types.Func]*ast.FuncDecl
+	invokes        map[*types.Func]map[int]bool
+	heldCalls      map[*types.Func][]heldCall
+	summaries      map[*types.Func]map[lockKey]bool
+	releases       map[*types.Func]map[lockKey]bool
+	releaseBarrier map[*types.Func]bool
+	limit          int
+	reported       map[*ast.CallExpr]bool
 }
 
 func run(pass *analysis.Pass) (any, error) {
@@ -213,9 +216,14 @@ func (c *checker) deferHeldIn(key lockKey, region, tail []ast.Stmt) func(*ast.De
 
 func (c *checker) summarize() map[*types.Func][]*ast.CallExpr {
 	calls := make(map[*types.Func][]*ast.CallExpr)
+	c.releaseBarrier = make(map[*types.Func]bool)
 	for _, fn := range c.order {
 		f := &flow{c: c, onCall: func(call *ast.CallExpr) {
 			calls[fn] = append(calls[fn], call)
+		}, onGo: func(*ast.GoStmt) {
+			c.releaseBarrier[fn] = true
+		}, onBarrier: func() {
+			c.releaseBarrier[fn] = true
 		}}
 		f.walk(c.decls[fn].Body)
 		c.summaries[fn] = make(map[lockKey]bool)
