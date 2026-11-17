@@ -365,7 +365,7 @@ The catalog has 104 rules. `basic` runs 51 of them, `standard` runs 92, and `str
 | Rule | Origin | Description |
 |---|---|---|
 | `backingpin` | logos | Reports subslices and substrings that keep a backing store over 64 KiB alive past the function. |
-| `chanblock` | logos | Reports channel sends and receives that can block forever without a ctx.Done() case or buffer proof. |
+| `chanblock` | logos | Reports channel sends and receives that can block forever without a default or ctx.Done() select case or buffer proof. |
 | `checklocks` | gvisor | Checks +checklocks and +checkatomic annotations and reports double acquisition of a held lock. |
 | `closer` | logos | Reports local io closers that are neither closed nor handed on. |
 | `contextcheck` | third-party | Reports functions that use a non-inherited context. |

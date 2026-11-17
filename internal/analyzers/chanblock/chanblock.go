@@ -21,13 +21,15 @@ var Analyzer = &analysis.Analyzer{
 	Name: "chanblock",
 	Doc: `report channel sends and receives that can block forever
 
-A channel operation is bounded only when it is a case of a select that also
-receives from x.Done(), or when its channel is a local variable made once in
-the function by make(chan T, k) with a constant k and the function, nested
-function literals included, sends on it at most k times and never inside a
-loop. When a send on such a channel sits in a loop or the sends exceed k,
-every send and receive on the channel is reported. A receive of x.Done() on
-its own, range over a channel, close, len, and cap are not reported.`,
+A channel operation is bounded when it is a case of a select with a default
+case or a receive from x.Done(), or when its channel is a local variable made
+once in the function by make(chan T, k) with a constant k and the function,
+nested function literals included, sends on it at most k times and never
+inside a loop. When a send on such a channel sits in a loop or the sends
+exceed k, every uncovered send and receive on the channel is reported.
+Select-case operands and case bodies are checked independently, including
+nested selects. A receive of x.Done() on its own, range over a channel,
+close, len, and cap are not reported.`,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
@@ -128,10 +130,10 @@ func (u *unit) rangeStmt(r *ast.RangeStmt) {
 }
 
 func (u *unit) selectStmt(s *ast.SelectStmt) {
-	done := u.hasDoneCase(s)
+	covered := u.selectCovered(s)
 	for _, stmt := range s.Body.List {
 		cc := inspection.As[*ast.CommClause](stmt)
-		u.covered = done
+		u.covered = covered
 		operands := u.comm(cc.Comm)
 		u.covered = false
 		for _, x := range operands {
@@ -143,9 +145,13 @@ func (u *unit) selectStmt(s *ast.SelectStmt) {
 	}
 }
 
-func (u *unit) hasDoneCase(s *ast.SelectStmt) bool {
+func (u *unit) selectCovered(s *ast.SelectStmt) bool {
 	for _, stmt := range s.Body.List {
-		r := commReceive(inspection.As[*ast.CommClause](stmt).Comm)
+		cc := inspection.As[*ast.CommClause](stmt)
+		if cc.Comm == nil {
+			return true
+		}
+		r := commReceive(cc.Comm)
 		if r != nil && u.isDone(r.X) {
 			return true
 		}

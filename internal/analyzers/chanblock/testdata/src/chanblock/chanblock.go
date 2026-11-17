@@ -57,7 +57,7 @@ func selectNoDone(a, b chan int) int {
 
 func selectDefault(a chan int) {
 	select {
-	case a <- 1: // want `channel send can block forever: select on ctx\.Done\(\) or use a buffered channel`
+	case a <- 1:
 	default:
 	}
 }
@@ -292,7 +292,7 @@ func selectCounts() {
 	ch := make(chan int, 1)
 	ch <- 1 // want `channel send can block forever: select on ctx\.Done\(\) or use a buffered channel`
 	select {
-	case ch <- 2: // want `channel send can block forever: select on ctx\.Done\(\) or use a buffered channel`
+	case ch <- 2:
 	default:
 	}
 }

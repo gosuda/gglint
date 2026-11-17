@@ -1,0 +1,971 @@
+{
+  "chi": {
+    "case": {
+      "backend": "go-only",
+      "cgo": 0,
+      "cohort": "popular",
+      "id": "chi",
+      "logos_policy": "",
+      "logos_policy_sha256": "",
+      "module": "github.com/go-chi/chi/v5",
+      "operation": "test",
+      "patterns": [
+        "./..."
+      ],
+      "revision": "c64ed7d6635f33a8b2feaff7dcfa55677023ac7d",
+      "source": "chi",
+      "source_kind": "git",
+      "sum": "",
+      "tags": [],
+      "upstream": "https://github.com/go-chi/chi.git",
+      "version": ""
+    },
+    "source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM=",
+    "source_path": "/home/runner/work/_temp/logos-corpus-inputs/sources/chi",
+    "stages": [
+      {
+        "assessment": {
+          "diagnostics": 0,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "",
+          "reason": "",
+          "status": "pass"
+        },
+        "inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "mode": "",
+        "run": {
+          "command": [
+            "/home/runner/work/_temp/oracle/bin/go",
+            "build",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/oracle",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 0,
+          "seconds": 11.57,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/oracle.stderr",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/oracle.stdout",
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "timed_out": false
+        },
+        "stage": "oracle"
+      },
+      {
+        "assessment": {
+          "diagnostics": 0,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "",
+          "reason": "",
+          "status": "pass"
+        },
+        "inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "mode": "",
+        "run": {
+          "command": [
+            "/home/runner/work/LoGOs/LoGOs/bin/go",
+            "build",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/go",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/LoGOs/LoGOs/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 0,
+          "seconds": 12.213,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/go.stderr",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/go.stdout",
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "timed_out": false
+        },
+        "stage": "go"
+      },
+      {
+        "assessment": {
+          "diagnostics": 0,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "",
+          "reason": "",
+          "status": "pass"
+        },
+        "inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "mode": "",
+        "run": {
+          "command": [
+            "/home/runner/work/LoGOs/LoGOs/bin/logos",
+            "build",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/logos",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/LoGOs/LoGOs/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 0,
+          "seconds": 14.382,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/logos.stderr",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/logos.stdout",
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "timed_out": false
+        },
+        "stage": "logos"
+      },
+      {
+        "assessment": {
+          "diagnostics": 26,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "3f833d5fb7c3dc3f691e364ed92b00fa419d37c053ad8c0a96254c6067520797",
+          "reason": "",
+          "status": "findings"
+        },
+        "inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "mode": "",
+        "repeat": {
+          "command": [
+            "/home/runner/work/LoGOs/LoGOs/bin/logos",
+            "lint",
+            "--json-diagnostics",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/logos",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/LoGOs/LoGOs/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 1,
+          "seconds": 0.164,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/logos-lint-repeat.stderr",
+          "stderr_sha256": "3c9f894ba266cbcc377d8bed5decd34b8a7b8670ffc30410f69d6c07d504c20c",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/logos-lint-repeat.stdout",
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "timed_out": false
+        },
+        "repeat_assessment": {
+          "diagnostics": 26,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "3f833d5fb7c3dc3f691e364ed92b00fa419d37c053ad8c0a96254c6067520797",
+          "reason": "",
+          "status": "findings"
+        },
+        "repeat_inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "run": {
+          "command": [
+            "/home/runner/work/LoGOs/LoGOs/bin/logos",
+            "lint",
+            "--json-diagnostics",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/logos",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/LoGOs/LoGOs/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 1,
+          "seconds": 14.282,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/logos-lint.stderr",
+          "stderr_sha256": "3c9f894ba266cbcc377d8bed5decd34b8a7b8670ffc30410f69d6c07d504c20c",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/logos-lint.stdout",
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "timed_out": false
+        },
+        "stage": "logos-lint"
+      },
+      {
+        "assessment": {
+          "diagnostics": 3,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "43bf2063d8108a40c95bb5a3daddb9365dbcd901bc84a1749d4338ddb4b5d2dd",
+          "reason": "",
+          "status": "findings"
+        },
+        "inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "mode": "basic",
+        "repeat": {
+          "command": [
+            "/home/runner/work/_temp/gglint",
+            "run",
+            "-config",
+            "/home/runner/work/_temp/logos-corpus-evidence/corpus/config/chi.toml",
+            "-mode",
+            "basic",
+            "-format",
+            "json",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/gglint",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 1,
+          "seconds": 0.264,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-basic-repeat.stderr",
+          "stderr_sha256": "4922790e1b266c983408219547684120b1bb56353aa5c04431fef7e65e570af0",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-basic-repeat.stdout",
+          "stdout_sha256": "d6915d4d6eb8a765c6f7177f0f7b24715471076bad688cd7d512c498cf6a9565",
+          "timed_out": false
+        },
+        "repeat_assessment": {
+          "diagnostics": 3,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "43bf2063d8108a40c95bb5a3daddb9365dbcd901bc84a1749d4338ddb4b5d2dd",
+          "reason": "",
+          "status": "findings"
+        },
+        "repeat_inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "run": {
+          "command": [
+            "/home/runner/work/_temp/gglint",
+            "run",
+            "-config",
+            "/home/runner/work/_temp/logos-corpus-evidence/corpus/config/chi.toml",
+            "-mode",
+            "basic",
+            "-format",
+            "json",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/gglint",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 1,
+          "seconds": 20.81,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-basic.stderr",
+          "stderr_sha256": "4922790e1b266c983408219547684120b1bb56353aa5c04431fef7e65e570af0",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-basic.stdout",
+          "stdout_sha256": "d6915d4d6eb8a765c6f7177f0f7b24715471076bad688cd7d512c498cf6a9565",
+          "timed_out": false
+        },
+        "stage": "gglint"
+      },
+      {
+        "assessment": {
+          "diagnostics": 52,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "003aab79090fb7b8bb6a36951b820dbaa2c67530c67a31927977a01b9e4f21a1",
+          "reason": "",
+          "status": "findings"
+        },
+        "inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "mode": "standard",
+        "repeat": {
+          "command": [
+            "/home/runner/work/_temp/gglint",
+            "run",
+            "-config",
+            "/home/runner/work/_temp/logos-corpus-evidence/corpus/config/chi.toml",
+            "-mode",
+            "standard",
+            "-format",
+            "json",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/gglint",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 1,
+          "seconds": 0.264,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-standard-repeat.stderr",
+          "stderr_sha256": "4922790e1b266c983408219547684120b1bb56353aa5c04431fef7e65e570af0",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-standard-repeat.stdout",
+          "stdout_sha256": "e4adccddcc1c6117ee0bcc90cbfc7b9866d6b83c2b5b0081e3bf3d4fc25290f6",
+          "timed_out": false
+        },
+        "repeat_assessment": {
+          "diagnostics": 52,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "003aab79090fb7b8bb6a36951b820dbaa2c67530c67a31927977a01b9e4f21a1",
+          "reason": "",
+          "status": "findings"
+        },
+        "repeat_inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "run": {
+          "command": [
+            "/home/runner/work/_temp/gglint",
+            "run",
+            "-config",
+            "/home/runner/work/_temp/logos-corpus-evidence/corpus/config/chi.toml",
+            "-mode",
+            "standard",
+            "-format",
+            "json",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/gglint",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 1,
+          "seconds": 10.312,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-standard.stderr",
+          "stderr_sha256": "4922790e1b266c983408219547684120b1bb56353aa5c04431fef7e65e570af0",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-standard.stdout",
+          "stdout_sha256": "e4adccddcc1c6117ee0bcc90cbfc7b9866d6b83c2b5b0081e3bf3d4fc25290f6",
+          "timed_out": false
+        },
+        "stage": "gglint"
+      },
+      {
+        "assessment": {
+          "diagnostics": 102,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "f2f9b292fe52f23cdcfe9822e6f147ac3bc2ecbd82b6b62efe77d004fc054b1e",
+          "reason": "",
+          "status": "findings"
+        },
+        "inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "mode": "strict",
+        "repeat": {
+          "command": [
+            "/home/runner/work/_temp/gglint",
+            "run",
+            "-config",
+            "/home/runner/work/_temp/logos-corpus-evidence/corpus/config/chi.toml",
+            "-mode",
+            "strict",
+            "-format",
+            "json",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/gglint",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 1,
+          "seconds": 0.264,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-strict-repeat.stderr",
+          "stderr_sha256": "4922790e1b266c983408219547684120b1bb56353aa5c04431fef7e65e570af0",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-strict-repeat.stdout",
+          "stdout_sha256": "395c6d8d16316e4409af01de7217bc19304ad10915007308b21b3bbe0cb2fe35",
+          "timed_out": false
+        },
+        "repeat_assessment": {
+          "diagnostics": 102,
+          "duplicate_diagnostics": 0,
+          "normalized_sha256": "f2f9b292fe52f23cdcfe9822e6f147ac3bc2ecbd82b6b62efe77d004fc054b1e",
+          "reason": "",
+          "status": "findings"
+        },
+        "repeat_inputs": {
+          "effective_source_digest": "h1:oMQs0ebb+20GDsR632aZraCgKic1nf5stVTvz73euoM="
+        },
+        "run": {
+          "command": [
+            "/home/runner/work/_temp/gglint",
+            "run",
+            "-config",
+            "/home/runner/work/_temp/logos-corpus-evidence/corpus/config/chi.toml",
+            "-mode",
+            "strict",
+            "-format",
+            "json",
+            "./..."
+          ],
+          "cwd": "/home/runner/work/_temp/logos-corpus-evidence/corpus/work/chi",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/gglint",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 1,
+          "seconds": 12.221,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-strict.stderr",
+          "stderr_sha256": "4922790e1b266c983408219547684120b1bb56353aa5c04431fef7e65e570af0",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/logs/chi/gglint-strict.stdout",
+          "stdout_sha256": "395c6d8d16316e4409af01de7217bc19304ad10915007308b21b3bbe0cb2fe35",
+          "timed_out": false
+        },
+        "stage": "gglint"
+      }
+    ],
+    "status": "finished"
+  },
+  "corpus_report_archive": "evidence/corpus-report.json.gz",
+  "corpus_report_sha256": "c24f5d54623a81fc4ea17c0c3d1ad1121619729c4d7889463c78043d2b8d2527",
+  "gglint_base": "a95099aae13ff7ffb4b3825bd63f8510bd184c69",
+  "historical_run": {
+    "conclusion": "failure",
+    "head_sha": "c47c4cfc56fc8bfa916d170ed51040195b567dc9",
+    "html_url": "https://github.com/gosuda/LoGOs/actions/runs/43928753813",
+    "id": 43928753813,
+    "run_attempt": 1
+  },
+  "logos_reference": {
+    "commit": "b61a6cfeb33051791348597fbb69818f4e2ec6f7",
+    "default_fix_commit": "bbc506ab936608c24294f1603028905fff6f88a6",
+    "files": {
+      "src/cmd/compile/internal/logos/lint/rule_unbounded_channel_op.go": {
+        "archive": "logos/rule_unbounded_channel_op.go.txt",
+        "blob": "35896c895bb7a3d48fb32a3704832ead820d1db2",
+        "sha256": "ffd6dbbf057d88920d05743cf3ce801412c44cf507edf60958e2eef5112adc87"
+      },
+      "test/logos/lint/unbounded_channel_op.lgo": {
+        "archive": "logos/unbounded_channel_op.lgo.txt",
+        "blob": "32d908726566f6d3bda2e7e350e292878caaa75f",
+        "sha256": "3893ccb003ef2d4ca1b0d112782c63865581fc2cfe235243d7bcb79cecb760bc"
+      },
+      "test/logos/lint/unbounded_channel_op_go.go": {
+        "archive": "logos/unbounded_channel_op_go.go.txt",
+        "blob": "2ab97e97960a7e85623bfb6d0b20572e12eac8ad",
+        "sha256": "0f118bc61ec67ddce3c958fc90722d0d27d91d2a83d238fc338d511531bec268"
+      }
+    },
+    "source_tree": "df267333b1d5c5727e2477215a6807cae52f8e18"
+  },
+  "old_files": {
+    "internal/analyzers/chanblock/chanblock.go": {
+      "archive": "old/chanblock.go.txt",
+      "blob": "b1277279c4b98cf5a3bf20cec2de7f73aae87126",
+      "sha256": "a1bd615ab949c6a60432c62125973dc73429fd4a036ba213860e8e88c3bba66f"
+    },
+    "internal/analyzers/chanblock/testdata/src/chanblock/chanblock.go": {
+      "archive": "old/analyzer-fixture.go.txt",
+      "blob": "cd45974bfa73382e046377f7a0da4b6e5b5c31ba",
+      "sha256": "165178392e74bc11228158ac959caac983b8ecbf229966bc9a577c5b897d636f"
+    },
+    "internal/rules/testdata/src/correctness_unbounded_channel_op/unbounded_channel_op.go": {
+      "archive": "old/parity-fixture.go.txt",
+      "blob": "50c0d06278a432c5ae53d23f864671b2265845af",
+      "sha256": "8d7326bae2efed95f8a9a0d1b3aaf6f740b1612dbf62b29054712c58401eef2f"
+    }
+  },
+  "prospective_replay": {
+    "all_other_findings": "must remain byte-equivalent as JSON objects",
+    "basic_expected_count": 3,
+    "standard_expected_count": 52,
+    "status": "not executed",
+    "strict_expected_count": 101,
+    "strict_expected_findings": "expected-chi-strict-findings.json",
+    "strict_removed_finding": {
+      "column": 17,
+      "end_column": 27,
+      "end_line": 95,
+      "line": 95,
+      "message": "channel receive can block forever: select on ctx.Done()",
+      "path": "middleware/throttle.go",
+      "rule": "chanblock"
+    }
+  },
+  "schema_version": 1,
+  "scope": "default-select communications only; new Go tests not executed locally",
+  "tools": {
+    "gglint": {
+      "path": "/home/runner/work/_temp/gglint",
+      "sha256": "3adff5060505683489f771dd0a43a75fa28ff0ed5b36a40c4716659088d96c39"
+    },
+    "go": {
+      "path": "/home/runner/work/LoGOs/LoGOs/bin/go",
+      "sha256": "708b55d5eb5707570b55ffb205a94d320b4e0d598ed7903fdb9863ced1377952"
+    },
+    "logos": {
+      "path": "/home/runner/work/LoGOs/LoGOs/bin/logos",
+      "sha256": "708b55d5eb5707570b55ffb205a94d320b4e0d598ed7903fdb9863ced1377952"
+    },
+    "oracle": {
+      "path": "/home/runner/work/_temp/oracle/bin/go",
+      "sha256": "de0ae3e082ce7599eae4fb69fa2ef1e43b8f31ffd3fce62cdf81930aa9005050"
+    }
+  },
+  "versions": {
+    "gglint": {
+      "run": {
+        "command": [
+          "/home/runner/work/_temp/gglint",
+          "version"
+        ],
+        "cwd": "/home/runner/work/LoGOs/LoGOs/misc/logos-dogfood",
+        "environment": {
+          "CC": "gcc",
+          "CGO_ENABLED": "0",
+          "CXX": "g++",
+          "GOCACHE": "/home/runner/work/_temp/corpus-cache/gglint",
+          "GOENV": "off",
+          "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+          "GOMAXPROCS": "2",
+          "GOMEMLIMIT": "2GiB",
+          "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOTELEMETRY": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "PATH": "/home/runner/work/_temp:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+        },
+        "error": "",
+        "returncode": 0,
+        "seconds": 0.064,
+        "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/gglint.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/gglint.stdout",
+        "stdout_sha256": "a4e537525bff0c8c66cab6b9fb273aa7b3d084bc3ec0dae4dd75e74eca4f92bc",
+        "timed_out": false
+      },
+      "text": "gglint v0.0.0-20261116175650-a95099aae13f go1.27.4"
+    },
+    "go": {
+      "run": {
+        "command": [
+          "/home/runner/work/LoGOs/LoGOs/bin/go",
+          "version"
+        ],
+        "cwd": "/home/runner/work/LoGOs/LoGOs/misc/logos-dogfood",
+        "environment": {
+          "CC": "gcc",
+          "CGO_ENABLED": "0",
+          "CXX": "g++",
+          "GOCACHE": "/home/runner/work/_temp/corpus-cache/go",
+          "GOENV": "off",
+          "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+          "GOMAXPROCS": "2",
+          "GOMEMLIMIT": "2GiB",
+          "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOTELEMETRY": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "PATH": "/home/runner/work/LoGOs/LoGOs/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+        },
+        "error": "",
+        "returncode": 0,
+        "seconds": 0.004,
+        "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/go.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/go.stdout",
+        "stdout_sha256": "a29205bd83967c2f70e6768fae009600038d6056499fa289de9d5f9b79beaef4",
+        "timed_out": false
+      },
+      "text": "go version go1.27.4 linux/amd64",
+      "toolchain": {
+        "compiler_source_h1": "h1:ppbGFSUaTewTAn4SwU1APMPjZXLXnsobf/Zan0rhz7U=",
+        "goroot": "/home/runner/work/LoGOs/LoGOs",
+        "run": {
+          "command": [
+            "/home/runner/work/LoGOs/LoGOs/bin/go",
+            "env",
+            "-json",
+            "GOROOT",
+            "GOTOOLDIR"
+          ],
+          "cwd": "/home/runner/work/LoGOs/LoGOs/misc/logos-dogfood",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/go",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/LoGOs/LoGOs/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 0,
+          "seconds": 0.004,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/go-identity.stderr",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/go-identity.stdout",
+          "stdout_sha256": "6e70d3fe9a110f2bf6727f1f2735aeb4e4c239b45e3f9ee90de63a5a7f0f92a9",
+          "timed_out": false
+        },
+        "source_revision": "c47c4cfc56fc8bfa916d170ed51040195b567dc9",
+        "source_status": "",
+        "tools": {
+          "asm": {
+            "path": "/home/runner/work/LoGOs/LoGOs/pkg/tool/linux_amd64/asm",
+            "sha256": "0d65fca7065f4bf0d3f6657c85b35479f6a2fdd6e7e4172f6221c1e96a04081b"
+          },
+          "cgo": {
+            "path": "/home/runner/work/LoGOs/LoGOs/pkg/tool/linux_amd64/cgo",
+            "sha256": "a77ec916f77781551858360f249934b6762a649196b75de330e86200a1156fb9"
+          },
+          "compile": {
+            "path": "/home/runner/work/LoGOs/LoGOs/pkg/tool/linux_amd64/compile",
+            "sha256": "a2b3a7f9353f5b0e2f7cfdd3007f85b1d5bd92ae3b74eb4dcc7a38f2dc73bb66"
+          },
+          "link": {
+            "path": "/home/runner/work/LoGOs/LoGOs/pkg/tool/linux_amd64/link",
+            "sha256": "a3b952057f0b04b13d7af70aed216dc41c59fc1278f5418af4f99e17b5373ce1"
+          }
+        }
+      }
+    },
+    "logos": {
+      "run": {
+        "command": [
+          "/home/runner/work/LoGOs/LoGOs/bin/logos",
+          "version"
+        ],
+        "cwd": "/home/runner/work/LoGOs/LoGOs/misc/logos-dogfood",
+        "environment": {
+          "CC": "gcc",
+          "CGO_ENABLED": "0",
+          "CXX": "g++",
+          "GOCACHE": "/home/runner/work/_temp/corpus-cache/logos",
+          "GOENV": "off",
+          "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+          "GOMAXPROCS": "2",
+          "GOMEMLIMIT": "2GiB",
+          "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOTELEMETRY": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "PATH": "/home/runner/work/LoGOs/LoGOs/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+        },
+        "error": "",
+        "returncode": 0,
+        "seconds": 0.004,
+        "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/logos.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/logos.stdout",
+        "stdout_sha256": "3a7b14cf792a79c78a9e42aab8906e0774b54ecddbbbc520ce94651a34aec2f9",
+        "timed_out": false
+      },
+      "text": "logos version go1.27.4 linux/amd64",
+      "toolchain": {
+        "compiler_source_h1": "h1:ppbGFSUaTewTAn4SwU1APMPjZXLXnsobf/Zan0rhz7U=",
+        "goroot": "/home/runner/work/LoGOs/LoGOs",
+        "run": {
+          "command": [
+            "/home/runner/work/LoGOs/LoGOs/bin/logos",
+            "env",
+            "-json",
+            "GOROOT",
+            "GOTOOLDIR"
+          ],
+          "cwd": "/home/runner/work/LoGOs/LoGOs/misc/logos-dogfood",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/logos",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/LoGOs/LoGOs/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 0,
+          "seconds": 0.004,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/logos-identity.stderr",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/logos-identity.stdout",
+          "stdout_sha256": "6e70d3fe9a110f2bf6727f1f2735aeb4e4c239b45e3f9ee90de63a5a7f0f92a9",
+          "timed_out": false
+        },
+        "source_revision": "c47c4cfc56fc8bfa916d170ed51040195b567dc9",
+        "source_status": "",
+        "tools": {
+          "asm": {
+            "path": "/home/runner/work/LoGOs/LoGOs/pkg/tool/linux_amd64/asm",
+            "sha256": "0d65fca7065f4bf0d3f6657c85b35479f6a2fdd6e7e4172f6221c1e96a04081b"
+          },
+          "cgo": {
+            "path": "/home/runner/work/LoGOs/LoGOs/pkg/tool/linux_amd64/cgo",
+            "sha256": "a77ec916f77781551858360f249934b6762a649196b75de330e86200a1156fb9"
+          },
+          "compile": {
+            "path": "/home/runner/work/LoGOs/LoGOs/pkg/tool/linux_amd64/compile",
+            "sha256": "a2b3a7f9353f5b0e2f7cfdd3007f85b1d5bd92ae3b74eb4dcc7a38f2dc73bb66"
+          },
+          "link": {
+            "path": "/home/runner/work/LoGOs/LoGOs/pkg/tool/linux_amd64/link",
+            "sha256": "a3b952057f0b04b13d7af70aed216dc41c59fc1278f5418af4f99e17b5373ce1"
+          }
+        }
+      }
+    },
+    "oracle": {
+      "run": {
+        "command": [
+          "/home/runner/work/_temp/oracle/bin/go",
+          "version"
+        ],
+        "cwd": "/home/runner/work/LoGOs/LoGOs/misc/logos-dogfood",
+        "environment": {
+          "CC": "gcc",
+          "CGO_ENABLED": "0",
+          "CXX": "g++",
+          "GOCACHE": "/home/runner/work/_temp/corpus-cache/oracle",
+          "GOENV": "off",
+          "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+          "GOMAXPROCS": "2",
+          "GOMEMLIMIT": "2GiB",
+          "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+          "GOPROXY": "off",
+          "GOSUMDB": "off",
+          "GOTELEMETRY": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+        },
+        "error": "",
+        "returncode": 0,
+        "seconds": 0.004,
+        "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/oracle.stderr",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/oracle.stdout",
+        "stdout_sha256": "a29205bd83967c2f70e6768fae009600038d6056499fa289de9d5f9b79beaef4",
+        "timed_out": false
+      },
+      "text": "go version go1.27.4 linux/amd64",
+      "toolchain": {
+        "compiler_source_h1": "h1:E+85JdaKFrFMOOqiy7ZxDTOB3s28bZCsBLRbm1ztpaI=",
+        "goroot": "/home/runner/work/_temp/oracle",
+        "run": {
+          "command": [
+            "/home/runner/work/_temp/oracle/bin/go",
+            "env",
+            "-json",
+            "GOROOT",
+            "GOTOOLDIR"
+          ],
+          "cwd": "/home/runner/work/LoGOs/LoGOs/misc/logos-dogfood",
+          "environment": {
+            "CC": "gcc",
+            "CGO_ENABLED": "0",
+            "CXX": "g++",
+            "GOCACHE": "/home/runner/work/_temp/corpus-cache/oracle",
+            "GOENV": "off",
+            "GOFLAGS": "-mod=readonly -buildvcs=false -p=2",
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "2GiB",
+            "GOMODCACHE": "/home/runner/work/_temp/logos-corpus-inputs/modules",
+            "GOPROXY": "off",
+            "GOSUMDB": "off",
+            "GOTELEMETRY": "off",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PATH": "/home/runner/work/_temp/oracle/bin:/usr/local/bin:/home/runner/work/_temp/uv:/home/runner/work/_temp/oracle/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+          },
+          "error": "",
+          "returncode": 0,
+          "seconds": 0.004,
+          "stderr": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/oracle-identity.stderr",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stdout": "/home/runner/work/_temp/logos-corpus-evidence/corpus/tools/oracle-identity.stdout",
+          "stdout_sha256": "19c0bc4c88743755d3c71420230e74df9d03f9763eb0df30f37376bc38b073b3",
+          "timed_out": false
+        },
+        "tools": {
+          "asm": {
+            "path": "/home/runner/work/_temp/oracle/pkg/tool/linux_amd64/asm",
+            "sha256": "a67997d99985e3ef3ecd30f029685d67d778a0c8f78b852396ef7738426c04b5"
+          },
+          "cgo": {
+            "path": "/home/runner/work/_temp/oracle/pkg/tool/linux_amd64/cgo",
+            "sha256": "0ac696dfbbcdd912cb833d7190c7f91388bac2d89d4dc79c8915a4e43239b675"
+          },
+          "compile": {
+            "path": "/home/runner/work/_temp/oracle/pkg/tool/linux_amd64/compile",
+            "sha256": "40307e5f5c65a4b4220bbf35dbe014348780589ea2964003f0bf318fa14640e1"
+          },
+          "link": {
+            "path": "/home/runner/work/_temp/oracle/pkg/tool/linux_amd64/link",
+            "sha256": "e2248a29fbbf15dac1fe72c9d646776dbcd38c9813b78182fe01a4a47f3299c3"
+          }
+        }
+      }
+    }
+  }
+}

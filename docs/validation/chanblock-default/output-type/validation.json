@@ -1,0 +1,94 @@
+{
+  "checker_sha256": "d98c5b76b72e713de4a6afc6a20f7e3cc17f5472b6c2515dd4f475a365c37fb4",
+  "checks": {
+    "format": {
+      "arguments": [
+        "ruff",
+        "format",
+        "--check",
+        "--no-cache",
+        "docs/validation/chanblock-default/check_ci.py",
+        "docs/validation/chanblock-default/test_check_ci.py"
+      ],
+      "exit_code": 0,
+      "log_sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+    },
+    "original_frozen_hashes": {
+      "arguments": [
+        "sha256sum",
+        "-c",
+        "docs/validation/chanblock-default/FROZEN.sha256"
+      ],
+      "exit_code": 0,
+      "files": 32
+    },
+    "protocol_frozen_hashes": {
+      "arguments": [
+        "sha256sum",
+        "-c",
+        "docs/validation/chanblock-default/output-type/FROZEN.sha256"
+      ],
+      "exit_code": 0,
+      "files": 6
+    },
+    "pyright": {
+      "arguments": [
+        "pyright",
+        "docs/validation/chanblock-default/check_ci.py",
+        "docs/validation/chanblock-default/test_check_ci.py"
+      ],
+      "exit_code": 0,
+      "log_sha256": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332"
+    },
+    "pytest": {
+      "arguments": [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "docs/validation/chanblock-default/test_check_ci.py"
+      ],
+      "exit_code": 0,
+      "passed": 108,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_sha256": "19a4b4ef6243ae2d024d4bac4fbb700d9fa517afb3c3ce27d9216fc02465d539"
+    },
+    "ruff": {
+      "arguments": [
+        "ruff",
+        "check",
+        "--no-cache",
+        "docs/validation/chanblock-default/check_ci.py",
+        "docs/validation/chanblock-default/test_check_ci.py"
+      ],
+      "exit_code": 0,
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    }
+  },
+  "environment": {
+    "HYPOTHESIS_STORAGE_DIRECTORY": "/workspace/scratch/d8d410ec882d/recovery-evidence/chanblock-ci-python/hypothesis",
+    "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "fresh_hosted_run_required": true,
+  "frozen_commit": "e9e3c27cf88a5add9e1116eff16153bd3106511b",
+  "frozen_test_sha256": "3fa07e626803beb0ca438ba82df81040fdce41c6f5a2736f626c9b60dafb84ba",
+  "frozen_tree": "17e1732024747b9d32afc2e88b6bb22483adb40b",
+  "local_go_execution": false,
+  "schema_version": 1,
+  "uv_prefix": [
+    "uv",
+    "run",
+    "--offline",
+    "--no-project",
+    "--no-config",
+    "--python",
+    "3.12",
+    "--no-python-downloads",
+    "--with-requirements",
+    "docs/validation/chanblock-default/test-requirements.txt"
+  ],
+  "working_directory": "/workspace/scratch/d8d410ec882d/gglint-chanblock-default"
+}

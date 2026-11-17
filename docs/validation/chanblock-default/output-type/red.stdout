@@ -1,0 +1,520 @@
+FFFF.......FFFF......................................................... [ 66%]
+....................................                                     [100%]
+=================================== FAILURES ===================================
+_ test_observed_go1274_test_streams[old-production-github.com/gosuda/gglint/internal/analyzers/chanblock-names0-1] _
+
+hosted_evidence = {'artifact/chanblock-default/binary-buildinfo.run.json': b'{\n  "command": [\n    "/opt/hostedtoolcache/go/1.27.4/x64/...f684c125888e845c20",\n  "sha256_before": "4ea13c96695c6aa1724a1379e21c43e8286b476c80db58f684c125888e845c20"\n}\n', ...}
+label = 'old-production'
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestDefaultSelectBounds', 'TestDefaultSelectBounds/communications'})
+code = 1
+
+    @pytest.mark.parametrize(
+        "label,package,names,code",
+        (
+            (
+                "old-production",
+                check.ANALYZER,
+                frozenset((check.ROOT, check.NEGATIVE)),
+                1,
+            ),
+            ("positive", check.ANALYZER, check.ANALYZER_NAMES, 0),
+            ("race", check.ANALYZER, check.ANALYZER_NAMES, 0),
+            ("parity", check.RULES, check.PARITY_NAMES, 0),
+        ),
+    )
+    def test_observed_go1274_test_streams(
+        hosted_evidence: dict[str, bytes],
+        label: str,
+        package: str,
+        names: frozenset[str],
+        code: int,
+    ) -> None:
+        stdout, stderr, recorded_code = hosted_stream(hosted_evidence, label)
+        assert recorded_code == code
+>       check.check_test_output(
+            stdout,
+            stderr,
+            code,
+            package,
+            names,
+            negative=label == "old-production",
+        )
+
+docs/validation/chanblock-default/test_check_ci.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+stdout = '{"Time":"2026-11-16T21:29:28.471693717Z","Action":"start","Package":"github.com/gosuda/gglint/internal/analyzers/chan...1:29:28.56206567Z","Action":"fail","Package":"github.com/gosuda/gglint/internal/analyzers/chanblock","Elapsed":0.09}\n'
+stderr = b'', returncode = 1
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestDefaultSelectBounds', 'TestDefaultSelectBounds/communications'})
+negative = True
+
+    def check_test_output(
+        stdout: str,
+        stderr: bytes,
+        returncode: int,
+        package: str,
+        names: frozenset[str],
+        *,
+        negative: bool = False,
+    ) -> None:
+        if stderr:
+            raise ValueError("test command wrote stderr")
+        active: dict[str, str] = {}
+        runs: Counter[str] = Counter()
+        results: Counter[str] = Counter()
+        diagnostics: Counter[str] = Counter()
+        started = False
+        finished = False
+        outcome = "fail" if negative else "pass"
+        for line in stdout.splitlines():
+            event = mapping(decode(line))
+            action = string(event.get("Action"))
+            if action.startswith("build-") or "FailedBuild" in event:
+                raise ValueError("build event cannot establish test evidence")
+            if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+>               raise ValueError("unknown test event field")
+E               ValueError: unknown test event field
+
+docs/validation/chanblock-default/check_ci.py:198: ValueError
+_ test_observed_go1274_test_streams[positive-github.com/gosuda/gglint/internal/analyzers/chanblock-names1-0] _
+
+hosted_evidence = {'artifact/chanblock-default/binary-buildinfo.run.json': b'{\n  "command": [\n    "/opt/hostedtoolcache/go/1.27.4/x64/...f684c125888e845c20",\n  "sha256_before": "4ea13c96695c6aa1724a1379e21c43e8286b476c80db58f684c125888e845c20"\n}\n', ...}
+label = 'positive'
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestAnalyzer', 'TestDefaultSelectBounds', 'TestDefaultSelectBounds/accounting', 'TestDefaultSelectBounds/bodies', 'TestDefaultSelectBounds/cancellation', 'TestDefaultSelectBounds/communications', ...})
+code = 0
+
+    @pytest.mark.parametrize(
+        "label,package,names,code",
+        (
+            (
+                "old-production",
+                check.ANALYZER,
+                frozenset((check.ROOT, check.NEGATIVE)),
+                1,
+            ),
+            ("positive", check.ANALYZER, check.ANALYZER_NAMES, 0),
+            ("race", check.ANALYZER, check.ANALYZER_NAMES, 0),
+            ("parity", check.RULES, check.PARITY_NAMES, 0),
+        ),
+    )
+    def test_observed_go1274_test_streams(
+        hosted_evidence: dict[str, bytes],
+        label: str,
+        package: str,
+        names: frozenset[str],
+        code: int,
+    ) -> None:
+        stdout, stderr, recorded_code = hosted_stream(hosted_evidence, label)
+        assert recorded_code == code
+>       check.check_test_output(
+            stdout,
+            stderr,
+            code,
+            package,
+            names,
+            negative=label == "old-production",
+        )
+
+docs/validation/chanblock-default/test_check_ci.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+stdout = '{"Time":"2026-11-16T21:29:28.886592079Z","Action":"start","Package":"github.com/gosuda/gglint/internal/analyzers/chan...:29:29.62444105Z","Action":"pass","Package":"github.com/gosuda/gglint/internal/analyzers/chanblock","Elapsed":0.738}\n'
+stderr = b'', returncode = 0
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestAnalyzer', 'TestDefaultSelectBounds', 'TestDefaultSelectBounds/accounting', 'TestDefaultSelectBounds/bodies', 'TestDefaultSelectBounds/cancellation', 'TestDefaultSelectBounds/communications', ...})
+negative = False
+
+    def check_test_output(
+        stdout: str,
+        stderr: bytes,
+        returncode: int,
+        package: str,
+        names: frozenset[str],
+        *,
+        negative: bool = False,
+    ) -> None:
+        if stderr:
+            raise ValueError("test command wrote stderr")
+        active: dict[str, str] = {}
+        runs: Counter[str] = Counter()
+        results: Counter[str] = Counter()
+        diagnostics: Counter[str] = Counter()
+        started = False
+        finished = False
+        outcome = "fail" if negative else "pass"
+        for line in stdout.splitlines():
+            event = mapping(decode(line))
+            action = string(event.get("Action"))
+            if action.startswith("build-") or "FailedBuild" in event:
+                raise ValueError("build event cannot establish test evidence")
+            if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+>               raise ValueError("unknown test event field")
+E               ValueError: unknown test event field
+
+docs/validation/chanblock-default/check_ci.py:198: ValueError
+_ test_observed_go1274_test_streams[race-github.com/gosuda/gglint/internal/analyzers/chanblock-names2-0] _
+
+hosted_evidence = {'artifact/chanblock-default/binary-buildinfo.run.json': b'{\n  "command": [\n    "/opt/hostedtoolcache/go/1.27.4/x64/...f684c125888e845c20",\n  "sha256_before": "4ea13c96695c6aa1724a1379e21c43e8286b476c80db58f684c125888e845c20"\n}\n', ...}
+label = 'race'
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestAnalyzer', 'TestDefaultSelectBounds', 'TestDefaultSelectBounds/accounting', 'TestDefaultSelectBounds/bodies', 'TestDefaultSelectBounds/cancellation', 'TestDefaultSelectBounds/communications', ...})
+code = 0
+
+    @pytest.mark.parametrize(
+        "label,package,names,code",
+        (
+            (
+                "old-production",
+                check.ANALYZER,
+                frozenset((check.ROOT, check.NEGATIVE)),
+                1,
+            ),
+            ("positive", check.ANALYZER, check.ANALYZER_NAMES, 0),
+            ("race", check.ANALYZER, check.ANALYZER_NAMES, 0),
+            ("parity", check.RULES, check.PARITY_NAMES, 0),
+        ),
+    )
+    def test_observed_go1274_test_streams(
+        hosted_evidence: dict[str, bytes],
+        label: str,
+        package: str,
+        names: frozenset[str],
+        code: int,
+    ) -> None:
+        stdout, stderr, recorded_code = hosted_stream(hosted_evidence, label)
+        assert recorded_code == code
+>       check.check_test_output(
+            stdout,
+            stderr,
+            code,
+            package,
+            names,
+            negative=label == "old-production",
+        )
+
+docs/validation/chanblock-default/test_check_ci.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+stdout = '{"Time":"2026-11-16T21:29:53.133421349Z","Action":"start","Package":"github.com/gosuda/gglint/internal/analyzers/chan...29:56.590861283Z","Action":"pass","Package":"github.com/gosuda/gglint/internal/analyzers/chanblock","Elapsed":3.457}\n'
+stderr = b'', returncode = 0
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestAnalyzer', 'TestDefaultSelectBounds', 'TestDefaultSelectBounds/accounting', 'TestDefaultSelectBounds/bodies', 'TestDefaultSelectBounds/cancellation', 'TestDefaultSelectBounds/communications', ...})
+negative = False
+
+    def check_test_output(
+        stdout: str,
+        stderr: bytes,
+        returncode: int,
+        package: str,
+        names: frozenset[str],
+        *,
+        negative: bool = False,
+    ) -> None:
+        if stderr:
+            raise ValueError("test command wrote stderr")
+        active: dict[str, str] = {}
+        runs: Counter[str] = Counter()
+        results: Counter[str] = Counter()
+        diagnostics: Counter[str] = Counter()
+        started = False
+        finished = False
+        outcome = "fail" if negative else "pass"
+        for line in stdout.splitlines():
+            event = mapping(decode(line))
+            action = string(event.get("Action"))
+            if action.startswith("build-") or "FailedBuild" in event:
+                raise ValueError("build event cannot establish test evidence")
+            if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+>               raise ValueError("unknown test event field")
+E               ValueError: unknown test event field
+
+docs/validation/chanblock-default/check_ci.py:198: ValueError
+_ test_observed_go1274_test_streams[parity-github.com/gosuda/gglint/internal/rules-names3-0] _
+
+hosted_evidence = {'artifact/chanblock-default/binary-buildinfo.run.json': b'{\n  "command": [\n    "/opt/hostedtoolcache/go/1.27.4/x64/...f684c125888e845c20",\n  "sha256_before": "4ea13c96695c6aa1724a1379e21c43e8286b476c80db58f684c125888e845c20"\n}\n', ...}
+label = 'parity', package = 'github.com/gosuda/gglint/internal/rules'
+names = frozenset({'TestLogosPorts', 'TestLogosPorts/correctness_unbounded_channel_op'})
+code = 0
+
+    @pytest.mark.parametrize(
+        "label,package,names,code",
+        (
+            (
+                "old-production",
+                check.ANALYZER,
+                frozenset((check.ROOT, check.NEGATIVE)),
+                1,
+            ),
+            ("positive", check.ANALYZER, check.ANALYZER_NAMES, 0),
+            ("race", check.ANALYZER, check.ANALYZER_NAMES, 0),
+            ("parity", check.RULES, check.PARITY_NAMES, 0),
+        ),
+    )
+    def test_observed_go1274_test_streams(
+        hosted_evidence: dict[str, bytes],
+        label: str,
+        package: str,
+        names: frozenset[str],
+        code: int,
+    ) -> None:
+        stdout, stderr, recorded_code = hosted_stream(hosted_evidence, label)
+        assert recorded_code == code
+>       check.check_test_output(
+            stdout,
+            stderr,
+            code,
+            package,
+            names,
+            negative=label == "old-production",
+        )
+
+docs/validation/chanblock-default/test_check_ci.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+stdout = '{"Time":"2026-11-16T21:30:30.962736781Z","Action":"start","Package":"github.com/gosuda/gglint/internal/rules"}\n{"Tim...2026-11-16T21:30:31.307946073Z","Action":"pass","Package":"github.com/gosuda/gglint/internal/rules","Elapsed":0.345}\n'
+stderr = b'', returncode = 0
+package = 'github.com/gosuda/gglint/internal/rules'
+names = frozenset({'TestLogosPorts', 'TestLogosPorts/correctness_unbounded_channel_op'})
+negative = False
+
+    def check_test_output(
+        stdout: str,
+        stderr: bytes,
+        returncode: int,
+        package: str,
+        names: frozenset[str],
+        *,
+        negative: bool = False,
+    ) -> None:
+        if stderr:
+            raise ValueError("test command wrote stderr")
+        active: dict[str, str] = {}
+        runs: Counter[str] = Counter()
+        results: Counter[str] = Counter()
+        diagnostics: Counter[str] = Counter()
+        started = False
+        finished = False
+        outcome = "fail" if negative else "pass"
+        for line in stdout.splitlines():
+            event = mapping(decode(line))
+            action = string(event.get("Action"))
+            if action.startswith("build-") or "FailedBuild" in event:
+                raise ValueError("build event cannot establish test evidence")
+            if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+>               raise ValueError("unknown test event field")
+E               ValueError: unknown test event field
+
+docs/validation/chanblock-default/check_ci.py:198: ValueError
+________________________ test_documented_output_types[] ________________________
+
+output_type = ''
+
+    @pytest.mark.parametrize("output_type", ("", "frame", "error", "error-continue"))
+    def test_documented_output_types(output_type: str) -> None:
+        events = negative()
+        events[3]["OutputType"] = output_type
+>       accept(events, old=True)
+
+docs/validation/chanblock-default/test_check_ci.py:216: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+docs/validation/chanblock-default/test_check_ci.py:190: in accept
+    check.check_test_output(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+stdout = '{"Action": "start", "Package": "github.com/gosuda/gglint/internal/analyzers/chanblock"}\n{"Action": "run", "Package":...block", "Output": "FAIL\\n"}\n{"Action": "fail", "Package": "github.com/gosuda/gglint/internal/analyzers/chanblock"}\n'
+stderr = b'', returncode = 1
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestDefaultSelectBounds', 'TestDefaultSelectBounds/communications'})
+negative = True
+
+    def check_test_output(
+        stdout: str,
+        stderr: bytes,
+        returncode: int,
+        package: str,
+        names: frozenset[str],
+        *,
+        negative: bool = False,
+    ) -> None:
+        if stderr:
+            raise ValueError("test command wrote stderr")
+        active: dict[str, str] = {}
+        runs: Counter[str] = Counter()
+        results: Counter[str] = Counter()
+        diagnostics: Counter[str] = Counter()
+        started = False
+        finished = False
+        outcome = "fail" if negative else "pass"
+        for line in stdout.splitlines():
+            event = mapping(decode(line))
+            action = string(event.get("Action"))
+            if action.startswith("build-") or "FailedBuild" in event:
+                raise ValueError("build event cannot establish test evidence")
+            if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+>               raise ValueError("unknown test event field")
+E               ValueError: unknown test event field
+
+docs/validation/chanblock-default/check_ci.py:198: ValueError
+_____________________ test_documented_output_types[frame] ______________________
+
+output_type = 'frame'
+
+    @pytest.mark.parametrize("output_type", ("", "frame", "error", "error-continue"))
+    def test_documented_output_types(output_type: str) -> None:
+        events = negative()
+        events[3]["OutputType"] = output_type
+>       accept(events, old=True)
+
+docs/validation/chanblock-default/test_check_ci.py:216: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+docs/validation/chanblock-default/test_check_ci.py:190: in accept
+    check.check_test_output(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+stdout = '{"Action": "start", "Package": "github.com/gosuda/gglint/internal/analyzers/chanblock"}\n{"Action": "run", "Package":...block", "Output": "FAIL\\n"}\n{"Action": "fail", "Package": "github.com/gosuda/gglint/internal/analyzers/chanblock"}\n'
+stderr = b'', returncode = 1
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestDefaultSelectBounds', 'TestDefaultSelectBounds/communications'})
+negative = True
+
+    def check_test_output(
+        stdout: str,
+        stderr: bytes,
+        returncode: int,
+        package: str,
+        names: frozenset[str],
+        *,
+        negative: bool = False,
+    ) -> None:
+        if stderr:
+            raise ValueError("test command wrote stderr")
+        active: dict[str, str] = {}
+        runs: Counter[str] = Counter()
+        results: Counter[str] = Counter()
+        diagnostics: Counter[str] = Counter()
+        started = False
+        finished = False
+        outcome = "fail" if negative else "pass"
+        for line in stdout.splitlines():
+            event = mapping(decode(line))
+            action = string(event.get("Action"))
+            if action.startswith("build-") or "FailedBuild" in event:
+                raise ValueError("build event cannot establish test evidence")
+            if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+>               raise ValueError("unknown test event field")
+E               ValueError: unknown test event field
+
+docs/validation/chanblock-default/check_ci.py:198: ValueError
+_____________________ test_documented_output_types[error] ______________________
+
+output_type = 'error'
+
+    @pytest.mark.parametrize("output_type", ("", "frame", "error", "error-continue"))
+    def test_documented_output_types(output_type: str) -> None:
+        events = negative()
+        events[3]["OutputType"] = output_type
+>       accept(events, old=True)
+
+docs/validation/chanblock-default/test_check_ci.py:216: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+docs/validation/chanblock-default/test_check_ci.py:190: in accept
+    check.check_test_output(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+stdout = '{"Action": "start", "Package": "github.com/gosuda/gglint/internal/analyzers/chanblock"}\n{"Action": "run", "Package":...block", "Output": "FAIL\\n"}\n{"Action": "fail", "Package": "github.com/gosuda/gglint/internal/analyzers/chanblock"}\n'
+stderr = b'', returncode = 1
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestDefaultSelectBounds', 'TestDefaultSelectBounds/communications'})
+negative = True
+
+    def check_test_output(
+        stdout: str,
+        stderr: bytes,
+        returncode: int,
+        package: str,
+        names: frozenset[str],
+        *,
+        negative: bool = False,
+    ) -> None:
+        if stderr:
+            raise ValueError("test command wrote stderr")
+        active: dict[str, str] = {}
+        runs: Counter[str] = Counter()
+        results: Counter[str] = Counter()
+        diagnostics: Counter[str] = Counter()
+        started = False
+        finished = False
+        outcome = "fail" if negative else "pass"
+        for line in stdout.splitlines():
+            event = mapping(decode(line))
+            action = string(event.get("Action"))
+            if action.startswith("build-") or "FailedBuild" in event:
+                raise ValueError("build event cannot establish test evidence")
+            if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+>               raise ValueError("unknown test event field")
+E               ValueError: unknown test event field
+
+docs/validation/chanblock-default/check_ci.py:198: ValueError
+_________________ test_documented_output_types[error-continue] _________________
+
+output_type = 'error-continue'
+
+    @pytest.mark.parametrize("output_type", ("", "frame", "error", "error-continue"))
+    def test_documented_output_types(output_type: str) -> None:
+        events = negative()
+        events[3]["OutputType"] = output_type
+>       accept(events, old=True)
+
+docs/validation/chanblock-default/test_check_ci.py:216: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+docs/validation/chanblock-default/test_check_ci.py:190: in accept
+    check.check_test_output(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+stdout = '{"Action": "start", "Package": "github.com/gosuda/gglint/internal/analyzers/chanblock"}\n{"Action": "run", "Package":...block", "Output": "FAIL\\n"}\n{"Action": "fail", "Package": "github.com/gosuda/gglint/internal/analyzers/chanblock"}\n'
+stderr = b'', returncode = 1
+package = 'github.com/gosuda/gglint/internal/analyzers/chanblock'
+names = frozenset({'TestDefaultSelectBounds', 'TestDefaultSelectBounds/communications'})
+negative = True
+
+    def check_test_output(
+        stdout: str,
+        stderr: bytes,
+        returncode: int,
+        package: str,
+        names: frozenset[str],
+        *,
+        negative: bool = False,
+    ) -> None:
+        if stderr:
+            raise ValueError("test command wrote stderr")
+        active: dict[str, str] = {}
+        runs: Counter[str] = Counter()
+        results: Counter[str] = Counter()
+        diagnostics: Counter[str] = Counter()
+        started = False
+        finished = False
+        outcome = "fail" if negative else "pass"
+        for line in stdout.splitlines():
+            event = mapping(decode(line))
+            action = string(event.get("Action"))
+            if action.startswith("build-") or "FailedBuild" in event:
+                raise ValueError("build event cannot establish test evidence")
+            if set(event) - {"Time", "Action", "Package", "Test", "Elapsed", "Output"}:
+>               raise ValueError("unknown test event field")
+E               ValueError: unknown test event field
+
+docs/validation/chanblock-default/check_ci.py:198: ValueError
+=========================== short test summary info ============================
+FAILED docs/validation/chanblock-default/test_check_ci.py::test_observed_go1274_test_streams[old-production-github.com/gosuda/gglint/internal/analyzers/chanblock-names0-1]
+FAILED docs/validation/chanblock-default/test_check_ci.py::test_observed_go1274_test_streams[positive-github.com/gosuda/gglint/internal/analyzers/chanblock-names1-0]
+FAILED docs/validation/chanblock-default/test_check_ci.py::test_observed_go1274_test_streams[race-github.com/gosuda/gglint/internal/analyzers/chanblock-names2-0]
+FAILED docs/validation/chanblock-default/test_check_ci.py::test_observed_go1274_test_streams[parity-github.com/gosuda/gglint/internal/rules-names3-0]
+FAILED docs/validation/chanblock-default/test_check_ci.py::test_documented_output_types[]
+FAILED docs/validation/chanblock-default/test_check_ci.py::test_documented_output_types[frame]
+FAILED docs/validation/chanblock-default/test_check_ci.py::test_documented_output_types[error]
+FAILED docs/validation/chanblock-default/test_check_ci.py::test_documented_output_types[error-continue]
+8 failed, 100 passed in 1.50s

@@ -1,0 +1,1368 @@
+{
+  "archive": {
+    "bytes": 510994,
+    "path": "failed-hosted-evidence.tar.gz",
+    "sha256": "1d983d8eb9a6e990159cb6546f8066aef7f90e088ea84071e8d08d8d6c64bd97"
+  },
+  "excluded_artifact_files": {
+    "chanblock-default/gglint": {
+      "bytes": 34647510,
+      "reason": "Generated CLI executable; all command evidence and build/source/tool identity receipts are retained.",
+      "sha256": "4ea13c96695c6aa1724a1379e21c43e8286b476c80db58f684c125888e845c20"
+    }
+  },
+  "files": {
+    "artifact/chanblock-default/binary-buildinfo.run.json": {
+      "bytes": 608,
+      "sha256": "a3d232a7f54a9039e00d16d5b97c3ce12dfd0fbb8bb904e547fa1898e043f308"
+    },
+    "artifact/chanblock-default/binary-buildinfo.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/binary-buildinfo.stdout": {
+      "bytes": 4763,
+      "sha256": "ee8aabfde1669c55f49dee0a56e546e7fa4ad4a9d255f1fb881e7741be88eefe"
+    },
+    "artifact/chanblock-default/binary.json": {
+      "bytes": 238,
+      "sha256": "2862be16317b9b3ed0d6cefedbd5c0515a0acee4500c2a330b95b5e997a37938"
+    },
+    "artifact/chanblock-default/build.run.json": {
+      "bytes": 622,
+      "sha256": "10c4cbf33999820c0765bc0c77256d5577eaa8684c9c8bd9fc3ec90e787379c5"
+    },
+    "artifact/chanblock-default/build.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/build.stdout": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/chi-basic-primary.check.json": {
+      "bytes": 824,
+      "sha256": "bd9b0881d6c0339ebd88464029a0e57dc2c952bef3b87573592d7d8810eb4100"
+    },
+    "artifact/chanblock-default/chi-basic-primary.run.json": {
+      "bytes": 709,
+      "sha256": "fd5be0097c7600d2bea2d6730e80020fb99860843bed16d207e9ab3d8f464a3d"
+    },
+    "artifact/chanblock-default/chi-basic-primary.stderr": {
+      "bytes": 27,
+      "sha256": "342e0112d781b4da772482411257e7dee9ac33bd60c8155b5e8010b41a6f3afe"
+    },
+    "artifact/chanblock-default/chi-basic-primary.stdout": {
+      "bytes": 623,
+      "sha256": "5215eed7a15dc3cd37f25317fbfb2588389b22f8868497210047d60496ae311d"
+    },
+    "artifact/chanblock-default/chi-basic-repeat.check.json": {
+      "bytes": 819,
+      "sha256": "ec57183b7672fc45d9bfb648776ffa9b63f85c69cdda653a7dea844043646dbc"
+    },
+    "artifact/chanblock-default/chi-basic-repeat.run.json": {
+      "bytes": 705,
+      "sha256": "d6157547eef45ccf555baa2951f019ae3382b1857b0c31a27f4c86b8804fc777"
+    },
+    "artifact/chanblock-default/chi-basic-repeat.stderr": {
+      "bytes": 27,
+      "sha256": "342e0112d781b4da772482411257e7dee9ac33bd60c8155b5e8010b41a6f3afe"
+    },
+    "artifact/chanblock-default/chi-basic-repeat.stdout": {
+      "bytes": 623,
+      "sha256": "5215eed7a15dc3cd37f25317fbfb2588389b22f8868497210047d60496ae311d"
+    },
+    "artifact/chanblock-default/chi-primary/.git/FETCH_HEAD": {
+      "bytes": 118,
+      "sha256": "84863a02a5e9794e2ae3af88b8a0e632df5d48c82e305ab51aec6c940fc39c87"
+    },
+    "artifact/chanblock-default/chi-primary/.git/HEAD": {
+      "bytes": 41,
+      "sha256": "0ed0770dbfee70751f2889319a9ce297009ef326fc95aaef8cc103930086573a"
+    },
+    "artifact/chanblock-default/chi-primary/.git/config": {
+      "bytes": 92,
+      "sha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe"
+    },
+    "artifact/chanblock-default/chi-primary/.git/description": {
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/applypatch-msg.sample": {
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/commit-msg.sample": {
+      "bytes": 1972,
+      "sha256": "efc1401b0e99d1ff51494d154d98b46c1e99059bcd8bf9f73cecde19fd3eb23b"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/fsmonitor-watchman.sample": {
+      "bytes": 4611,
+      "sha256": "9159720099ad5595b8e66645cbfd47763c1e920f46e0b50ae75e642bbec57ef0"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/post-update.sample": {
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/pre-applypatch.sample": {
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/pre-commit.sample": {
+      "bytes": 1649,
+      "sha256": "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/pre-merge-commit.sample": {
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/pre-push.sample": {
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/pre-rebase.sample": {
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/pre-receive.sample": {
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/prepare-commit-msg.sample": {
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/push-to-checkout.sample": {
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/sendemail-validate.sample": {
+      "bytes": 2308,
+      "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92"
+    },
+    "artifact/chanblock-default/chi-primary/.git/hooks/update.sample": {
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    "artifact/chanblock-default/chi-primary/.git/index": {
+      "bytes": 10874,
+      "sha256": "66b96ba29bd3e754a2633bada6ed3b90472485564432ec8f15f763c1679b314b"
+    },
+    "artifact/chanblock-default/chi-primary/.git/info/exclude": {
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    "artifact/chanblock-default/chi-primary/.git/logs/HEAD": {
+      "bytes": 231,
+      "sha256": "1a57c1df295b9c7311e9bf5d565ad1a87b2038cc48d4556c3a26b29d8691e973"
+    },
+    "artifact/chanblock-default/chi-primary/.git/objects/pack/pack-a63d7e86b1b4101a2c67645640f5212542f41d27.idx": {
+      "bytes": 4880,
+      "sha256": "ee6ed0729916083443a63e61c77cdd70935f4feebff0e5f77ea49a664fc9cc9f"
+    },
+    "artifact/chanblock-default/chi-primary/.git/objects/pack/pack-a63d7e86b1b4101a2c67645640f5212542f41d27.pack": {
+      "bytes": 142854,
+      "sha256": "8f3fea11dc7864e06e0eed5b2d1ff01ecb490a547a5cd5240cff101a9ef6d8df"
+    },
+    "artifact/chanblock-default/chi-primary/.git/objects/pack/pack-a63d7e86b1b4101a2c67645640f5212542f41d27.rev": {
+      "bytes": 596,
+      "sha256": "d0b0281b116b34fd25b8894841fea0d6c6aed6eaf0bd234382f59ed7cbd1a1d2"
+    },
+    "artifact/chanblock-default/chi-primary/.git/shallow": {
+      "bytes": 41,
+      "sha256": "0ed0770dbfee70751f2889319a9ce297009ef326fc95aaef8cc103930086573a"
+    },
+    "artifact/chanblock-default/chi-primary/.github/FUNDING.yml": {
+      "bytes": 723,
+      "sha256": "0e236eacfd30c201e85ff368730f13e6dfb24d21a72c57c8bed0a099bebb3c7b"
+    },
+    "artifact/chanblock-default/chi-primary/.github/workflows/ci.yml": {
+      "bytes": 982,
+      "sha256": "ec5831a35b9d99ff5b63f3189e2efc8690af4b67810e22659a1f9bf577b59c78"
+    },
+    "artifact/chanblock-default/chi-primary/.gitignore": {
+      "bytes": 20,
+      "sha256": "785f18e2ac99c66b81d8d185aa1a65cfe4f39b12bef24c1f8037d85840490929"
+    },
+    "artifact/chanblock-default/chi-primary/CHANGELOG.md": {
+      "bytes": 15854,
+      "sha256": "65c419049d2e6efc04b110426e4b5efc628a4ee6b8f080092f25a0dbbb35f071"
+    },
+    "artifact/chanblock-default/chi-primary/CONTRIBUTING.md": {
+      "bytes": 1187,
+      "sha256": "961da16c4fcec58d600fd49cc6ab0dd632d143646d4fcb2f5b1818fb0197fbe7"
+    },
+    "artifact/chanblock-default/chi-primary/LICENSE": {
+      "bytes": 1123,
+      "sha256": "a2d51b7515acfaff2f7a88688650f2fc4fd99561383e72bba2305e3db59a1647"
+    },
+    "artifact/chanblock-default/chi-primary/Makefile": {
+      "bytes": 490,
+      "sha256": "b343163c9d40108d37c7e5fe73e3c1d8f39c2acf26de5d1d227a1be2770205ad"
+    },
+    "artifact/chanblock-default/chi-primary/README.md": {
+      "bytes": 28381,
+      "sha256": "9719a69ea0bfcdbbbab1e3623684597e8b943c8f20ae9a54aa7ab7274dd82669"
+    },
+    "artifact/chanblock-default/chi-primary/SECURITY.md": {
+      "bytes": 313,
+      "sha256": "c5f181d947996aebd888182fb8dccf6e7026690e701b5e5ca50b288b4a2cf5c3"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/README.md": {
+      "bytes": 1899,
+      "sha256": "6cf07102bf746267aeb610fb44c1a591ca2b4133e020b4c3428b02598cc089d8"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/chi.svg": {
+      "bytes": 2650,
+      "sha256": "1a7e8131f1ed48303dc42d93bc50ea330f08f0875cba64d0d03eb96754984127"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/custom-handler/main.go": {
+      "bytes": 625,
+      "sha256": "e5a1f419488c233784f1f7951089305915b377af7462f137cd9bb5fd2a792924"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/custom-method/main.go": {
+      "bytes": 853,
+      "sha256": "de61c6c6cad7f28a9b8b506d32bba52485f6e902ae25954913e8480fa5cfd8a5"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/fileserver/data/notes.txt": {
+      "bytes": 11,
+      "sha256": "9e343fdfdcb2892c5eb6906d405f9ac1f7cb1d73cd8b7f31cf6329719af96576"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/fileserver/main.go": {
+      "bytes": 1521,
+      "sha256": "0c0b96e8104689bc86312805d70a97aea7c870801f09ca03dd47c8edde31f620"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/graceful/main.go": {
+      "bytes": 1707,
+      "sha256": "ad28151bf414776f787655d76fa42063a4174f95eeef6887a1724d9b3bfc32b5"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/hello-world/main.go": {
+      "bytes": 359,
+      "sha256": "e8104f868c9a673d864c489347970200808acc0652035a0376694bf5b7b07c86"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/limits/main.go": {
+      "bytes": 2181,
+      "sha256": "590c6d2f322481fed8abe1c2ca34eb0868f0d0a07d1c6aaccc0d6589b59a5d0d"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/logging/main.go": {
+      "bytes": 272,
+      "sha256": "7b3cf7fb608cc030569d4bf75d30f0807ba0849543ee469ad5adadd13a3b8667"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/pathvalue/main.go": {
+      "bytes": 550,
+      "sha256": "11dd0741795c3c2f140b35b280a032a56241dea20c0e20b7cf191a0aedcdcac0"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/rest/go.mod": {
+      "bytes": 141,
+      "sha256": "2f06fe7b1ad7e9f2c5102a6e5eb40464ae5fb562fa891a23460f5b0ae4d9ba65"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/rest/go.sum": {
+      "bytes": 775,
+      "sha256": "97e15531a384ed655fe740ebc1ea30088c12394380144499d91d3a98a2c5edaa"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/rest/main.go": {
+      "bytes": 15501,
+      "sha256": "0b9e1e73d7c649601508b3bb6c46b1587da6346f9cf33d6070f06f8e5c3a9298"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/rest/routes.json": {
+      "bytes": 11317,
+      "sha256": "a16c95138e7f52046f617d5a98ebb1c83217d0672ed06dfece652f98ff4e2da2"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/rest/routes.md": {
+      "bytes": 4665,
+      "sha256": "26951bf691542d7ca05d990dc9bddaa90bfb01497bb4f55c4cfb97581319e6f2"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/router-walk/main.go": {
+      "bytes": 913,
+      "sha256": "48c27bf0d7668fccfe7a9f6dac9199ee6240fe7a43855677c1f509e16732e2b6"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/todos-resource/main.go": {
+      "bytes": 748,
+      "sha256": "a0a551b6d6ca81210b129cd2a70d76e38370b2461be78813e6f117cfef6da020"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/todos-resource/todos.go": {
+      "bytes": 1453,
+      "sha256": "5979a0124dbb9febcc1c6846ed843590d40f5ae440d2694e57c0860bf7bc395c"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/todos-resource/users.go": {
+      "bytes": 1323,
+      "sha256": "212c60277ace9afb95ef02729be959c2c39472a14854d2af95c711c265e3778f"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/versions/data/article.go": {
+      "bytes": 388,
+      "sha256": "90aa75226b4514e40033fb406de1319f419c4af5291a82e21a615ba7b5a121f8"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/versions/data/errors.go": {
+      "bytes": 542,
+      "sha256": "e2803582a823e474441392b40e958bf1e1545613d61d1b7911cf6556854635bf"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/versions/go.mod": {
+      "bytes": 152,
+      "sha256": "fd833daea12d311fd9c7182d433095eb224be3a4c80b26311e848c7e452affb5"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/versions/go.sum": {
+      "bytes": 491,
+      "sha256": "0712aab90567f5fa0c11762c05494f8f6b42993b18573679ce165b805ad4e733"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/versions/main.go": {
+      "bytes": 4072,
+      "sha256": "16f5c10e86dadb44039863545041cfbc60de40271b71ea1b1ea62ca46ca2a207"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/versions/presenter/v1/article.go": {
+      "bytes": 399,
+      "sha256": "6183e68da9fde3998f49f528775d302a2462427d24d7d72a1f3511501b8bd817"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/versions/presenter/v2/article.go": {
+      "bytes": 625,
+      "sha256": "8b1ab4c9e381ac1116f2a0572e173b9ddd6b7e889fe1cd6aeb1e75a7d9c10209"
+    },
+    "artifact/chanblock-default/chi-primary/_examples/versions/presenter/v3/article.go": {
+      "bytes": 1002,
+      "sha256": "19a384a64f6009a8565d3b8bae774ed26d1d730ba6f4e5b510ab23f594833173"
+    },
+    "artifact/chanblock-default/chi-primary/chain.go": {
+      "bytes": 1517,
+      "sha256": "8c22d7bbc23f4b4d46ded5ef721a9c3a173031fa2c2c9a7b48c46c2b07e8bd80"
+    },
+    "artifact/chanblock-default/chi-primary/chi.go": {
+      "bytes": 4812,
+      "sha256": "47c70ececcbb9d71f973eda3cbadad0a46c8cc2261b285f7049b5261f337d678"
+    },
+    "artifact/chanblock-default/chi-primary/context.go": {
+      "bytes": 5788,
+      "sha256": "b19edcca252e2fe74e82802c4c7ce1a1c0855728f9ede1288f0224283dfc7e53"
+    },
+    "artifact/chanblock-default/chi-primary/context_test.go": {
+      "bytes": 4541,
+      "sha256": "136eb280cdcf619e45313dafc8f16e7d9a49df181135db6fe62cd04dde20ddbb"
+    },
+    "artifact/chanblock-default/chi-primary/go.mod": {
+      "bytes": 149,
+      "sha256": "7eb620f0fce870d93eaba87bf6f8c36284db786108030ca229a5016461797090"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/basic_auth.go": {
+      "bytes": 852,
+      "sha256": "d1cfa0a32e9871cfba478590d1c1010297df20e53bbf83f34b09a4ec76e8b278"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/basic_auth_test.go": {
+      "bytes": 1265,
+      "sha256": "fffb9b471f26e5b5a5562faa95bc0205f4b62ad77216d846f01ae61c36717c53"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/clean_path.go": {
+      "bytes": 658,
+      "sha256": "00cf47dd47cf4b6a1fa29dd3d5cdff4f7de8adbea410801128afe8aeaed35f0d"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/clean_path_test.go": {
+      "bytes": 530,
+      "sha256": "81b6a3dff384a06104eefc1a9f5aea74394d36745ef78c4460cc80b56151bb00"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/client_ip.go": {
+      "bytes": 13089,
+      "sha256": "661ffdd7bb1098fd5f5e3e24287010969de1f473941b540484a29563d00aadc0"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/client_ip_bench_test.go": {
+      "bytes": 1744,
+      "sha256": "a803573dba08bee684f2e369ab282a157bebab5b63972176f174e3668499c2a8"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/client_ip_example_test.go": {
+      "bytes": 4169,
+      "sha256": "27ac46077cd94fa6bb5034796cdb263e5e8730cb338777dd621559b0d5a38358"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/client_ip_test.go": {
+      "bytes": 30946,
+      "sha256": "c6cb382942585c6d67c1e6c066407b890ad97fd413c66b7fb051fad877e70b19"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/compress.go": {
+      "bytes": 12162,
+      "sha256": "1a54e1cd05a913dd26bc00faab499cddc58a00646a92af5051961100d1532698"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/compress_test.go": {
+      "bytes": 6506,
+      "sha256": "49c8a68651c0542fde332dd035990226dd344d05b980e6591e46f0777a6571bb"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/content_charset.go": {
+      "bytes": 1634,
+      "sha256": "f1c5edb5908828480b0e7107971912f3ded7f978520140d900318dbb36d2a779"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/content_charset_test.go": {
+      "bytes": 6491,
+      "sha256": "5f11dcc0ee927be53583c2af4d8700e06685fe0cd2290bb528d00ecb80731f95"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/content_encoding.go": {
+      "bytes": 1087,
+      "sha256": "a1b35d124400a423d385eca9d066593c790e867db165af75e25b31b649d37fd8"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/content_encoding_test.go": {
+      "bytes": 1929,
+      "sha256": "98bf93fb59e1613843f8f838ddb17dc160cf88dd95135b1b2637e188c69c4644"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/content_type.go": {
+      "bytes": 1265,
+      "sha256": "5cedd359e3390edc613557681dda3cbc60faa2e4efb2a8974464876377b3a797"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/content_type_test.go": {
+      "bytes": 2095,
+      "sha256": "233f0c2f27f3d37719c6abc393c86804424a47d1ccebe17b018629b42f05a050"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/deprecation.go": {
+      "bytes": 1331,
+      "sha256": "90eaac15caa65fdec39bfd65a08934165b561b87ad9c2efe5b1b2c667cd316e9"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/deprecation_test.go": {
+      "bytes": 3037,
+      "sha256": "71002c7fd643a7265cc460f1490d747f384e702e7bc61b72aaeefb16e210139b"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/get_head.go": {
+      "bytes": 977,
+      "sha256": "76af2014d2080f597a0205f51265badcad7af64d09652a79ed1a214074f5c582"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/get_head_test.go": {
+      "bytes": 1941,
+      "sha256": "a660972a6e389bbea07db1414dd72c0593809c644a941b431ce43c902ec65099"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/heartbeat.go": {
+      "bytes": 755,
+      "sha256": "fc242f8c645cfc7640a36bccccb490cad9136ed07a751b0998f554412c29bca4"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/heartbeat_test.go": {
+      "bytes": 701,
+      "sha256": "15a525640be2325d5291202c44559e87f290b3789ad18c98661fe760e8acf414"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/logger.go": {
+      "bytes": 5039,
+      "sha256": "40e7b7b01eb0363aad9930d3764880e3cf6f1f8aed6ad3fd918866ec34602729"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/logger_test.go": {
+      "bytes": 1116,
+      "sha256": "f15a9900122e075c3b2d146aeae6128dfe17d57a45ef40b06f7a9e74cc4fb35f"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/maybe.go": {
+      "bytes": 657,
+      "sha256": "04d5e832005907e20cd0cba307350cd6f392ec1a081e884f8ecfd56cc6c4ac10"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/maybe_test.go": {
+      "bytes": 730,
+      "sha256": "de362f8df5a226413118ff06b150fdd7320c65d9609a4186b2a7e1faffcc4037"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/middleware.go": {
+      "bytes": 684,
+      "sha256": "8789f84814d815185cb5a7bc6c247969b67d0ff9b8045ee1c95f4c9ad59ff4b1"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/middleware_test.go": {
+      "bytes": 4845,
+      "sha256": "f93aec66e191433ab67ea727d45dc6cbdb4184d874132339c2715431c41e3eba"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/nocache.go": {
+      "bytes": 1430,
+      "sha256": "389eb1e308194561aea139b8d56d49f46b9fb30d84f8da146f5deaea66c5f5cc"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/page_route.go": {
+      "bytes": 519,
+      "sha256": "03f3b50c4a55c345b52ce8f4b6d5da4b977647dd66e2e59b5f3635bda93e779c"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/path_rewrite.go": {
+      "bytes": 422,
+      "sha256": "0f3c01a40e320494a093d804376f3be8519b86285b5e24e8937bcee2c13c9279"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/path_rewrite_test.go": {
+      "bytes": 546,
+      "sha256": "5201c0caf7955e44397be15e7d41d9235d569f96172ac7f630aed2c91e0590a2"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/profiler.go": {
+      "bytes": 1307,
+      "sha256": "5b21bca97731b2df9aff87767ea1325b77a401c823fa6cdcf52ad38616d48faa"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/realip.go": {
+      "bytes": 1568,
+      "sha256": "2f837f2213de7074c5c6915dad70f85c4588077291a8563d1cbad6698a757220"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/realip_test.go": {
+      "bytes": 2311,
+      "sha256": "6cab78b3ebc7fd581261afae6740423edc2199d9ba7ae3e0ffda99354f90d534"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/recoverer.go": {
+      "bytes": 5162,
+      "sha256": "efc38c7b32bfb29ebbe16b199832d1eff13179a34a025c07b53c733c11a2154c"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/recoverer_test.go": {
+      "bytes": 2495,
+      "sha256": "d54b59bdd910cf56458ddc7eaacba031b203290b18f2b2e2308acb75920b7715"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/request_id.go": {
+      "bytes": 2943,
+      "sha256": "31b21034dd5cd6393fa9abc9ce1207acc78fea1e162d866edf6bb2a7badd288b"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/request_id_test.go": {
+      "bytes": 1402,
+      "sha256": "519e920890f2a33b77d0140a4a8ffcc933752bc04b3efb0af0793e11722b639e"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/request_size.go": {
+      "bytes": 454,
+      "sha256": "81a98f72a81442a01a4353be9833fda6803f585bf768cebde5a34ebc1c44c390"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/request_size_test.go": {
+      "bytes": 1446,
+      "sha256": "d0a2de078138dc57acdbf59749d567529637556158111eb1b7d99b545f18a4b1"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/route_headers.go": {
+      "bytes": 4167,
+      "sha256": "cfd320f1a996ac95e29e25ab8a2ffa9606577996d6e001fb3835ede2795a3f69"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/route_headers_test.go": {
+      "bytes": 5766,
+      "sha256": "dd48799f1da69155927452801354ef413a97b1a83109fc8ad5f0560ae1f66906"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/strip.go": {
+      "bytes": 2199,
+      "sha256": "d5a0929e147b8b2a58ee78f0166a67f0949255b698bd5d26983a62643fc8fe10"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/strip_test.go": {
+      "bytes": 9524,
+      "sha256": "1002bd43aea540f4661806adcfc6ad21525e1e2c1e9fb92f47dda16fdaae0a4d"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/sunset.go": {
+      "bytes": 1239,
+      "sha256": "c519fcabb10f480397fcc907de3b44ba96758f04465a04e6d0f455c2d6f46192"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/sunset_test.go": {
+      "bytes": 3250,
+      "sha256": "d2db841be75a0e93bd230aff7b3b7a2f5de669950552034af6eade7858bbcda0"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/supress_notfound.go": {
+      "bytes": 869,
+      "sha256": "c9f197de94d7f85b59c10ed1dac10825ffe29d33804f75db126da19747177475"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/supress_notfound_test.go": {
+      "bytes": 2630,
+      "sha256": "b105c29ee86dcdc4ebbc47bccf2b7b08259c3bb75ff135921bfdf79f1704a467"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/terminal.go": {
+      "bytes": 1877,
+      "sha256": "6e663b6ab8e26417198021c226b5aa5bce92648c5bb172d329389c16bef8ca20"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/terminal_test.go": {
+      "bytes": 618,
+      "sha256": "fa3a1ce23af7f0a599ed9375ec6e7e6ae4bf4724724bf32f1bd8fb2fd41b68fc"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/throttle.go": {
+      "bytes": 4699,
+      "sha256": "6f140f6ac687c9bacc68584c1168dcee5a4f7ed0d2efa4ccc969a622966b5ec1"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/throttle_test.go": {
+      "bytes": 7817,
+      "sha256": "c38987610488057caa8ebf038e927ce731a94e1412431ba0338eec816346fa87"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/timeout.go": {
+      "bytes": 1222,
+      "sha256": "3e83d007ec300b4ea605d97a336351e562ecd84b32c2b26206791d11ce7501c0"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/url_format.go": {
+      "bytes": 1814,
+      "sha256": "a1ea4ec9039b5a704f8aea7754a9b00d8026b72d18ba98208cd04b182e1b5800"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/url_format_test.go": {
+      "bytes": 1653,
+      "sha256": "04efa8cfbda922ff671ab3bdbc00f6fa06bf776c300dc8605815de1def33aaa1"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/value.go": {
+      "bytes": 428,
+      "sha256": "288b19d77e375d2b2f65dbd901f958f3fb7c93c26de0691e70817dd343c9a679"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/value_test.go": {
+      "bytes": 678,
+      "sha256": "9e40bcd53a62241f496dc7fc011faab7bdaf7e9a48358f3e1c843278f11f0c9f"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/wrap_writer.go": {
+      "bytes": 6413,
+      "sha256": "b2011091cccb6a8a805d24bec4df20e631e3649a2812bdf41036fffb05ce3494"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/wrap_writer_readfrom_test.go": {
+      "bytes": 2649,
+      "sha256": "7d58dce44f9245c08e61081159d26d5b3e79c30c005bdf93e930e484b7f03b7b"
+    },
+    "artifact/chanblock-default/chi-primary/middleware/wrap_writer_test.go": {
+      "bytes": 7217,
+      "sha256": "365a33237ae2e83ad3c2964ce7ae438c71463d8c6284be4789f208ecc97f8c9c"
+    },
+    "artifact/chanblock-default/chi-primary/mux.go": {
+      "bytes": 17308,
+      "sha256": "cc44c2d620e6306b16d6d80f5f6c70f02b5814b357a4f5823372818f355ae67d"
+    },
+    "artifact/chanblock-default/chi-primary/mux_test.go": {
+      "bytes": 59980,
+      "sha256": "162d82fa10418b99baf750e3fbcb1fee018bfd654850a9f01382a175390dc965"
+    },
+    "artifact/chanblock-default/chi-primary/path_value_test.go": {
+      "bytes": 1746,
+      "sha256": "2c6f68e8540ceb9953869fbf57721ca6b03943c1903011bb0dcea202aa5d9fd8"
+    },
+    "artifact/chanblock-default/chi-primary/pattern_test.go": {
+      "bytes": 1556,
+      "sha256": "2cb5166ea7db6a38ac3b67bf40ea2fd82393311967888a71e3b296592119d06e"
+    },
+    "artifact/chanblock-default/chi-primary/testdata/cert.pem": {
+      "bytes": 1098,
+      "sha256": "8fb47f5e036bcb4daaeed180fa7164504a8ca43bdc010fd418618da48fdd340c"
+    },
+    "artifact/chanblock-default/chi-primary/testdata/key.pem": {
+      "bytes": 1678,
+      "sha256": "fecae623b5a0ae0a1110285c66e3e0e7f6019f49fd540ed3d9b85f65b9054f6c"
+    },
+    "artifact/chanblock-default/chi-primary/tree.go": {
+      "bytes": 22069,
+      "sha256": "f4b12b63b662fb8e36658172b36b35705cfb24eefae0665635f4fbd52e64fb79"
+    },
+    "artifact/chanblock-default/chi-primary/tree_test.go": {
+      "bytes": 27932,
+      "sha256": "e9d8f7755589f1852791ed5b4a853c16ad12cdf8ba0db3208dac33b2dac398c1"
+    },
+    "artifact/chanblock-default/chi-repeat/.github/FUNDING.yml": {
+      "bytes": 723,
+      "sha256": "0e236eacfd30c201e85ff368730f13e6dfb24d21a72c57c8bed0a099bebb3c7b"
+    },
+    "artifact/chanblock-default/chi-repeat/.github/workflows/ci.yml": {
+      "bytes": 982,
+      "sha256": "ec5831a35b9d99ff5b63f3189e2efc8690af4b67810e22659a1f9bf577b59c78"
+    },
+    "artifact/chanblock-default/chi-repeat/.gitignore": {
+      "bytes": 20,
+      "sha256": "785f18e2ac99c66b81d8d185aa1a65cfe4f39b12bef24c1f8037d85840490929"
+    },
+    "artifact/chanblock-default/chi-repeat/CHANGELOG.md": {
+      "bytes": 15854,
+      "sha256": "65c419049d2e6efc04b110426e4b5efc628a4ee6b8f080092f25a0dbbb35f071"
+    },
+    "artifact/chanblock-default/chi-repeat/CONTRIBUTING.md": {
+      "bytes": 1187,
+      "sha256": "961da16c4fcec58d600fd49cc6ab0dd632d143646d4fcb2f5b1818fb0197fbe7"
+    },
+    "artifact/chanblock-default/chi-repeat/LICENSE": {
+      "bytes": 1123,
+      "sha256": "a2d51b7515acfaff2f7a88688650f2fc4fd99561383e72bba2305e3db59a1647"
+    },
+    "artifact/chanblock-default/chi-repeat/Makefile": {
+      "bytes": 490,
+      "sha256": "b343163c9d40108d37c7e5fe73e3c1d8f39c2acf26de5d1d227a1be2770205ad"
+    },
+    "artifact/chanblock-default/chi-repeat/README.md": {
+      "bytes": 28381,
+      "sha256": "9719a69ea0bfcdbbbab1e3623684597e8b943c8f20ae9a54aa7ab7274dd82669"
+    },
+    "artifact/chanblock-default/chi-repeat/SECURITY.md": {
+      "bytes": 313,
+      "sha256": "c5f181d947996aebd888182fb8dccf6e7026690e701b5e5ca50b288b4a2cf5c3"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/README.md": {
+      "bytes": 1899,
+      "sha256": "6cf07102bf746267aeb610fb44c1a591ca2b4133e020b4c3428b02598cc089d8"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/chi.svg": {
+      "bytes": 2650,
+      "sha256": "1a7e8131f1ed48303dc42d93bc50ea330f08f0875cba64d0d03eb96754984127"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/custom-handler/main.go": {
+      "bytes": 625,
+      "sha256": "e5a1f419488c233784f1f7951089305915b377af7462f137cd9bb5fd2a792924"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/custom-method/main.go": {
+      "bytes": 853,
+      "sha256": "de61c6c6cad7f28a9b8b506d32bba52485f6e902ae25954913e8480fa5cfd8a5"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/fileserver/data/notes.txt": {
+      "bytes": 11,
+      "sha256": "9e343fdfdcb2892c5eb6906d405f9ac1f7cb1d73cd8b7f31cf6329719af96576"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/fileserver/main.go": {
+      "bytes": 1521,
+      "sha256": "0c0b96e8104689bc86312805d70a97aea7c870801f09ca03dd47c8edde31f620"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/graceful/main.go": {
+      "bytes": 1707,
+      "sha256": "ad28151bf414776f787655d76fa42063a4174f95eeef6887a1724d9b3bfc32b5"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/hello-world/main.go": {
+      "bytes": 359,
+      "sha256": "e8104f868c9a673d864c489347970200808acc0652035a0376694bf5b7b07c86"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/limits/main.go": {
+      "bytes": 2181,
+      "sha256": "590c6d2f322481fed8abe1c2ca34eb0868f0d0a07d1c6aaccc0d6589b59a5d0d"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/logging/main.go": {
+      "bytes": 272,
+      "sha256": "7b3cf7fb608cc030569d4bf75d30f0807ba0849543ee469ad5adadd13a3b8667"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/pathvalue/main.go": {
+      "bytes": 550,
+      "sha256": "11dd0741795c3c2f140b35b280a032a56241dea20c0e20b7cf191a0aedcdcac0"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/rest/go.mod": {
+      "bytes": 141,
+      "sha256": "2f06fe7b1ad7e9f2c5102a6e5eb40464ae5fb562fa891a23460f5b0ae4d9ba65"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/rest/go.sum": {
+      "bytes": 775,
+      "sha256": "97e15531a384ed655fe740ebc1ea30088c12394380144499d91d3a98a2c5edaa"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/rest/main.go": {
+      "bytes": 15501,
+      "sha256": "0b9e1e73d7c649601508b3bb6c46b1587da6346f9cf33d6070f06f8e5c3a9298"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/rest/routes.json": {
+      "bytes": 11317,
+      "sha256": "a16c95138e7f52046f617d5a98ebb1c83217d0672ed06dfece652f98ff4e2da2"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/rest/routes.md": {
+      "bytes": 4665,
+      "sha256": "26951bf691542d7ca05d990dc9bddaa90bfb01497bb4f55c4cfb97581319e6f2"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/router-walk/main.go": {
+      "bytes": 913,
+      "sha256": "48c27bf0d7668fccfe7a9f6dac9199ee6240fe7a43855677c1f509e16732e2b6"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/todos-resource/main.go": {
+      "bytes": 748,
+      "sha256": "a0a551b6d6ca81210b129cd2a70d76e38370b2461be78813e6f117cfef6da020"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/todos-resource/todos.go": {
+      "bytes": 1453,
+      "sha256": "5979a0124dbb9febcc1c6846ed843590d40f5ae440d2694e57c0860bf7bc395c"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/todos-resource/users.go": {
+      "bytes": 1323,
+      "sha256": "212c60277ace9afb95ef02729be959c2c39472a14854d2af95c711c265e3778f"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/versions/data/article.go": {
+      "bytes": 388,
+      "sha256": "90aa75226b4514e40033fb406de1319f419c4af5291a82e21a615ba7b5a121f8"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/versions/data/errors.go": {
+      "bytes": 542,
+      "sha256": "e2803582a823e474441392b40e958bf1e1545613d61d1b7911cf6556854635bf"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/versions/go.mod": {
+      "bytes": 152,
+      "sha256": "fd833daea12d311fd9c7182d433095eb224be3a4c80b26311e848c7e452affb5"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/versions/go.sum": {
+      "bytes": 491,
+      "sha256": "0712aab90567f5fa0c11762c05494f8f6b42993b18573679ce165b805ad4e733"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/versions/main.go": {
+      "bytes": 4072,
+      "sha256": "16f5c10e86dadb44039863545041cfbc60de40271b71ea1b1ea62ca46ca2a207"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/versions/presenter/v1/article.go": {
+      "bytes": 399,
+      "sha256": "6183e68da9fde3998f49f528775d302a2462427d24d7d72a1f3511501b8bd817"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/versions/presenter/v2/article.go": {
+      "bytes": 625,
+      "sha256": "8b1ab4c9e381ac1116f2a0572e173b9ddd6b7e889fe1cd6aeb1e75a7d9c10209"
+    },
+    "artifact/chanblock-default/chi-repeat/_examples/versions/presenter/v3/article.go": {
+      "bytes": 1002,
+      "sha256": "19a384a64f6009a8565d3b8bae774ed26d1d730ba6f4e5b510ab23f594833173"
+    },
+    "artifact/chanblock-default/chi-repeat/chain.go": {
+      "bytes": 1517,
+      "sha256": "8c22d7bbc23f4b4d46ded5ef721a9c3a173031fa2c2c9a7b48c46c2b07e8bd80"
+    },
+    "artifact/chanblock-default/chi-repeat/chi.go": {
+      "bytes": 4812,
+      "sha256": "47c70ececcbb9d71f973eda3cbadad0a46c8cc2261b285f7049b5261f337d678"
+    },
+    "artifact/chanblock-default/chi-repeat/context.go": {
+      "bytes": 5788,
+      "sha256": "b19edcca252e2fe74e82802c4c7ce1a1c0855728f9ede1288f0224283dfc7e53"
+    },
+    "artifact/chanblock-default/chi-repeat/context_test.go": {
+      "bytes": 4541,
+      "sha256": "136eb280cdcf619e45313dafc8f16e7d9a49df181135db6fe62cd04dde20ddbb"
+    },
+    "artifact/chanblock-default/chi-repeat/go.mod": {
+      "bytes": 149,
+      "sha256": "7eb620f0fce870d93eaba87bf6f8c36284db786108030ca229a5016461797090"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/basic_auth.go": {
+      "bytes": 852,
+      "sha256": "d1cfa0a32e9871cfba478590d1c1010297df20e53bbf83f34b09a4ec76e8b278"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/basic_auth_test.go": {
+      "bytes": 1265,
+      "sha256": "fffb9b471f26e5b5a5562faa95bc0205f4b62ad77216d846f01ae61c36717c53"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/clean_path.go": {
+      "bytes": 658,
+      "sha256": "00cf47dd47cf4b6a1fa29dd3d5cdff4f7de8adbea410801128afe8aeaed35f0d"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/clean_path_test.go": {
+      "bytes": 530,
+      "sha256": "81b6a3dff384a06104eefc1a9f5aea74394d36745ef78c4460cc80b56151bb00"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/client_ip.go": {
+      "bytes": 13089,
+      "sha256": "661ffdd7bb1098fd5f5e3e24287010969de1f473941b540484a29563d00aadc0"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/client_ip_bench_test.go": {
+      "bytes": 1744,
+      "sha256": "a803573dba08bee684f2e369ab282a157bebab5b63972176f174e3668499c2a8"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/client_ip_example_test.go": {
+      "bytes": 4169,
+      "sha256": "27ac46077cd94fa6bb5034796cdb263e5e8730cb338777dd621559b0d5a38358"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/client_ip_test.go": {
+      "bytes": 30946,
+      "sha256": "c6cb382942585c6d67c1e6c066407b890ad97fd413c66b7fb051fad877e70b19"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/compress.go": {
+      "bytes": 12162,
+      "sha256": "1a54e1cd05a913dd26bc00faab499cddc58a00646a92af5051961100d1532698"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/compress_test.go": {
+      "bytes": 6506,
+      "sha256": "49c8a68651c0542fde332dd035990226dd344d05b980e6591e46f0777a6571bb"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/content_charset.go": {
+      "bytes": 1634,
+      "sha256": "f1c5edb5908828480b0e7107971912f3ded7f978520140d900318dbb36d2a779"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/content_charset_test.go": {
+      "bytes": 6491,
+      "sha256": "5f11dcc0ee927be53583c2af4d8700e06685fe0cd2290bb528d00ecb80731f95"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/content_encoding.go": {
+      "bytes": 1087,
+      "sha256": "a1b35d124400a423d385eca9d066593c790e867db165af75e25b31b649d37fd8"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/content_encoding_test.go": {
+      "bytes": 1929,
+      "sha256": "98bf93fb59e1613843f8f838ddb17dc160cf88dd95135b1b2637e188c69c4644"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/content_type.go": {
+      "bytes": 1265,
+      "sha256": "5cedd359e3390edc613557681dda3cbc60faa2e4efb2a8974464876377b3a797"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/content_type_test.go": {
+      "bytes": 2095,
+      "sha256": "233f0c2f27f3d37719c6abc393c86804424a47d1ccebe17b018629b42f05a050"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/deprecation.go": {
+      "bytes": 1331,
+      "sha256": "90eaac15caa65fdec39bfd65a08934165b561b87ad9c2efe5b1b2c667cd316e9"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/deprecation_test.go": {
+      "bytes": 3037,
+      "sha256": "71002c7fd643a7265cc460f1490d747f384e702e7bc61b72aaeefb16e210139b"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/get_head.go": {
+      "bytes": 977,
+      "sha256": "76af2014d2080f597a0205f51265badcad7af64d09652a79ed1a214074f5c582"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/get_head_test.go": {
+      "bytes": 1941,
+      "sha256": "a660972a6e389bbea07db1414dd72c0593809c644a941b431ce43c902ec65099"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/heartbeat.go": {
+      "bytes": 755,
+      "sha256": "fc242f8c645cfc7640a36bccccb490cad9136ed07a751b0998f554412c29bca4"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/heartbeat_test.go": {
+      "bytes": 701,
+      "sha256": "15a525640be2325d5291202c44559e87f290b3789ad18c98661fe760e8acf414"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/logger.go": {
+      "bytes": 5039,
+      "sha256": "40e7b7b01eb0363aad9930d3764880e3cf6f1f8aed6ad3fd918866ec34602729"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/logger_test.go": {
+      "bytes": 1116,
+      "sha256": "f15a9900122e075c3b2d146aeae6128dfe17d57a45ef40b06f7a9e74cc4fb35f"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/maybe.go": {
+      "bytes": 657,
+      "sha256": "04d5e832005907e20cd0cba307350cd6f392ec1a081e884f8ecfd56cc6c4ac10"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/maybe_test.go": {
+      "bytes": 730,
+      "sha256": "de362f8df5a226413118ff06b150fdd7320c65d9609a4186b2a7e1faffcc4037"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/middleware.go": {
+      "bytes": 684,
+      "sha256": "8789f84814d815185cb5a7bc6c247969b67d0ff9b8045ee1c95f4c9ad59ff4b1"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/middleware_test.go": {
+      "bytes": 4845,
+      "sha256": "f93aec66e191433ab67ea727d45dc6cbdb4184d874132339c2715431c41e3eba"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/nocache.go": {
+      "bytes": 1430,
+      "sha256": "389eb1e308194561aea139b8d56d49f46b9fb30d84f8da146f5deaea66c5f5cc"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/page_route.go": {
+      "bytes": 519,
+      "sha256": "03f3b50c4a55c345b52ce8f4b6d5da4b977647dd66e2e59b5f3635bda93e779c"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/path_rewrite.go": {
+      "bytes": 422,
+      "sha256": "0f3c01a40e320494a093d804376f3be8519b86285b5e24e8937bcee2c13c9279"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/path_rewrite_test.go": {
+      "bytes": 546,
+      "sha256": "5201c0caf7955e44397be15e7d41d9235d569f96172ac7f630aed2c91e0590a2"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/profiler.go": {
+      "bytes": 1307,
+      "sha256": "5b21bca97731b2df9aff87767ea1325b77a401c823fa6cdcf52ad38616d48faa"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/realip.go": {
+      "bytes": 1568,
+      "sha256": "2f837f2213de7074c5c6915dad70f85c4588077291a8563d1cbad6698a757220"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/realip_test.go": {
+      "bytes": 2311,
+      "sha256": "6cab78b3ebc7fd581261afae6740423edc2199d9ba7ae3e0ffda99354f90d534"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/recoverer.go": {
+      "bytes": 5162,
+      "sha256": "efc38c7b32bfb29ebbe16b199832d1eff13179a34a025c07b53c733c11a2154c"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/recoverer_test.go": {
+      "bytes": 2495,
+      "sha256": "d54b59bdd910cf56458ddc7eaacba031b203290b18f2b2e2308acb75920b7715"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/request_id.go": {
+      "bytes": 2943,
+      "sha256": "31b21034dd5cd6393fa9abc9ce1207acc78fea1e162d866edf6bb2a7badd288b"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/request_id_test.go": {
+      "bytes": 1402,
+      "sha256": "519e920890f2a33b77d0140a4a8ffcc933752bc04b3efb0af0793e11722b639e"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/request_size.go": {
+      "bytes": 454,
+      "sha256": "81a98f72a81442a01a4353be9833fda6803f585bf768cebde5a34ebc1c44c390"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/request_size_test.go": {
+      "bytes": 1446,
+      "sha256": "d0a2de078138dc57acdbf59749d567529637556158111eb1b7d99b545f18a4b1"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/route_headers.go": {
+      "bytes": 4167,
+      "sha256": "cfd320f1a996ac95e29e25ab8a2ffa9606577996d6e001fb3835ede2795a3f69"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/route_headers_test.go": {
+      "bytes": 5766,
+      "sha256": "dd48799f1da69155927452801354ef413a97b1a83109fc8ad5f0560ae1f66906"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/strip.go": {
+      "bytes": 2199,
+      "sha256": "d5a0929e147b8b2a58ee78f0166a67f0949255b698bd5d26983a62643fc8fe10"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/strip_test.go": {
+      "bytes": 9524,
+      "sha256": "1002bd43aea540f4661806adcfc6ad21525e1e2c1e9fb92f47dda16fdaae0a4d"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/sunset.go": {
+      "bytes": 1239,
+      "sha256": "c519fcabb10f480397fcc907de3b44ba96758f04465a04e6d0f455c2d6f46192"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/sunset_test.go": {
+      "bytes": 3250,
+      "sha256": "d2db841be75a0e93bd230aff7b3b7a2f5de669950552034af6eade7858bbcda0"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/supress_notfound.go": {
+      "bytes": 869,
+      "sha256": "c9f197de94d7f85b59c10ed1dac10825ffe29d33804f75db126da19747177475"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/supress_notfound_test.go": {
+      "bytes": 2630,
+      "sha256": "b105c29ee86dcdc4ebbc47bccf2b7b08259c3bb75ff135921bfdf79f1704a467"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/terminal.go": {
+      "bytes": 1877,
+      "sha256": "6e663b6ab8e26417198021c226b5aa5bce92648c5bb172d329389c16bef8ca20"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/terminal_test.go": {
+      "bytes": 618,
+      "sha256": "fa3a1ce23af7f0a599ed9375ec6e7e6ae4bf4724724bf32f1bd8fb2fd41b68fc"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/throttle.go": {
+      "bytes": 4699,
+      "sha256": "6f140f6ac687c9bacc68584c1168dcee5a4f7ed0d2efa4ccc969a622966b5ec1"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/throttle_test.go": {
+      "bytes": 7817,
+      "sha256": "c38987610488057caa8ebf038e927ce731a94e1412431ba0338eec816346fa87"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/timeout.go": {
+      "bytes": 1222,
+      "sha256": "3e83d007ec300b4ea605d97a336351e562ecd84b32c2b26206791d11ce7501c0"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/url_format.go": {
+      "bytes": 1814,
+      "sha256": "a1ea4ec9039b5a704f8aea7754a9b00d8026b72d18ba98208cd04b182e1b5800"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/url_format_test.go": {
+      "bytes": 1653,
+      "sha256": "04efa8cfbda922ff671ab3bdbc00f6fa06bf776c300dc8605815de1def33aaa1"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/value.go": {
+      "bytes": 428,
+      "sha256": "288b19d77e375d2b2f65dbd901f958f3fb7c93c26de0691e70817dd343c9a679"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/value_test.go": {
+      "bytes": 678,
+      "sha256": "9e40bcd53a62241f496dc7fc011faab7bdaf7e9a48358f3e1c843278f11f0c9f"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/wrap_writer.go": {
+      "bytes": 6413,
+      "sha256": "b2011091cccb6a8a805d24bec4df20e631e3649a2812bdf41036fffb05ce3494"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/wrap_writer_readfrom_test.go": {
+      "bytes": 2649,
+      "sha256": "7d58dce44f9245c08e61081159d26d5b3e79c30c005bdf93e930e484b7f03b7b"
+    },
+    "artifact/chanblock-default/chi-repeat/middleware/wrap_writer_test.go": {
+      "bytes": 7217,
+      "sha256": "365a33237ae2e83ad3c2964ce7ae438c71463d8c6284be4789f208ecc97f8c9c"
+    },
+    "artifact/chanblock-default/chi-repeat/mux.go": {
+      "bytes": 17308,
+      "sha256": "cc44c2d620e6306b16d6d80f5f6c70f02b5814b357a4f5823372818f355ae67d"
+    },
+    "artifact/chanblock-default/chi-repeat/mux_test.go": {
+      "bytes": 59980,
+      "sha256": "162d82fa10418b99baf750e3fbcb1fee018bfd654850a9f01382a175390dc965"
+    },
+    "artifact/chanblock-default/chi-repeat/path_value_test.go": {
+      "bytes": 1746,
+      "sha256": "2c6f68e8540ceb9953869fbf57721ca6b03943c1903011bb0dcea202aa5d9fd8"
+    },
+    "artifact/chanblock-default/chi-repeat/pattern_test.go": {
+      "bytes": 1556,
+      "sha256": "2cb5166ea7db6a38ac3b67bf40ea2fd82393311967888a71e3b296592119d06e"
+    },
+    "artifact/chanblock-default/chi-repeat/testdata/cert.pem": {
+      "bytes": 1098,
+      "sha256": "8fb47f5e036bcb4daaeed180fa7164504a8ca43bdc010fd418618da48fdd340c"
+    },
+    "artifact/chanblock-default/chi-repeat/testdata/key.pem": {
+      "bytes": 1678,
+      "sha256": "fecae623b5a0ae0a1110285c66e3e0e7f6019f49fd540ed3d9b85f65b9054f6c"
+    },
+    "artifact/chanblock-default/chi-repeat/tree.go": {
+      "bytes": 22069,
+      "sha256": "f4b12b63b662fb8e36658172b36b35705cfb24eefae0665635f4fbd52e64fb79"
+    },
+    "artifact/chanblock-default/chi-repeat/tree_test.go": {
+      "bytes": 27932,
+      "sha256": "e9d8f7755589f1852791ed5b4a853c16ad12cdf8ba0db3208dac33b2dac398c1"
+    },
+    "artifact/chanblock-default/chi-source-0.run.json": {
+      "bytes": 579,
+      "sha256": "c86acbfb82021c27352f5b9514edc153a7f1fe09f6827641088c67b44b4ada6d"
+    },
+    "artifact/chanblock-default/chi-source-0.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/chi-source-0.stdout": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/chi-source-1.run.json": {
+      "bytes": 698,
+      "sha256": "8916641e57500e53e56efe7a9ed254cd8428ace622fe03b05cf0afa448ed9f56"
+    },
+    "artifact/chanblock-default/chi-source-1.stderr": {
+      "bytes": 111,
+      "sha256": "eb6aacb3b4762ea129d197029fa17255d5bb74d5f8128cd8f629a626dfab7c5b"
+    },
+    "artifact/chanblock-default/chi-source-1.stdout": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/chi-source-2.run.json": {
+      "bytes": 657,
+      "sha256": "484c0ca5818a9d0af83c0ab44c0aca93ec5e9fc8b22ff9f562e548bb3ea644bb"
+    },
+    "artifact/chanblock-default/chi-source-2.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/chi-source-2.stdout": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/chi-source.json": {
+      "bytes": 11298,
+      "sha256": "0d3ceacb0b73985fa5b0e66feca2209043f28b735e54aff45b8a1c31e475d2e0"
+    },
+    "artifact/chanblock-default/chi-standard-primary.check.json": {
+      "bytes": 836,
+      "sha256": "27cc48ce7c792177f7ee32f6785cf5a1223c406ccfbb9ee87d4435e51aa7a72e"
+    },
+    "artifact/chanblock-default/chi-standard-primary.run.json": {
+      "bytes": 718,
+      "sha256": "9e246c2b757448bbb1df1054848f3d40135ca6646fed3755fcaec398d354f406"
+    },
+    "artifact/chanblock-default/chi-standard-primary.stderr": {
+      "bytes": 27,
+      "sha256": "342e0112d781b4da772482411257e7dee9ac33bd60c8155b5e8010b41a6f3afe"
+    },
+    "artifact/chanblock-default/chi-standard-primary.stdout": {
+      "bytes": 10348,
+      "sha256": "d1f24c15d97615317a4d23ba0e8cf6b15a1408adecaddd7daae04e6ee6fb211c"
+    },
+    "artifact/chanblock-default/chi-standard-repeat.check.json": {
+      "bytes": 831,
+      "sha256": "1293bff9a5a100b012924e75a23f7e0bd19c341dc1862ec8f1f94b6d5f77083d"
+    },
+    "artifact/chanblock-default/chi-standard-repeat.run.json": {
+      "bytes": 714,
+      "sha256": "52a4ac4ea93c446d8781ead85214d0a5ea4e5818dd5b0c5745b2e73cf7702110"
+    },
+    "artifact/chanblock-default/chi-standard-repeat.stderr": {
+      "bytes": 27,
+      "sha256": "342e0112d781b4da772482411257e7dee9ac33bd60c8155b5e8010b41a6f3afe"
+    },
+    "artifact/chanblock-default/chi-standard-repeat.stdout": {
+      "bytes": 10348,
+      "sha256": "d1f24c15d97615317a4d23ba0e8cf6b15a1408adecaddd7daae04e6ee6fb211c"
+    },
+    "artifact/chanblock-default/chi-strict-primary.check.json": {
+      "bytes": 828,
+      "sha256": "cc16bb99fc25dad7008002f0d842e2d6860e4f2011bef248c29edcf9da408d31"
+    },
+    "artifact/chanblock-default/chi-strict-primary.run.json": {
+      "bytes": 712,
+      "sha256": "e902ccf9e5e59e6171bce6fdc36925be20196136fefb0dd478067ee60eab48ee"
+    },
+    "artifact/chanblock-default/chi-strict-primary.stderr": {
+      "bytes": 27,
+      "sha256": "342e0112d781b4da772482411257e7dee9ac33bd60c8155b5e8010b41a6f3afe"
+    },
+    "artifact/chanblock-default/chi-strict-primary.stdout": {
+      "bytes": 18671,
+      "sha256": "754bd7a5e027c5ec7575eac87af1a126e050f7f403c2c18d4f03e2efbadecd97"
+    },
+    "artifact/chanblock-default/chi-strict-repeat.check.json": {
+      "bytes": 823,
+      "sha256": "678d88759164c2bc84a3aa715d2c11c3faec2770b337621111037ddfef367943"
+    },
+    "artifact/chanblock-default/chi-strict-repeat.run.json": {
+      "bytes": 708,
+      "sha256": "12005d885323fe728448e15f5a3fee7cdd79fa2b2914422613fd87c02e1323a9"
+    },
+    "artifact/chanblock-default/chi-strict-repeat.stderr": {
+      "bytes": 27,
+      "sha256": "342e0112d781b4da772482411257e7dee9ac33bd60c8155b5e8010b41a6f3afe"
+    },
+    "artifact/chanblock-default/chi-strict-repeat.stdout": {
+      "bytes": 18671,
+      "sha256": "754bd7a5e027c5ec7575eac87af1a126e050f7f403c2c18d4f03e2efbadecd97"
+    },
+    "artifact/chanblock-default/chi.toml": {
+      "bytes": 35,
+      "sha256": "d2462e76343b99058722f0bfbb384ccb95b656cedf9bb8b8c3d526dd211b2d8c"
+    },
+    "artifact/chanblock-default/environment-cli.json": {
+      "bytes": 847,
+      "sha256": "53f2b7544b198c46c202ff1f862a60d4abd4fed059353d4204cf31d4722adae4"
+    },
+    "artifact/chanblock-default/environment.json": {
+      "bytes": 847,
+      "sha256": "f944cf91fdba9df7e98d2de60be1f6bdb7b4a77cfba3d20054b98cfdbed9f63c"
+    },
+    "artifact/chanblock-default/go-version.run.json": {
+      "bytes": 530,
+      "sha256": "ad070327a895461c96018c4837103c95eb1a41d90ca20eb7efad43b91edf7517"
+    },
+    "artifact/chanblock-default/go-version.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/go-version.stdout": {
+      "bytes": 32,
+      "sha256": "a29205bd83967c2f70e6768fae009600038d6056499fa289de9d5f9b79beaef4"
+    },
+    "artifact/chanblock-default/old-production.check.json": {
+      "bytes": 942,
+      "sha256": "f76a614fdebe04614fb38eee935175bc8d25f788deabc4c27a6898341fddc675"
+    },
+    "artifact/chanblock-default/old-production.json": {
+      "bytes": 193,
+      "sha256": "9dc9c8fd342256988a771db36b65c642abc8dd4cca995035f0e9cea6facb0b0e"
+    },
+    "artifact/chanblock-default/old-production.run.json": {
+      "bytes": 794,
+      "sha256": "6413a5129b15c8f0ef10c4a49e16530a28d2eacb9d72fc6f0f1a5a132173f92f"
+    },
+    "artifact/chanblock-default/old-production.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/old-production.stdout": {
+      "bytes": 6941,
+      "sha256": "d27144afb90393c69dfb798b2c25edd6358bb12a987e1b1f5ad92e0dd97f8967"
+    },
+    "artifact/chanblock-default/parity.check.json": {
+      "bytes": 833,
+      "sha256": "dd0f8c51ffc20b0f5a67d7b6f6453a4467204dcd6060f8f8a5cded37a1e0d6f1"
+    },
+    "artifact/chanblock-default/parity.run.json": {
+      "bytes": 695,
+      "sha256": "46163337efd0279a29ba7f5b6c4e033dfd299fe4763f9cc57057debd57b47321"
+    },
+    "artifact/chanblock-default/parity.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/parity.stdout": {
+      "bytes": 3634,
+      "sha256": "57112c6c1632331e7583852957a65877dcf1a487ef6dc8c2ce47d5a60d8cb84e"
+    },
+    "artifact/chanblock-default/positive.check.json": {
+      "bytes": 777,
+      "sha256": "d8d0286faf9e8297ab88db4d57d370525dad359c73214c1933a2db63aba79033"
+    },
+    "artifact/chanblock-default/positive.run.json": {
+      "bytes": 641,
+      "sha256": "1a824f436f4f61ef147b0821f2dba1c2be16f10739ab08c01b4b63fd45bf3df9"
+    },
+    "artifact/chanblock-default/positive.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/positive.stdout": {
+      "bytes": 12071,
+      "sha256": "9bbbde7a960582efc4128b5a5a99987f68e094bed92c6a7c36718f2005142a5c"
+    },
+    "artifact/chanblock-default/race.check.json": {
+      "bytes": 781,
+      "sha256": "98f7713d9c50e3a807ead0fdd6b5778159f1bf543538d6bdc5acbef6e516ea2e"
+    },
+    "artifact/chanblock-default/race.run.json": {
+      "bytes": 647,
+      "sha256": "fd1343dcd0754f7f9e6ccb4e37f3ea0b162bea0fdc3030a8a2443a9d7dc64ae4"
+    },
+    "artifact/chanblock-default/race.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-default/race.stdout": {
+      "bytes": 12070,
+      "sha256": "3a1e954b4f65e6dbccf755bc795d83ed1b37026a5341355d3425e872520e1f20"
+    },
+    "artifact/chanblock-default/report.json": {
+      "bytes": 18538,
+      "sha256": "80b9503e7292b562abda8a7e9779bf82210916277d6c670be8f4e9757ea84d30"
+    },
+    "artifact/chanblock-default/source-after.json": {
+      "bytes": 80563,
+      "sha256": "911fac8a005efad54d697f62fb42072c3416eda3426fd7f599d5e8a94d3d62af"
+    },
+    "artifact/chanblock-default/source-before.json": {
+      "bytes": 80563,
+      "sha256": "911fac8a005efad54d697f62fb42072c3416eda3426fd7f599d5e8a94d3d62af"
+    },
+    "artifact/chanblock-default/tools-after.json": {
+      "bytes": 989,
+      "sha256": "d69cc398d399b74bbd8c829a003d3d4f8a1ff677dd3e713053f87c8dab189ffb"
+    },
+    "artifact/chanblock-default/tools-before.json": {
+      "bytes": 989,
+      "sha256": "d69cc398d399b74bbd8c829a003d3d4f8a1ff677dd3e713053f87c8dab189ffb"
+    },
+    "artifact/chanblock-setup/dependencies.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "artifact/chanblock-setup/format.log": {
+      "bytes": 26,
+      "sha256": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+    },
+    "artifact/chanblock-setup/pyright.log": {
+      "bytes": 37,
+      "sha256": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332"
+    },
+    "artifact/chanblock-setup/pytest.log": {
+      "bytes": 328,
+      "sha256": "7200698b93ae5d07db62f35c8e9b5694e3f3948101c0039b8463183907a6c983"
+    },
+    "artifact/chanblock-setup/ruff.log": {
+      "bytes": 19,
+      "sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    "artifact/chanblock-setup/uv-archive.txt": {
+      "bytes": 48,
+      "sha256": "fb0775e26df88e199b4e31251d69f1429ddbd296834f87beb0132b08905395ba"
+    },
+    "checker-before.py.txt": {
+      "bytes": 26292,
+      "sha256": "ab934b1c31daee07a05ebce99f102d8946bdbacbf8715eda0f1354c7370d3bde"
+    },
+    "github/final-jobs.json": {
+      "bytes": 19472,
+      "sha256": "726eaf235415bdc065515d06cf36f5f41db9e623dc0b5efb8d12a5e712b095c9"
+    },
+    "github/final-run.json": {
+      "bytes": 13795,
+      "sha256": "80faeda4cb4b189706134ebc4640342cfcf08dfa44c936f24d7ea1b8f8a44849"
+    },
+    "github/initial-jobs.json": {
+      "bytes": 4170,
+      "sha256": "b7f7ee50768243701e9cbde3d827d819ff651d6d188b6d8b2cf547af4eb23008"
+    },
+    "github/initial-merge.json": {
+      "bytes": 2844,
+      "sha256": "fbaa1baeff28427c0135832d28f84ea0ca9ff7f005563e59e9a16d51c7adb5c2"
+    },
+    "github/initial-pr.json": {
+      "bytes": 21672,
+      "sha256": "39d6a6ec06fd3f2d07532a6c3718971ce97a36ff43182c17955f660f6b3672d5"
+    },
+    "github/initial-run.json": {
+      "bytes": 13788,
+      "sha256": "c1bccb3039f9ced07f4ad69e837c83292540f01340ed3a08778b1b3a2f63c4e6"
+    },
+    "github/lint.raw.log": {
+      "bytes": 26933,
+      "sha256": "65aebb40cfd64ce06db1b4c78854b9372773de6ba32b161fd40a240e2e07a530"
+    },
+    "github/race.raw.log": {
+      "bytes": 27747,
+      "sha256": "d35ed9b3979164dadbd94caadf3f4f822165639429aef68c96b475add0d9ca24"
+    },
+    "github/regression.raw.log": {
+      "bytes": 29904,
+      "sha256": "e95f9808b4f27ddb85f58468d6431dd78c57fc53e7318ebc2f3b0bf9885e54e5"
+    },
+    "github/vettool.raw.log": {
+      "bytes": 23229,
+      "sha256": "3ad6bd44b6bb9a6cd11daa0c58dbaf6949803beb3668a11a3b7d2976b5c1e048"
+    },
+    "stock-go1.27.4/src/cmd/internal/test2json/test2json.go": {
+      "bytes": 19217,
+      "sha256": "81b811cc3af1cc49da5faec1a93aabf12b769a69a5dbc60505c125edb19d288b"
+    },
+    "stock-go1.27.4/src/cmd/test2json/main.go": {
+      "bytes": 5993,
+      "sha256": "98613882be8e9dcfed687f594b253b2a0474771981099174406ad74bb377b5c7"
+    }
+  },
+  "head": "f8da9ae49e08ba4507cea58318badde2b3c974c1",
+  "merge": "b82aed6994e134fb58f19517a84fa40f153ba8bf",
+  "original_artifact": {
+    "bytes": 18770930,
+    "id": 14274102066,
+    "name": "chanblock-default-43960061537-1",
+    "sha256": "7ea202ad476c4f8bf68ff113eda397dcc7fdf9319b0e2c2ae7a869f9e2480a80",
+    "url": "https://github.com/gosuda/gglint/actions/runs/43960061537/artifacts/14274102066"
+  },
+  "run_id": 43960061537,
+  "schema_version": 1,
+  "tree": "4fe1a7411ae41c6a7c4ef28d3d07bbc54f02157b"
+}
