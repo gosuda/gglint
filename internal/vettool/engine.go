@@ -167,14 +167,13 @@ func insideDir(dir, name string) bool {
 		return false
 	}
 	if !filepath.IsAbs(name) {
-		if rooted(name) {
-			// A volume-relative path like \tmp\x on Windows is not an
-			// ordinary relative name: resolve it on the current volume.
-			if abs, err := filepath.Abs(name); err == nil {
-				name = abs
-			}
-		} else {
+		if !rooted(name) {
 			return name != ".." && !strings.HasPrefix(name, ".."+string(filepath.Separator))
+		}
+		// A volume-relative path like \tmp\x on Windows is not an
+		// ordinary relative name: resolve it on the current volume.
+		if abs, err := filepath.Abs(name); err == nil {
+			name = abs
 		}
 	}
 	if !filepath.IsAbs(dir) && rooted(dir) {

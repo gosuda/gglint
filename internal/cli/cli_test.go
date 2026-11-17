@@ -809,11 +809,11 @@ func TestConfigReadFailureExitsThreeAndMissingExplicitConfigExitsTwo(t *testing.
 	// A config path that is a directory fails to read on every platform;
 	// chmod cannot deny reads on Windows.
 	path := filepath.Join(dir, config.FileName)
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
+	if rerr := os.Remove(path); rerr != nil {
+		t.Fatal(rerr)
 	}
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatal(err)
+	if merr := os.Mkdir(path, 0o755); merr != nil {
+		t.Fatal(merr)
 	}
 	_, err = os.ReadFile(path)
 	denied := "gglint: internal: " + path + ": " + err.Error() + "\n"
