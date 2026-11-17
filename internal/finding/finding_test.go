@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,10 +15,14 @@ import (
 	"github.com/gosuda/gglint/internal/finding"
 )
 
-var work = filepath.FromSlash("/w/repo")
+var work = abs("/w/repo")
 
 func abs(slashPath string) string {
-	return filepath.FromSlash(slashPath)
+	p := filepath.FromSlash(slashPath)
+	if runtime.GOOS == "windows" {
+		p = `C:` + p
+	}
+	return p
 }
 
 func at(path string, line, column int) finding.Position {

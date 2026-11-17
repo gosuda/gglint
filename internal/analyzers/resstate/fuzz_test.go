@@ -34,7 +34,7 @@ func resStmt(op int) string {
 	case 4:
 		return "_ = r.n"
 	default:
-		return "syscall.Munmap(b)"
+		return "sink(b)"
 	}
 }
 
