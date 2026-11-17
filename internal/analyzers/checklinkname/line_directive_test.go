@@ -29,9 +29,12 @@ func main() { missing() }
 
 func TestLineDirectiveClaimingGOROOTDoesNotHideUnresolvedLinkname(t *testing.T) {
 	t.Parallel()
+	// The claimed path only seeds the //line directive, so an unresolved
+	// GOROOT path works when EvalSymlinks cannot resolve it (seen on the
+	// windows-2022 runner).
 	gorootSrc, err := filepath.EvalSymlinks(filepath.Join(build.Default.GOROOT, "src"))
 	if err != nil {
-		t.Fatal(err)
+		gorootSrc = filepath.Join(build.Default.GOROOT, "src")
 	}
 	claimedGOROOTFile := filepath.Join(gorootSrc, "linehide", "main.go")
 	cases := []struct {
