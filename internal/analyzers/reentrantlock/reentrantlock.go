@@ -32,8 +32,10 @@ operand. A go statement evaluates its function operand and arguments
 synchronously and runs the call in a new goroutine. After the spawn, a
 reachable Unlock of the held mutex invalidates the held state when that
 goroutine's synchronous call graph contains no mutex acquisition, mutation,
-loop, switch, select, branch, nested spawn, unsafe operation, or opaque call.
-An unconditional return cannot precede another statement. Only same-package
+loop, switch, select, branch, nested spawn, unsafe operation, opaque call, or
+non-returning helper. The whole synchronous graph must meet this boundary,
+even when an Unlock precedes an excluded call. An unconditional return cannot
+precede another statement. Only same-package
 helpers, non-mutating builtins, mutex releases, and scalar sync/atomic operations
 are modeled. Value receivers are not release aliases. This models
 mutex handoffs, not every possible deadlock involving other synchronization.

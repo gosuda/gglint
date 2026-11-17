@@ -17,6 +17,10 @@ func (c *checker) summarizeReleases(calls map[*types.Func][]*ast.CallExpr) {
 	for grew := true; grew; {
 		grew = c.growBarriers(calls)
 	}
+	c.blockNonReturning()
+	for grew := true; grew; {
+		grew = c.growBarriers(calls)
+	}
 	c.releases = make(map[*types.Func]map[lockKey]bool)
 	for grew := true; grew; {
 		grew = c.growReleases(calls)
@@ -134,16 +138,7 @@ func scalarAtomic(fn *types.Func) bool {
 	}
 	sig := fn.Signature()
 	if recv := sig.Recv(); recv != nil {
-		named, ok := deref(recv.Type()).(*types.Named)
-		if !ok {
-			return false
-		}
-		switch named.Obj().Name() {
-		case "Bool", "Int32", "Int64", "Uint32", "Uint64", "Uintptr":
-			return true
-		default:
-			return false
-		}
+		return scalarAtomicReceiver(recv.Type())
 	}
 	for param := range sig.Params().Variables() {
 		basic, ok := deref(param.Type()).Underlying().(*types.Basic)
@@ -152,6 +147,19 @@ func scalarAtomic(fn *types.Func) bool {
 		}
 	}
 	return sig.Params().Len() != 0
+}
+
+func scalarAtomicReceiver(t types.Type) bool {
+	named, ok := deref(t).(*types.Named)
+	if !ok {
+		return false
+	}
+	switch named.Obj().Name() {
+	case "Bool", "Int32", "Int64", "Uint32", "Uint64", "Uintptr":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *checker) releaseKeys(call *ast.CallExpr) []lockKey {
