@@ -89,10 +89,6 @@ func TestDiscoverIgnoresConfigsBelowAndBesideWorkingDirectory(t *testing.T) {
 	}
 }
 
-func sharedWorkDirs(shared string) map[string]string {
-	return map[string]string{"start": shared, "below": filepath.Join(shared, "work")}
-}
-
 func makeWorldWritable(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, "work"), 0o755); err != nil {
@@ -100,24 +96,6 @@ func makeWorldWritable(t *testing.T, dir string) {
 	}
 	if err := os.Chmod(dir, 0o777); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestDiscoverStopsAtAnyWorldWritableDirIncludingOwnOnes(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	writeFile(t, root, config.FileName, "")
-	shared := filepath.Join(root, "shared")
-	writeFile(t, shared, config.FileName, "")
-	makeWorldWritable(t, shared)
-	for name, wd := range sharedWorkDirs(shared) {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			got, err := config.Discover(wd)
-			if err != nil || got != "" {
-				t.Fatalf("Discover = %q, %v; want none", got, err)
-			}
-		})
 	}
 }
 

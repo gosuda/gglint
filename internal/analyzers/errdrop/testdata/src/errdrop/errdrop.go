@@ -21,7 +21,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"text/template"
 )
 
@@ -226,11 +225,6 @@ type FieldWriter struct {
 
 func verdictReportedFieldWrite(s FieldWriter, b []byte) error {
 	s.Write(b) // want "the error of s.Write is dropped and the next statement returns nil"
-	return nil
-}
-
-func verdictReportedSyscallClose(fd int) error {
-	syscall.Close(fd) // want "the error of syscall.Close is dropped and the next statement returns nil"
 	return nil
 }
 

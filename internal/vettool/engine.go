@@ -167,10 +167,29 @@ func insideDir(dir, name string) bool {
 		return false
 	}
 	if !filepath.IsAbs(name) {
-		return name != ".." && !strings.HasPrefix(name, ".."+string(filepath.Separator))
+		if rooted(name) {
+			// A volume-relative path like \tmp\x on Windows is not an
+			// ordinary relative name: resolve it on the current volume.
+			if abs, err := filepath.Abs(name); err == nil {
+				name = abs
+			}
+		} else {
+			return name != ".." && !strings.HasPrefix(name, ".."+string(filepath.Separator))
+		}
+	}
+	if !filepath.IsAbs(dir) && rooted(dir) {
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
 	}
 	rel, err := filepath.Rel(dir, name)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// rooted reports whether name begins at a filesystem root without a volume,
+// like \tmp\x on Windows. Unix paths are already absolute at that point.
+func rooted(name string) bool {
+	return name[0] == '/' || name[0] == '\\'
 }
 
 // pkgDir returns the directory that holds the package's sources: the mode of

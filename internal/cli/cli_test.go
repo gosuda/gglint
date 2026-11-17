@@ -56,6 +56,9 @@ var hermeticGo = []string{
 
 func setup(ctx context.Context, dir string) error {
 	binary = filepath.Join(dir, "gglint")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	build := exec.CommandContext(ctx, "go", "build", "-o", binary, "github.com/gosuda/gglint/cmd/gglint")
 	build.Env = append(os.Environ(), hermeticGo...)
 	if out, err := build.CombinedOutput(); err != nil {
@@ -798,18 +801,22 @@ func TestConfigReadFailureExitsThreeAndMissingExplicitConfigExitsTwo(t *testing.
 	t.Parallel()
 	dir := workspace(t, "mode = \"basic\"\n")
 	missing := filepath.Join(dir, "nosuch.toml")
-	notFound := "gglint: " + missing + ": open " + missing + ": no such file or directory\n"
+	_, err := os.Open(missing)
+	notFound := "gglint: " + missing + ": " + err.Error() + "\n"
 	for _, args := range [][]string{{"run", "-config", "nosuch.toml", "./b"}, {"rules", "-selected", "-config", "nosuch.toml"}} {
 		assertResult(t, gglint(t, dir, args...), result{code: 2, stderr: notFound})
 	}
-	if os.Geteuid() == 0 {
-		t.Skip("root reads files regardless of permission bits")
-	}
+	// A config path that is a directory fails to read on every platform;
+	// chmod cannot deny reads on Windows.
 	path := filepath.Join(dir, config.FileName)
-	if err := os.Chmod(path, 0); err != nil {
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	denied := "gglint: internal: " + path + ": open " + path + ": permission denied\n"
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = os.ReadFile(path)
+	denied := "gglint: internal: " + path + ": " + err.Error() + "\n"
 	for _, args := range [][]string{{"run", "./b"}, {"rules", "-selected"}} {
 		assertResult(t, gglint(t, dir, args...), result{code: 3, stderr: denied})
 	}
