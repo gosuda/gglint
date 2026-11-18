@@ -34,7 +34,7 @@ func gglintRules() []Rule {
 		{"complexity", config.Basic, originLogos, "Caps cognitive score, nesting, lines, parameters, and file size; large units exceed what agents edit reliably.", ReportEverywhere, func(cfg config.Config) []*analysis.Analyzer {
 			return []*analysis.Analyzer{complexity.New(cfg.Complexity)}
 		}},
-		{"stackaddr", config.Basic, originLogos, "Reports a stack address kept as uintptr, or an unsafe.Pointer to stack storage that leaves its function.", ReportEverywhere, single(stackaddr.Analyzer)},
+		{"stackaddr", config.Basic, originLogos, "Reports unsafe.Pointer built from a non-pointer-derived uintptr, and copied or addressed reflect header values.", ReportEverywhere, single(stackaddr.Analyzer)},
 		{"infinite_recursion", config.Basic, originLogos, "Reports functions that call themselves with their own arguments on every path before any return.", ReportEverywhere, single(infiniterecursion.Analyzer)},
 		{"reentrant_withlock_deadlock", config.Basic, originLogos, "Reports locking a sync mutex the goroutine already holds, directly or through same-package calls.", ReportEverywhere, single(reentrantlock.Analyzer)},
 		{"err_chain_reset", config.Standard, originLogos, "Reports fmt.Errorf calls that format an error with a verb other than %w or pass err.Error().", ReportEverywhere, single(errchainreset.Analyzer)},
