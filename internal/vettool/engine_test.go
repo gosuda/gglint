@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -391,6 +392,65 @@ func TestPositionOutsidePackageFilesDroppedOutsideRoot(t *testing.T) {
 	for _, tc := range cases {
 		if got := e.keep(pass, r, "", analysis.Diagnostic{Pos: tc.pos, Message: "probe finding"}); got != tc.want {
 			t.Errorf("%s: keep = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestInsideDir(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		dir, name string
+		want      bool
+	}{
+		{"", "a.go", false},
+		{"/work", "", false},
+		{"/work", "a.go", true},
+		{"/work", "sub/a.go", true},
+		{"/work", "..", false},
+		{"/work", "../a.go", false},
+		{"/work", "..a.go", true},
+		{"/work", "/work", true},
+		{"/work", "/work/sub/a.go", true},
+		{"/work", "/workshop/a.go", false},
+		{"/work", "/other/a.go", false},
+		{"/work/sub", "/work", false},
+		{"/work/sub", "/work/a.go", false},
+	}
+	for _, tc := range cases {
+		dir, name := filepath.FromSlash(tc.dir), filepath.FromSlash(tc.name)
+		if got := insideDir(dir, name); got != tc.want {
+			t.Errorf("insideDir(%q, %q) = %v, want %v", dir, name, got, tc.want)
+		}
+	}
+}
+
+func TestInsideDirMixedVolume(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "windows" {
+		t.Skip("drive-qualified paths need Windows filepath semantics")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	vol := filepath.VolumeName(cwd)
+	if vol == "" {
+		t.Fatalf("getwd %q has no volume name", cwd)
+	}
+	qualified := func(slashPath string) string {
+		return vol + filepath.FromSlash(slashPath)
+	}
+	cases := []struct {
+		dir, name string
+		want      bool
+	}{
+		{qualified("/work"), filepath.FromSlash("/work/sub/a.go"), true},
+		{filepath.FromSlash("/work"), qualified("/work/sub/a.go"), true},
+		{qualified("/work/sub"), filepath.FromSlash("/work/a.go"), false},
+	}
+	for _, tc := range cases {
+		if got := insideDir(tc.dir, tc.name); got != tc.want {
+			t.Errorf("insideDir(%q, %q) = %v, want %v", tc.dir, tc.name, got, tc.want)
 		}
 	}
 }
