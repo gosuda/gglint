@@ -394,3 +394,31 @@ func TestPositionOutsidePackageFilesDroppedOutsideRoot(t *testing.T) {
 		}
 	}
 }
+
+func TestInsideDir(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		dir, name string
+		want      bool
+	}{
+		{"", "a.go", false},
+		{"/work", "", false},
+		{"/work", "a.go", true},
+		{"/work", "sub/a.go", true},
+		{"/work", "..", false},
+		{"/work", "../a.go", false},
+		{"/work", "..a.go", true},
+		{"/work", "/work", true},
+		{"/work", "/work/sub/a.go", true},
+		{"/work", "/workshop/a.go", false},
+		{"/work", "/other/a.go", false},
+		{"/work/sub", "/work", false},
+		{"/work/sub", "/work/a.go", false},
+	}
+	for _, tc := range cases {
+		dir, name := filepath.FromSlash(tc.dir), filepath.FromSlash(tc.name)
+		if got := insideDir(dir, name); got != tc.want {
+			t.Errorf("insideDir(%q, %q) = %v, want %v", dir, name, got, tc.want)
+		}
+	}
+}

@@ -166,23 +166,30 @@ func insideDir(dir, name string) bool {
 	if dir == "" || name == "" {
 		return false
 	}
-	if !filepath.IsAbs(name) {
-		if !rooted(name) {
-			return name != ".." && !strings.HasPrefix(name, ".."+string(filepath.Separator))
-		}
-		// A volume-relative path like \tmp\x on Windows is not an
-		// ordinary relative name: resolve it on the current volume.
-		if abs, err := filepath.Abs(name); err == nil {
-			name = abs
-		}
+	if !filepath.IsAbs(name) && !rooted(name) {
+		return !climbsOut(name)
 	}
-	if !filepath.IsAbs(dir) && rooted(dir) {
-		if abs, err := filepath.Abs(dir); err == nil {
-			dir = abs
-		}
+	rel, err := filepath.Rel(onVolume(dir), onVolume(name))
+	return err == nil && !climbsOut(rel)
+}
+
+// climbsOut reports whether the relative path rel leaves its base directory.
+func climbsOut(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// onVolume resolves a volume-relative path like \tmp\x on Windows on the
+// current volume, because it is not an ordinary relative name. Every other
+// path comes back unchanged.
+func onVolume(path string) string {
+	if filepath.IsAbs(path) || !rooted(path) {
+		return path
 	}
-	rel, err := filepath.Rel(dir, name)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
 }
 
 // rooted reports whether name begins at a filesystem root without a volume,
