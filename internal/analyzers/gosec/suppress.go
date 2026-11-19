@@ -15,6 +15,7 @@ const (
 	legacyBlock  = "block"
 	allRules     = "*"
 	boundRuleID  = "G602"
+	boundWhat    = "slice index out of range"
 )
 
 // suppressedByDirective reports whether a supplemental G602 finding is
@@ -65,19 +66,26 @@ func groupCoversLine(fset *token.FileSet, comments ast.CommentMap, group *ast.Co
 		return false
 	}
 	start, end := tf.Line(group.Pos()), tf.Line(group.End())
+	if nodeEnd := attachedNodeEnd(fset, comments, group); nodeEnd > end {
+		end = nodeEnd
+	}
+	return start <= line && line <= end
+}
+
+// attachedNodeEnd returns the last line of the node the comment group is
+// attached to, or 0 when the group maps to no node.
+func attachedNodeEnd(fset *token.FileSet, comments ast.CommentMap, group *ast.CommentGroup) int {
+	end := 0
 	for node, groups := range comments {
 		for _, g := range groups {
-			if g != group {
-				continue
-			}
-			if nodeEnd := fset.File(node.End()); nodeEnd != nil {
-				if nodeLine := nodeEnd.Line(node.End()); nodeLine > end {
-					end = nodeLine
+			if g == group {
+				if nodeFile := fset.File(node.End()); nodeFile != nil {
+					end = nodeFile.Line(node.End())
 				}
 			}
 		}
 	}
-	return start <= line && line <= end
+	return end
 }
 
 // directiveRuleIDs parses a comment group's directive text into the set of
@@ -86,32 +94,7 @@ func groupCoversLine(fset *token.FileSet, comments ast.CommentMap, group *ast.Co
 // after "--" is ignored.
 func directiveRuleIDs(group *ast.CommentGroup) map[string]bool {
 	ids := make(map[string]bool)
-	if group == nil {
-		return ids
-	}
-	args := ""
-	found := false
-	if text := group.Text(); text != "" {
-		if idx := strings.Index(text, nosecTag); idx >= 0 {
-			found = true
-			args = text[idx+len(nosecTag):]
-		}
-	}
-	for _, comment := range group.List {
-		if after, ok := strings.CutPrefix(comment.Text, gosecDisable); ok {
-			if len(after) == 0 || after[0] == ' ' {
-				found = true
-				args = strings.TrimSpace(after)
-			}
-		}
-	}
-	if !found {
-		return ids
-	}
-	if idx := strings.Index(args, "--"); idx > -1 {
-		args = args[:idx]
-	}
-	directive := strings.TrimSpace(args)
+	directive := directiveText(group)
 	if directive == "" {
 		return ids
 	}
@@ -132,6 +115,49 @@ func directiveRuleIDs(group *ast.CommentGroup) map[string]bool {
 	return ids
 }
 
+// nosecArgs returns the argument of a #nosec directive in the group's text.
+func nosecArgs(group *ast.CommentGroup) (string, bool) {
+	text := group.Text()
+	if text == "" {
+		return "", false
+	}
+	_, after, ok := strings.Cut(text, nosecTag)
+	if !ok {
+		return "", false
+	}
+	return after, true
+}
+
+// disableArgs returns the argument of a //gosec:disable comment in the group.
+func disableArgs(group *ast.CommentGroup) (string, bool) {
+	for _, comment := range group.List {
+		after, ok := strings.CutPrefix(comment.Text, gosecDisable)
+		if ok && (after == "" || after[0] == ' ') {
+			return strings.TrimSpace(after), true
+		}
+	}
+	return "", false
+}
+
+// directiveText returns the trimmed directive argument of a comment group, or
+// "" when the group carries no #nosec or //gosec:disable directive.
+func directiveText(group *ast.CommentGroup) string {
+	if group == nil {
+		return ""
+	}
+	args, found := nosecArgs(group)
+	if !found {
+		args, found = disableArgs(group)
+	}
+	if !found {
+		return ""
+	}
+	if idx := strings.Index(args, "--"); idx > -1 {
+		args = args[:idx]
+	}
+	return strings.TrimSpace(args)
+}
+
 // validRuleID reports whether s has the G followed by three digits form.
 func validRuleID(s string) bool {
 	if len(s) != 4 || s[0] != 'G' {
@@ -144,4 +170,3 @@ func validRuleID(s string) bool {
 	}
 	return true
 }
-

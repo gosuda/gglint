@@ -20,7 +20,7 @@ type issueLocation struct {
 func guardedArrayIndices(fset *token.FileSet, result *buildssa.SSA, issues []*issue.Issue) map[issueLocation]bool {
 	candidates := make(map[issueLocation]bool)
 	for _, iss := range issues {
-		if iss.RuleID == "G602" && iss.What == "slice index out of range" {
+		if iss.RuleID == boundRuleID && iss.What == boundWhat {
 			candidates[issueLocation{iss.File, iss.Line, iss.Col}] = true
 		}
 	}
@@ -149,7 +149,7 @@ func upperBoundComparison(op token.Token, onLeft, truth bool) bool {
 func constLeftViolations(fset *token.FileSet, result *buildssa.SSA, sizes types.Sizes, issues []*issue.Issue) []constLeftFinding {
 	candidates := make(map[issueLocation]bool)
 	for _, iss := range issues {
-		if iss.RuleID == "G602" && iss.What == "slice index out of range" {
+		if iss.RuleID == boundRuleID && iss.What == boundWhat {
 			candidates[issueLocation{iss.File, iss.Line, iss.Col}] = true
 		}
 	}
@@ -217,8 +217,8 @@ func constLeftIndexViolation(fset *token.FileSet, sizes types.Sizes, fn *ssa.Fun
 	}
 	return &constLeftFinding{
 		issue: &issue.Issue{
-			RuleID: "G602",
-			What:   "slice index out of range",
+			RuleID: boundRuleID,
+			What:   boundWhat,
 			File:   loc.file,
 			Line:   loc.line,
 			Col:    loc.col,
@@ -252,7 +252,7 @@ func constLeftTarget(sizes types.Sizes, index *ssa.IndexAddr) (int64, *ssa.Param
 		return 0, nil, false
 	}
 	length := array.Len()
-	if int64(constant.BitLen(constant.MakeInt64(length))) > int64(sizes.Sizeof(basic)*8) {
+	if int64(constant.BitLen(constant.MakeInt64(length))) > sizes.Sizeof(basic)*8 {
 		return 0, nil, false
 	}
 	return length, param, true
@@ -324,7 +324,7 @@ func constLeftAdmitsBoundary(index *ssa.IndexAddr, param ssa.Value, length int64
 // guard: a non-comparison condition, an operator outside the LoGOs comparison
 // set, operands that are not the parameter against a constant, or no
 // successor leading to the access.
-func guardAdmitsBoundary(block *ssa.BasicBlock, index *ssa.IndexAddr, param ssa.Value, length int64) (bool, bool) {
+func guardAdmitsBoundary(block *ssa.BasicBlock, index *ssa.IndexAddr, param ssa.Value, length int64) (admits, ok bool) {
 	branch, ok := block.Instrs[len(block.Instrs)-1].(*ssa.If)
 	if !ok {
 		return false, false
@@ -355,7 +355,7 @@ func boundsComparisonOp(op token.Token) bool {
 // against a constant. Both operand orders are evaluated, equality included, as
 // the LoGOs proof does (LoGOs compoundBoundary and equalityBoundary report;
 // disjointGuard stays silent through the all-guards rule above).
-func admitsOnPath(comparison *ssa.BinOp, param ssa.Value, length int64, truth bool) (bool, bool) {
+func admitsOnPath(comparison *ssa.BinOp, param ssa.Value, length int64, truth bool) (admits, ok bool) {
 	boundary := constant.MakeInt64(length)
 	if comparison.X == param {
 		limit, ok := comparison.Y.(*ssa.Const)
