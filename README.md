@@ -83,7 +83,7 @@ path:line:col: message [token]<TAB>related: path:line:col: message<TAB>fix: <mes
 gglint: N findings in F files (mode M) rule=count rule=count
 ```
 
-`text` format indents related positions and fixes on their own lines. `json` format prints one object with `mode`, `config` when set, and a `findings` array. Each finding carries a token: the rule name, or `rule:check` when the rule runs more than one analyzer, for example `staticcheck:SA1015` or `chanstate:doubleclose`.
+`text` format indents related positions and fixes on their own lines. `json` format prints one object with `mode`, `config` when set, and a `findings` array. In `agent` and `text`, each finding carries a token: the rule name, or `rule:check` when the rule runs more than one analyzer, for example `staticcheck:SA1015` or `chanstate:doubleclose`. In `json`, the same value is split into separate `rule` and `check` fields, so the first example reads `"rule": "staticcheck", "check": "SA1015"`.
 
 ### Exit codes
 
