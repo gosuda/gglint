@@ -59,6 +59,15 @@ func NotEqualTrueBranch(t token) string {
 	return "unknown"
 }
 
+func CapturedIndex(t token) string {
+	names := [...]string{"light", "dark"}
+	defer func() { _ = t }()
+	if tokenCount < t {
+		return "unknown"
+	}
+	return names[t]
+}
+
 func TrueBranch(t token) string {
 	names := [...]string{"light", "dark"}
 	if t < tokenCount {
