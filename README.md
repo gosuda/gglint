@@ -1,22 +1,51 @@
-# gglint: Go needs Great LINTer.
+# gglint
 
-gglint is a Go linter that ships as one binary with one rule catalog. It runs every check through `go vet -vettool`, so the go command owns the package graph, parallelism, analysis facts, and the cache. The go command caches each package's results keyed by the gglint version, the vet flags, and the package inputs, so a second run over unchanged code reuses the cached results. The resolved configuration is part of the vet flags, so a change to `gglint.toml` takes effect on the next run. gglint itself selects the rules, filters the findings, and prints the report. You choose how much it checks with one of three nested modes: `basic`, `standard` (the default), or `strict`.
+[![CI](https://github.com/gosuda/gglint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gosuda/gglint/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-## Install
+One `go vet` linter binary with 104 rules, organized into nested `basic`, `standard`, and `strict` modes.
+
+gglint runs every check through `go vet -vettool`, so the `go` command owns package loading, parallelism, analysis facts, and the cache. gglint selects the rules, filters the findings, and prints the report. The catalog combines `go/analysis` passes, Staticcheck, selected third-party linters, gVisor ports, and analyzers that mirror the LoGOs lint rules.
+
+```text
+$ gglint run -format text
+main.go:6:13: Printf format %d has arg #1 of wrong type string [staticcheck:SA5009]
+main.go:6:14: fmt.Printf format %d has arg "not a number" of wrong type string [printf]
+gglint: 2 findings (mode standard)
+```
+
+Real output from `main.go` containing `fmt.Printf("%d\n", "not a number")`. The run exits 1.
+
+## Installation
+
+gglint needs Go 1.27 or later, as `go.mod` declares. It supports every platform `go vet` supports; CI runs on Linux and Windows.
+
+`go install github.com/gosuda/gglint/cmd/gglint@latest` is the only supported installation method.
+
+## Quick start
 
 ```sh
 go install github.com/gosuda/gglint/cmd/gglint@latest
+cd your-go-project
+gglint run
 ```
 
-gglint needs Go 1.27 or later, as `go.mod` declares.
+A clean run prints `gglint: 0 findings in 0 files (mode standard)` and exits 0. Use `gglint run -h` for flags.
 
-## Commands
+## Why gglint
+
+- One binary, one catalog: no plugin loading, no linter config schema to learn beyond `gglint.toml`.
+- Nested modes: `basic` reports defects with positive evidence, `standard` (the default) adds rewrites and the gglint concurrency and lifetime rules, `strict` adds rules that report missing proof of safety.
+- Agent-readable output: the default `agent` format puts each finding on one line and ends with per-rule counts; `-format json` emits one object.
+- Suggested fixes: `gglint run -fix` runs `go vet -fix` through the same vettool, then reports what remains.
+- Kept evidence: every rule name, mode, origin, and description in this file is tested against the registered catalog.
+
+## Usage
 
 | Command | What it does |
 |---|---|
-| `gglint run [flags] [packages]` | Lints the packages. The default pattern is `./...`. |
+| `gglint run [flags] [packages]` | Lints packages. The default pattern is `./...`. |
 | `gglint rules [-mode M] [-selected] [-config PATH]` | Lists rules. |
-| `gglint version` | Prints `gglint <module version> <Go version>`. A build without a module version prints `(devel)`. |
+| `gglint version` | Prints `gglint <module version> <Go version>`. |
 
 `gglint run -h` and `gglint rules -h` print the command's flags to stderr and exit 2.
 
@@ -27,8 +56,8 @@ gglint needs Go 1.27 or later, as `go.mod` declares.
 | `-config PATH` | Use this `gglint.toml` instead of searching for one. A relative path is resolved against the working directory. |
 | `-mode basic\|standard\|strict` | Override the `mode` in the config file. |
 | `-format agent\|text\|json` | Output format. The default is `agent`. |
-| `-fix` | Apply suggested fixes, then report what is left. gglint first runs `go vet -fix` through its vettool, which applies the first fix of every kept finding, and then runs the normal report. |
-| `-new-from-rev REV` | Report only findings on lines changed since `REV`. gglint compares each finding's printed path and line with `git diff REV` of the working tree. `typecheck` findings are always kept. |
+| `-fix` | Apply suggested fixes, then report what is left. |
+| `-new-from-rev REV` | Report only findings on lines changed since `REV`, by comparing each finding with `git diff REV`. `typecheck` findings are always kept. |
 
 ### `gglint rules`
 
@@ -42,6 +71,20 @@ Each line has four tab-separated fields, sorted by mode and then by name:
 name<TAB>mode<TAB>origin<TAB>description
 ```
 
+### Output
+
+Stdout carries only the report in the selected format, and only on exit 0 or 1. On exit 2 or 3, stdout is empty. Stderr carries status lines and errors prefixed with `gglint: `.
+
+The default `agent` format prints one line per finding and then one summary line, sorted by path, line, column, token, and message:
+
+```text
+path:line:col: message [token]<TAB>related: path:line:col: message<TAB>fix: <message>
+
+gglint: N findings in F files (mode M) rule=count rule=count
+```
+
+`text` format indents related positions and fixes on their own lines. `json` format prints one object with `mode`, `config` when set, and a `findings` array. Each finding carries a token: the rule name, or `rule:check` when the rule runs more than one analyzer, for example `staticcheck:SA1015` or `chanstate:doubleclose`.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -51,56 +94,9 @@ name<TAB>mode<TAB>origin<TAB>description
 | `2` | Usage or config error, including a bad flag. |
 | `3` | Package load failure, analyzer error, internal error, or interrupt. |
 
-### Output
+## Documentation
 
-Stdout carries only the report in the selected format, and only on exit 0 or 1. On exit 2 or 3, stdout is empty.
-
-Stderr carries status lines and errors prefixed with `gglint: `. Captured tool errors can include further lines of context:
-
-| Line | When |
-|---|---|
-| `gglint: config <path>` | A config file was loaded. |
-| `gglint: N findings (mode M)` | `text` format with at least one finding. |
-| `gglint: <message>` | Usage or config error. |
-| `gglint: load: <error>` | `go vet` failed with stderr that is not fully explained by source diagnostics. |
-| `gglint: diff: <error>` | `-new-from-rev` could not run `git diff`. |
-| `gglint: internal: <error>` | An analyzer or gglint itself failed. |
-| `gglint: interrupted` | The run received SIGINT or SIGTERM. |
-
-Paths are slash-separated and relative to the working directory, so they can start with `../`. Columns start at 1; a missing column prints as 1.
-
-Each finding carries a token: the rule name, or `rule:check` when the rule runs more than one analyzer, for example `staticcheck:SA1015`, `modernize:forvar`, or `chanstate:doubleclose`. The `check` part is the upstream analyzer name.
-
-Agent format, the default, prints one line per finding and then one summary line. Related positions and fixes stay on the finding line, separated by tabs, so `grep` returns whole findings and `tail -1` returns the totals:
-
-```text
-path:line:col: message [token]<TAB>related: path:line:col: message<TAB>fix: <message>
-gglint: N findings in F files (mode M) rule=count rule=count
-```
-
-The summary lists each rule with its count, highest count first, then by name. A clean run prints only `gglint: 0 findings in 0 files (mode M)`. In the agent and text formats, a line break inside a message prints as a space, so a finding never spans more lines than its format allows.
-
-Text format prints one line per finding, then one indented line per related position and per suggested fix:
-
-```text
-path:line:col: message [token]
-	related: path:line:col: message
-	fix: <message>
-```
-
-When a fix has edits but no message, gglint prints `fix: available` once.
-
-JSON format prints one object:
-
-```json
-{"mode":"standard","config":"gglint.toml","findings":[{"rule":"staticcheck","check":"SA1015","path":"a/b.go","line":3,"column":2,"end_line":3,"end_column":9,"message":"...","related":[{"path":"a/b.go","line":1,"column":1,"message":"..."}],"fixes":["..."],"fixable":true}]}
-```
-
-gglint omits `config`, `check`, `end_line`, `end_column`, `related`, and `fixes` when they are empty, and `fixable` when it is false. `findings` is `[]` on a clean run.
-
-Findings are sorted by path, line, column, token, and message. gglint prints identical findings once, because `go vet` analyzes a package and its test variant separately. Generated files never report.
-
-`typecheck` findings come from Go source diagnostics emitted by `go vet`, in the form `file.go:line[:col]: message`. When the command fails, gglint reports findings only if its complete stderr contains source diagnostics, their attached `have`/`want` type details, package headers, download notices, or blank lines. A tool failure or unrecognized stderr makes the run exit 3 with `gglint: load: <stderr>`, even alongside source diagnostics. The error retains the complete stderr context and stdout stays empty. Structured analyzer errors retain the `internal:` prefix.
+This file is the complete reference: [Configuration](#configuration), [Suppressing findings](#suppressing-findings), [Modes](#modes), [Rules](#rules), and [Coming from golangci-lint](#coming-from-golangci-lint). Repository invariants for analyzer changes live in [AGENTS.md](AGENTS.md).
 
 ## Configuration
 
@@ -122,14 +118,11 @@ max_nesting = 5
 [rules.checkimports]
 deny = [{ path = "archive/zip", allow_from = ["example.com/m/internal/zipx"] }]
 
-[[exclude]]                 # drops a finding when every field set in the entry matches
+[[exclude]]                 # drops a finding when every set field matches
 paths = ["^internal/legacy/"]                  # Go regexps against the path relative to the config file
 rules = ["complexity", "staticcheck:SA1019"]   # finding tokens, same syntax as //nolint
 text = "^function .* is too complex"           # Go regexp against the message
-
-[[exclude]]                 # turns off two rules in test code only
-tests = true                # true: only _test.go files; false: only other files; omit for both
-rules = ["unparam", "staticcheck:SA1019"]
+tests = false               # true: only _test.go files; false: only other files; omit for both
 ```
 
 | Key | Default | Meaning |
@@ -139,41 +132,29 @@ rules = ["unparam", "staticcheck:SA1019"]
 | `disable` | `[]` | Rules to remove from the mode. `typecheck` cannot be disabled. |
 | `run.tests` | `true` | When `false`, gglint drops every finding in a `_test.go` file, `typecheck` included. |
 | `run.build_tags` | `[]` | Build tags for `go vet`. |
-| `rules.complexity.<limit>` | the mode's value | One of the eight limits in [Complexity limits](#complexity-limits). A missing key keeps the mode's value. Values must be 0 or more. |
-| `rules.checkimports.deny` | `[]` | Imports that `checkimports` reports. `path` is an exact import path or a prefix ending in `/...`, which matches the prefix and everything below it. `allow_from` lists the importing packages that may use it, in the same syntax. |
-| `[[exclude]]` | none | Each entry needs at least one of `paths`, `rules`, `tests`, `text`. `rules` cannot name `typecheck`: typecheck findings cannot be excluded or suppressed. |
+| `rules.complexity.<limit>` | the mode's value | One of the eight limits in [Complexity limits](#complexity-limits). Values must be 0 or more. |
+| `rules.checkimports.deny` | `[]` | Imports that `checkimports` reports. `path` is an exact import path or a prefix ending in `/...`; `allow_from` lists the importing packages that may use it. |
+| `[[exclude]]` | none | Each entry needs at least one of `paths`, `rules`, `tests`, `text`. `rules` cannot name `typecheck`. |
 
-gglint selects every rule whose mode is at or below the configured mode, adds `enable`, and removes `disable`. `typecheck` always runs. Settings under `[rules.X]` for a rule that is not selected are accepted and ignored.
+Without `-config`, gglint looks for `gglint.toml` in the working directory and each parent. It stops after the first directory that contains `.git` and checks that directory too. On Unix-like systems it stops before a world-writable directory, because any local user could write a config there. If no file is found it uses the defaults.
 
-### How gglint finds the file
+gglint selects every rule whose mode is at or below the configured mode, adds `enable`, and removes `disable`. `typecheck` always runs.
 
-1. If you pass `-config PATH`, gglint uses that file.
-2. Otherwise it looks for `gglint.toml` in the working directory, then in each parent directory. It stops after the first directory that contains `.git`, and checks that directory too. Without a `.git` directory it walks up to the filesystem root. Your home directory gets no special treatment. It stops before checking any world-writable directory, such as `/tmp`, because any local user can create files there, and uses no file from there or above. The world-writable check applies on Unix-like systems and is skipped on Windows, where permission bits do not reflect directory access.
-3. If no file is found, gglint uses the defaults: mode `standard`, tests reported.
+## Suppressing findings
 
-`[[exclude]]` paths match the slash-separated path relative to the directory of the config file, or to the working directory when there is no file.
-
-`[[exclude]]` `tests` selects by file kind. With `tests = true` the entry matches only findings in files whose name ends in `_test.go`. With `tests = false` it matches only findings in other files. Without `tests` the entry matches files of both kinds. Like the other keys, `tests` only narrows the entry, so `tests = true` with `rules` turns those rules off in test code and leaves them on elsewhere.
-
-### Config errors
-
-A config error exits 2 and prints `gglint: <config path>: <message>`. A bad `-mode` value prints the message without a path. The messages are:
-
-```text
-unknown mode "x" (want basic, standard, or strict)
-enable: unknown rule "x"
-disable: unknown rule "x"
-rule "x" is in both enable and disable
-rule "typecheck" cannot be disabled
-exclude[0]: set at least one of paths, rules, tests, text
-exclude[0].paths[0]: <regexp error>
-exclude[0].text: <regexp error>
-exclude[0].rules: unknown rule "x"
-exclude[0].rules: typecheck findings cannot be excluded
-rules.complexity.max_lines: must be >= 0
-rules.checkimports.deny[0]: path is empty
-<row>:<column>: unknown key <key>
+```go
+//nolint:token[,token...] // reason
 ```
+
+A token is a rule name, which suppresses every check of that rule, or `rule:check`, which suppresses one check.
+
+| Where the comment is | What it covers |
+|---|---|
+| At the end of a line of code | That line. |
+| Alone on its line | The next declaration or statement, through its last line. |
+| Before the `package` clause | The whole file. |
+
+The `nolint` rule checks the directives themselves: it reports malformed or unknown rules, directives that name no rule or lack a reason at the higher modes, and suppressions that no selected rule needed. `typecheck` findings cannot be suppressed.
 
 ## Modes
 
@@ -216,31 +197,6 @@ Large files and deeply nested functions exceed what a reader or an agent can hol
 | Deadlock by re-entry | `lockstate`, `reentrant_withlock_deadlock`, `checklocks` (`strict`: double-acquire check) |
 | Loops that spin without waiting or without advancing, five shapes only (spin:poll, spin:closedrecv, spin:busywait, spin:stalecas, spin:skipadvance) | `spin` |
 | Timer churn and leaks | `timeafter`, `staticcheck:SA1015` |
-
-## Suppressing findings
-
-```go
-//nolint:token[,token...] // reason
-```
-
-A token is a rule name, which suppresses every check of that rule, or `rule:check`, which suppresses one check.
-
-| Where the comment is | What it covers |
-|---|---|
-| At the end of a line of code | That line. |
-| Alone on its line | The next declaration or statement, through its last line. |
-| Before the `package` clause | The whole file. |
-
-The `nolint` rule checks the directives themselves and reports at the directive:
-
-| Message | Modes |
-|---|---|
-| `malformed nolint directive` (for example `// nolint` with a space) | all |
-| `unknown nolint rule "x"` | all |
-| `typecheck findings cannot be suppressed` | all |
-| `unused nolint directive for x` (only when every named rule is selected) | all |
-| `nolint directive must name rules` | `standard`, `strict` |
-| `nolint directive needs a reason after //` | `strict` |
 
 ## Rules
 
@@ -420,7 +376,7 @@ The formatters `gci`, `gofmt`, and `goimports` are covered by `gofumpt`. `goline
 
 gglint does not rebuild Go or module plugins, `custom`, `migrate`, `config path|verify`, `cache`, the `formatters` and `fmt` commands, the JSON schema, the docs site, presets, severities, issue caps, SARIF and the other printers, `-new-from-patch`, `whole-files`, colors, or source excerpts.
 
-## Upgrading from the first catalog
+### Upgrading from the first catalog
 
 | Removed | Use instead |
 |---|---|
@@ -430,17 +386,13 @@ gglint does not rebuild Go or module plugins, `custom`, `migrate`, `config path|
 | `staticcheck:SA4006` | `ineffassign` |
 | `staticcheck:ST…`, `staticcheck:QF…`, `structtag_malformed`, `checkaligned`, `noinit`, `unsizedint`, and the third-party rules listed under `Coming from golangci-lint` | no replacement |
 
-A `gglint.toml` that names a deleted rule in `enable` or `disable` fails with the existing `enable: unknown rule "X"` or `disable: unknown rule "X"` error, and in `[[exclude]] rules` with `exclude[N].rules: unknown rule "X"` (exit 2).
+A `gglint.toml` that names a deleted rule in `enable` or `disable` fails with `enable: unknown rule "X"` or `disable: unknown rule "X"`, and in `[[exclude]] rules` with `exclude[N].rules: unknown rule "X"` (exit 2). A `//nolint:X` comment that names a deleted rule gets `unknown nolint rule "X"`. A `staticcheck:S1005` token stays valid, because `staticcheck` stays known, and matches nothing: the finding now carries `gosimple:S1005`, so the directive is reported as `unused nolint directive for staticcheck:S1005`.
 
-A `//nolint:X` comment that names a deleted rule gets the existing finding `unknown nolint rule "X"`.
+## Contributing
 
-A `staticcheck:S1005` token (any S check) stays valid, because `staticcheck` stays known, and matches nothing: the finding now carries `gosimple:S1005`, so the directive is reported as `unused nolint directive for staticcheck:S1005`.
+There is no `CONTRIBUTING.md`. Before opening a change, read [AGENTS.md](AGENTS.md), which fixes the verbatim gVisor port policy, the loGos parity rules, analysis-fact encoding, and the dependency constraints.
 
-## Development
-
-gglint lints itself at `standard` with the repository's `gglint.toml`. That file excludes the verbatim gVisor port files, so they stay diffable against upstream, and turns off `gosec` in test files. golangci-lint with `.golangci.yml` stays as a second lint gate.
-
-Run these gates before you commit:
+gglint lints itself at `standard` with the repository's `gglint.toml`. Run these gates before you commit:
 
 ```sh
 go vet ./...
@@ -450,16 +402,7 @@ golangci-lint run ./...
 go test -count=1 -run TestCorpusBudget ./internal/precision/
 ```
 
-GitHub Actions runs these gates on pull requests, pushes to `main`, merge
-groups, and manual dispatches. Three Linux jobs separate linting, the race
-suite, and the memory-heavy vettool race tests. The race suite uses `-count=1`
-and includes the precision corpus once, so CI does not repeat the standalone
-corpus command above. All nine workers in the vettool concurrency test still
-run together.
-
-CI reads the Go version from `go.mod`, caches dependencies and build outputs
-separately for each job, and cancels superseded pull request runs. README
-changes also run the checks because the rule catalog tests read this file.
+GitHub Actions runs these gates on pull requests, pushes to `main`, merge groups, and manual dispatches. Three Linux jobs separate the race suite, the memory-heavy vettool race tests, and linting; a Windows job runs the test suite. README changes run the checks because the rule catalog tests read this file.
 
 ## License
 
