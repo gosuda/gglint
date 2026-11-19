@@ -154,7 +154,7 @@ A token is a rule name, which suppresses every check of that rule, or `rule:chec
 | Alone on its line | The next declaration or statement, through its last line. |
 | Before the `package` clause | The whole file. |
 
-The `nolint` rule checks the directives themselves: it reports malformed or unknown rules, directives that name no rule or lack a reason at the higher modes, and suppressions that no selected rule needed. `typecheck` findings cannot be suppressed.
+The `nolint` rule checks the directives themselves: it reports malformed or unknown rules, directives that name no rule (`standard` and above) or lack a reason (`strict`), and suppressions that no selected rule needed; a directive that names any unselected rule is left alone. `typecheck` findings cannot be suppressed.
 
 ## Modes
 
