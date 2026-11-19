@@ -711,3 +711,21 @@ func timerGotoBackPastResetUnproven(in chan int, d time.Duration) int {
 	}
 	return 0
 }
+
+func timerClosureForwardBound(in chan int, d time.Duration) int {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	goto wait
+wait:
+	select {
+	case v := <-in:
+		return v
+	case <-t.C:
+	}
+	func() {
+		goto wait
+	wait:
+		return
+	}()
+	return 0
+}

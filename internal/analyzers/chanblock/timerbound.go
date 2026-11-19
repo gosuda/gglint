@@ -363,11 +363,8 @@ func (b *jumps) visit(n ast.Node) bool {
 		if n.Tok != token.GOTO {
 			return true
 		}
-		for i := len(b.labels) - 1; i >= 0; i-- {
-			if at, ok := b.labels[i][n.Label.Name]; ok && at < n.Pos() {
-				b.out = append(b.out, span{from: at, to: n.Pos()})
-				return true
-			}
+		if at, ok := b.labels[len(b.labels)-1][n.Label.Name]; ok && at < n.Pos() {
+			b.out = append(b.out, span{from: at, to: n.Pos()})
 		}
 	}
 	return true

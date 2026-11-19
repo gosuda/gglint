@@ -85,3 +85,22 @@ func headerOverlay(s []int) unsafe.Pointer {
 	h := (*reflect.SliceHeader)(unsafe.Pointer(&s))
 	return unsafe.Pointer(h.Data)
 }
+
+func directRoundTrip(p unsafe.Pointer) unsafe.Pointer {
+	return unsafe.Pointer(uintptr(p))
+}
+
+func negatedAddress(p, q unsafe.Pointer) unsafe.Pointer {
+	return unsafe.Pointer(uintptr(p) - (-uintptr(q))) // want `possible misuse of unsafe\.Pointer: uintptr does not keep its referent alive; convert directly in the same expression`
+}
+
+func negatedOffset(p unsafe.Pointer, offset uintptr) unsafe.Pointer {
+	return unsafe.Pointer(uintptr(p) - (-offset))
+}
+
+type headerPtr *reflect.SliceHeader
+
+func definedHeaderOverlay(s []int) unsafe.Pointer {
+	h := headerPtr((*reflect.SliceHeader)(unsafe.Pointer(&s)))
+	return unsafe.Pointer(h.Data)
+}

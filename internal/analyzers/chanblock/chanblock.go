@@ -25,8 +25,10 @@ A channel operation is bounded only when it is a case of a select that also
 receives from x.Done(), has a default case, receives from time.After, or
 receives from the channel of a time.Timer or time.Ticker the function makes
 once with time.NewTimer or time.NewTicker and does not stop, escape, or
-overwrite; a timer bounds a select in a loop only when the loop resets it
-unconditionally. It is also bounded when its channel is a local variable made
+overwrite. A ticker bounds every select that receives from it. A timer
+bounds a select outside a loop, and in a loop only when the loop creates
+the timer or resets it unconditionally at the top of its body. It is also
+bounded when its channel is a local variable made
 once in the function by make(chan T, k) with a constant k and the function,
 nested function literals included, sends on it at most k times and never
 inside a loop. When a send on such a channel sits in a loop or the sends

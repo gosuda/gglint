@@ -117,7 +117,9 @@ func safeUintptr(pass *analysis.Pass, expr ast.Expr) bool {
 	case *ast.SelectorExpr:
 		return safeHeaderData(pass, x)
 	case *ast.CallExpr:
-		return safeReflectCall(pass, x)
+		if safeReflectCall(pass, x) {
+			return true
+		}
 	}
 	return pointerArithmetic(pass.TypesInfo, expr) == arithmeticPointer
 }
@@ -128,7 +130,11 @@ func safeHeaderData(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	if sel.Sel.Name != "Data" {
 		return false
 	}
-	ptr, ok := types.Unalias(pass.TypesInfo.TypeOf(sel.X)).(*types.Pointer)
+	t := pass.TypesInfo.TypeOf(sel.X)
+	if t == nil {
+		return false
+	}
+	ptr, ok := t.Underlying().(*types.Pointer)
 	if !ok {
 		return false
 	}
@@ -180,8 +186,17 @@ func pointerArithmetic(info *types.Info, expr ast.Expr) arithmeticKind {
 	switch x := ast.Unparen(expr).(type) {
 	case *ast.CallExpr:
 		return conversionArithmetic(info, x)
+	case *ast.UnaryExpr:
+		return unaryArithmetic(info, x)
 	case *ast.BinaryExpr:
 		return binaryArithmetic(info, x)
+	}
+	return arithmeticScalar
+}
+
+func unaryArithmetic(info *types.Info, expr *ast.UnaryExpr) arithmeticKind {
+	if pointerArithmetic(info, expr.X) != arithmeticScalar {
+		return arithmeticInvalid
 	}
 	return arithmeticScalar
 }
