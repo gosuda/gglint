@@ -10,3 +10,13 @@ func AmbiguousPosition(t token) string {
 //line collisions.go:8
 	return names[t] // want "G602: slice index out of range" "G602: slice index out of range"
 }
+
+// A remapped line beyond the file length must still report the access.
+func RemappedConstLeft(t token) string {
+	names := [...]string{"light", "dark"}
+	if tokenCount < t {
+		return "unknown"
+	}
+//line original.go:120:1
+	return names[t] // want "G602: slice index out of range"
+}

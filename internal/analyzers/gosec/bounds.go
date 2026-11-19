@@ -146,24 +146,33 @@ func upperBoundComparison(op token.Token, onLeft, truth bool) bool {
 // access inside or after a loop (the LoGOs proof stops at loops), an index
 // that is not a bare function parameter, a use captured by a closure, and
 // an array that is not a local fixed array.
-func constLeftViolations(fset *token.FileSet, result *buildssa.SSA, sizes types.Sizes, issues []*issue.Issue) []*issue.Issue {
+func constLeftViolations(fset *token.FileSet, result *buildssa.SSA, sizes types.Sizes, issues []*issue.Issue) []constLeftFinding {
 	candidates := make(map[issueLocation]bool)
 	for _, iss := range issues {
 		if iss.RuleID == "G602" && iss.What == "slice index out of range" {
 			candidates[issueLocation{iss.File, iss.Line, iss.Col}] = true
 		}
 	}
-	var added []*issue.Issue
+	var added []constLeftFinding
 	for _, fn := range result.SrcFuncs {
 		added = append(added, constLeftFuncViolations(fset, sizes, fn, candidates)...)
 	}
 	return added
 }
 
+// constLeftFinding is one supplemental G602 with the access position it is
+// reported at. Adjusted line coordinates still match upstream candidates, but
+// the diagnostic itself is reported at pos directly: rebuilding a position
+// from adjusted line offsets misplaces findings under //line directives.
+type constLeftFinding struct {
+	issue *issue.Issue
+	pos   token.Pos
+}
+
 // constLeftFuncViolations reports the const-on-left accesses in one function.
-func constLeftFuncViolations(fset *token.FileSet, sizes types.Sizes, fn *ssa.Function, candidates map[issueLocation]bool) []*issue.Issue {
+func constLeftFuncViolations(fset *token.FileSet, sizes types.Sizes, fn *ssa.Function, candidates map[issueLocation]bool) []constLeftFinding {
 	headers := loopHeaders(fn)
-	var added []*issue.Issue
+	var added []constLeftFinding
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
 			index, ok := instr.(*ssa.IndexAddr)
@@ -171,7 +180,7 @@ func constLeftFuncViolations(fset *token.FileSet, sizes types.Sizes, fn *ssa.Fun
 				continue
 			}
 			if found := constLeftIndexViolation(fset, sizes, fn, headers, candidates, index); found != nil {
-				added = append(added, found)
+				added = append(added, *found)
 			}
 		}
 	}
@@ -181,7 +190,7 @@ func constLeftFuncViolations(fset *token.FileSet, sizes types.Sizes, fn *ssa.Fun
 // constLeftIndexViolation decides one indexed access: recognize the local
 // fixed-array target, match it against upstream candidates and proven-safe
 // guards, then derive whether the const-on-left guard admits the boundary.
-func constLeftIndexViolation(fset *token.FileSet, sizes types.Sizes, fn *ssa.Function, headers map[*ssa.BasicBlock]bool, candidates map[issueLocation]bool, index *ssa.IndexAddr) *issue.Issue {
+func constLeftIndexViolation(fset *token.FileSet, sizes types.Sizes, fn *ssa.Function, headers map[*ssa.BasicBlock]bool, candidates map[issueLocation]bool, index *ssa.IndexAddr) *constLeftFinding {
 	length, param, ok := constLeftTarget(sizes, index)
 	if !ok {
 		return nil
@@ -206,12 +215,15 @@ func constLeftIndexViolation(fset *token.FileSet, sizes types.Sizes, fn *ssa.Fun
 	if !constLeftAdmitsBoundary(index, param, length) {
 		return nil
 	}
-	return &issue.Issue{
-		RuleID: "G602",
-		What:   "slice index out of range",
-		File:   loc.file,
-		Line:   loc.line,
-		Col:    loc.col,
+	return &constLeftFinding{
+		issue: &issue.Issue{
+			RuleID: "G602",
+			What:   "slice index out of range",
+			File:   loc.file,
+			Line:   loc.line,
+			Col:    loc.col,
+		},
+		pos: index.Pos(),
 	}
 }
 

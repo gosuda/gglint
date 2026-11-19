@@ -47,7 +47,9 @@ func New(excluded []string) *analysis.Analyzer {
 				return nil, fmt.Errorf("gosec: %s: %s", names[0], errs[names[0]][0].Err)
 			}
 			guarded := guardedArrayIndices(pass.Fset, result, issues)
-			issues = append(issues, constLeftViolations(pass.Fset, result, pass.TypesSizes, issues)...)
+			for _, found := range constLeftViolations(pass.Fset, result, pass.TypesSizes, issues) {
+				reportSupplemental(pass, found)
+			}
 			for _, iss := range issues {
 				if iss.RuleID == "G602" && iss.What == "slice index out of range" &&
 					guarded[issueLocation{iss.File, iss.Line, iss.Col}] {
@@ -67,6 +69,12 @@ func report(pass *analysis.Pass, iss *issue.Issue) {
 		return
 	}
 	pass.Reportf(position(pass, file, iss), "%s: %s", iss.RuleID, iss.What)
+}
+
+// reportSupplemental reports a const-left finding at the access position the
+// SSA pass recorded, without reconstructing it from line coordinates.
+func reportSupplemental(pass *analysis.Pass, found constLeftFinding) {
+	pass.Reportf(found.pos, "%s: %s", found.issue.RuleID, found.issue.What)
 }
 
 func toPackage(pass *analysis.Pass) *packages.Package {
