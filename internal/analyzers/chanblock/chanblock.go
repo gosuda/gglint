@@ -26,10 +26,11 @@ receives from x.Done(), has a default case, receives from time.After, or
 receives from the channel of a time.Timer or time.Ticker the function makes
 once with time.NewTimer or time.NewTicker and does not stop, escape, or
 overwrite. A ticker bounds every select that receives from it. A timer
-bounds a select only when nothing received from the timer earlier and no
-backward jump repeats the select without rearming it; in a loop the loop
-must also create the timer or reset it unconditionally at the top of its
-body. It is also
+bounds a select only when nothing received from the timer earlier, or a
+reset unconditionally at the top of the loop body rearmed it after that
+receive, and no backward jump repeats the select without rearming it; in a
+loop the loop must also create the timer or reset it unconditionally at
+the top of its body. It is also
 bounded when its channel is a local variable made
 once in the function by make(chan T, k) with a constant k and the function,
 nested function literals included, sends on it at most k times and never

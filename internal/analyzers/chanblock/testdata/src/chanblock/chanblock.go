@@ -741,3 +741,19 @@ func timerDrainedUnproven(in chan int, d time.Duration) int {
 		return 0
 	}
 }
+
+func timerDrainedThenResetBound(in chan int, d time.Duration) int {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	<-t.C // want `channel receive can block forever: select on ctx\.Done\(\)`
+	for range 3 {
+		t.Reset(d)
+		select {
+		case v := <-in:
+			return v
+		case <-t.C:
+			return 0
+		}
+	}
+	return 0
+}
