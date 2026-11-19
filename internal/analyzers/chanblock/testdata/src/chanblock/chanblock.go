@@ -729,3 +729,15 @@ wait:
 	}()
 	return 0
 }
+
+func timerDrainedUnproven(in chan int, d time.Duration) int {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	<-t.C // want `channel receive can block forever: select on ctx\.Done\(\)`
+	select {
+	case v := <-in: // want `channel receive can block forever: select on ctx\.Done\(\)`
+		return v
+	case <-t.C: // want `channel receive can block forever: select on ctx\.Done\(\)`
+		return 0
+	}
+}
