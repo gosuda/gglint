@@ -22,12 +22,22 @@ var Analyzer = &analysis.Analyzer{
 	Doc: `report channel sends and receives that can block forever
 
 A channel operation is bounded only when it is a case of a select that also
-receives from x.Done(), or when its channel is a local variable made once in
-the function by make(chan T, k) with a constant k and the function, nested
-function literals included, sends on it at most k times and never inside a
-loop. When a send on such a channel sits in a loop or the sends exceed k,
-every send and receive on the channel is reported. A receive of x.Done() on
-its own, range over a channel, close, len, and cap are not reported.`,
+receives from x.Done(), has a default case, receives from time.After, or
+receives from the channel of a time.Timer or time.Ticker the function makes
+once with time.NewTimer or time.NewTicker and does not stop, escape, or
+overwrite. A ticker bounds every select that receives from it. A timer
+bounds a select only when nothing received from the timer earlier, or a
+reset unconditionally at the top of the loop body rearmed it after that
+receive, and no backward jump repeats the select without rearming it; in a
+loop the loop must also create the timer or reset it unconditionally at
+the top of its body. It is also
+bounded when its channel is a local variable made
+once in the function by make(chan T, k) with a constant k and the function,
+nested function literals included, sends on it at most k times and never
+inside a loop. When a send on such a channel sits in a loop or the sends
+exceed k, every send and receive on the channel is reported. A receive of
+x.Done() on its own, range over a channel, close, len, and cap are not
+reported. Port of loGos correctness::unbounded_channel_op.`,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 	Run:      run,
 }
@@ -50,6 +60,7 @@ func check(pass *analysis.Pass, fn ast.Node) {
 		sent:   make(map[*types.Var]int),
 		looped: make(map[*types.Var]bool),
 	}
+	u.timersInit(fn)
 	u.walk(fn)
 	if len(u.ops) == 0 {
 		return
@@ -69,12 +80,17 @@ type operation struct {
 }
 
 type unit struct {
-	info    *types.Info
-	loops   int
-	covered bool
-	sent    map[*types.Var]int
-	looped  map[*types.Var]bool
-	ops     []operation
+	info     *types.Info
+	loops    int
+	covered  bool
+	sent     map[*types.Var]int
+	looped   map[*types.Var]bool
+	ops      []operation
+	depth    int
+	forStack []ast.Node
+	timers   map[*types.Var]*timerUse
+	tdefs    map[*types.Var]int
+	reruns   []span
 }
 
 func (u *unit) bounded(b bounds, ch *types.Var) bool {
@@ -91,7 +107,7 @@ func (u *unit) walk(n ast.Node) {
 func (u *unit) visit(n ast.Node) bool {
 	switch n := n.(type) {
 	case *ast.ForStmt:
-		u.forStmt(n)
+		u.forTimer(n)
 		return false
 	case *ast.RangeStmt:
 		u.rangeStmt(n)
@@ -99,6 +115,29 @@ func (u *unit) visit(n ast.Node) bool {
 	case *ast.SelectStmt:
 		u.selectStmt(n)
 		return false
+	case *ast.FuncLit:
+		u.visitFuncLit(n)
+		return false
+	}
+	return u.visitOperand(n)
+}
+
+func (u *unit) visitFuncLit(n *ast.FuncLit) {
+	u.depth++
+	u.walk(n.Body)
+	u.depth--
+}
+
+// visitOperand records sends, receives and timer mentions in expressions.
+// Statements that open a new scope or a select return through visit instead.
+func (u *unit) visitOperand(n ast.Node) bool {
+	switch n := n.(type) {
+	case *ast.AssignStmt:
+		u.timerDefs(n.Lhs)
+	case *ast.ValueSpec:
+		u.timerValueDefs(n)
+	case *ast.SelectorExpr:
+		u.timerDrain(n)
 	case *ast.SendStmt:
 		u.send(n)
 	case *ast.UnaryExpr:
@@ -109,26 +148,77 @@ func (u *unit) visit(n ast.Node) bool {
 	return true
 }
 
-func (u *unit) forStmt(f *ast.ForStmt) {
+func (u *unit) timerValueDefs(spec *ast.ValueSpec) {
+	lhs := make([]ast.Expr, len(spec.Names))
+	for i, name := range spec.Names {
+		lhs[i] = name
+	}
+	u.timerDefs(lhs)
+}
+
+func (u *unit) forTimer(f *ast.ForStmt) {
 	u.walk(f.Init)
 	u.loops++
+	u.forStack = append(u.forStack, f)
 	u.walk(f.Cond)
 	u.walk(f.Post)
-	u.walk(f.Body)
+	u.bodyTopList(bodyList(f.Body), f)
+	u.forStack = u.forStack[:len(u.forStack)-1]
 	u.loops--
+}
+
+func (u *unit) bodyTopList(list []ast.Stmt, loop ast.Node) {
+	for _, st := range list {
+		if u.noteTopReset(st, loop) {
+			continue
+		}
+		u.walk(st)
+	}
+}
+
+// noteTopReset records a top-of-loop-body Reset as rearming its timer and
+// reports whether st was one.
+func (u *unit) noteTopReset(st ast.Stmt, loop ast.Node) bool {
+	v := topReset(u.info, st)
+	if v == nil || u.timers[v] == nil {
+		return false
+	}
+	if t := u.timers[v]; t != nil {
+		t.reset = loop
+		t.resetAt = st.Pos()
+		t.recv = false
+	}
+	u.walkResetArgs(st)
+	return true
+}
+
+func (u *unit) walkResetArgs(st ast.Stmt) {
+	es, ok := st.(*ast.ExprStmt)
+	if !ok {
+		return
+	}
+	call, ok := ast.Unparen(es.X).(*ast.CallExpr)
+	if !ok {
+		return
+	}
+	for _, a := range call.Args {
+		u.walk(a)
+	}
 }
 
 func (u *unit) rangeStmt(r *ast.RangeStmt) {
 	u.walk(r.X)
 	u.loops++
+	u.forStack = append(u.forStack, r)
 	u.walk(r.Key)
 	u.walk(r.Value)
-	u.walk(r.Body)
+	u.bodyTopList(bodyList(r.Body), r)
+	u.forStack = u.forStack[:len(u.forStack)-1]
 	u.loops--
 }
 
 func (u *unit) selectStmt(s *ast.SelectStmt) {
-	done := u.hasDoneCase(s)
+	done := u.hasDoneCase(s) || hasDefaultCase(s) || u.selectCovered(s)
 	for _, stmt := range s.Body.List {
 		cc := inspection.As[*ast.CommClause](stmt)
 		u.covered = done

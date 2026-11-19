@@ -1,415 +1,238 @@
 package stackaddr
 
 import (
-	"cmp"
 	"go/ast"
 	"go/token"
 	"go/types"
-	"iter"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/types/typeutil"
 )
 
 const (
-	integerMessage = "%s keeps the address of stack storage as an integer the runtime cannot track: keep an unsafe.Pointer"
-	pointerMessage = "%s takes the address of stack storage and stores it outside its frame"
+	reflectPkg   = "reflect"
+	valueType    = "Value"
+	sliceHeader  = "SliceHeader"
+	stringHeader = "StringHeader"
+)
+
+const (
+	unsafePointerMisuse = "possible misuse of unsafe.Pointer: uintptr does not keep its referent alive; convert directly in the same expression"
+	headerMisuse        = "possible misuse of reflect.%s value; keep a pointer to the original slice or string"
 )
 
 var Analyzer = &analysis.Analyzer{
 	Name: "stackaddr",
-	Doc: `report stack addresses kept past their frame through unsafe
+	Doc: `report risky unsafe.Pointer conversions
 
-Stack storage is a local variable or parameter, a field of a local struct
-reached through no pointer, an element of a local array, and the result of new
-or of &T{...}. A local that every assignment sets to such an address, or to
-unsafe.Pointer of one, stands for it as well. A slice element, a map entry, and
-anything reached through a pointer is not stack storage.
-
-The integer form uintptr(unsafe.Pointer(&x)), and arithmetic on it, is reported
-wherever it is stored, returned, or sent: an integer keeps nothing alive and does
-not follow the object when the stack moves. The pointer form unsafe.Pointer(&x)
-is reported only when it leaves the frame: returned, sent, assigned to a named
-result, or stored outside stack storage. unsafe.Pointer(uintptr(...) + off)
-turns an integer form back into a pointer form. A call argument, a comparison,
-and an assignment to the blank identifier store nothing.`,
+An unsafe.Pointer built from a uintptr that the conversion does not derive
+from a pointer in the same expression may point at freed memory: a uintptr
+does not keep its referent alive. Reading through or copying a
+reflect.SliceHeader or reflect.StringHeader value has the same flaw; keep a
+pointer to the original slice or string instead. Port of loGos
+correctness::arena_pointer_escape.`,
 	Run: run,
 }
 
-type addrKind int
-
-const (
-	addrNone addrKind = iota
-	addrInteger
-	addrPointer
-)
-
-type pointerState int
-
-const (
-	pointerUnset pointerState = iota
-	pointerFrame
-	pointerOther
-)
-
-type frameScan struct {
-	pass     *analysis.Pass
-	results  map[*types.Var]bool
-	pointers map[*types.Var]pointerState
-	addrs    map[*types.Var]*ast.CallExpr
-}
-
 func run(pass *analysis.Pass) (any, error) {
-	for _, file := range pass.Files {
-		if importsUnsafe(file) {
-			ast.Inspect(file, func(n ast.Node) bool { return scanFunctions(pass, n) })
-		}
+	for _, f := range pass.Files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			checkNode(pass, n)
+			return true
+		})
 	}
 	return nil, nil
 }
 
-func importsUnsafe(file *ast.File) bool {
-	for _, imp := range file.Imports {
-		if imp.Path.Value == `"unsafe"` {
-			return true
-		}
-	}
-	return false
-}
-
-func scanFunctions(pass *analysis.Pass, n ast.Node) bool {
+func checkNode(pass *analysis.Pass, n ast.Node) {
 	switch n := n.(type) {
-	case *ast.FuncDecl:
-		if n.Body != nil {
-			newFrameScan(pass).run(n)
-		}
-		return false
-	case *ast.FuncLit:
-		newFrameScan(pass).run(n)
-		return false
-	}
-	return true
-}
-
-func newFrameScan(pass *analysis.Pass) *frameScan {
-	return &frameScan{
-		pass:     pass,
-		results:  make(map[*types.Var]bool),
-		pointers: make(map[*types.Var]pointerState),
-		addrs:    make(map[*types.Var]*ast.CallExpr),
-	}
-}
-
-func (s *frameScan) run(root ast.Node) {
-	ast.Inspect(root, s.collect)
-	ast.Inspect(root, s.scan)
-}
-
-func (s *frameScan) collect(n ast.Node) bool {
-	switch n := n.(type) {
-	case *ast.FuncType:
-		s.noteSignature(n)
-	case *ast.AssignStmt:
-		s.noteAssign(n)
-	case *ast.ValueSpec:
-		s.noteDecl(n)
-	case *ast.RangeStmt:
-		s.noteTarget(n.Key, nil)
-		s.noteTarget(n.Value, nil)
-	}
-	return true
-}
-
-func (s *frameScan) noteSignature(ft *ast.FuncType) {
-	for v := range s.fieldVars(ft.Params) {
-		s.pointers[v] = pointerOther
-	}
-	for v := range s.fieldVars(ft.Results) {
-		s.results[v] = true
-	}
-}
-
-func (s *frameScan) fieldVars(list *ast.FieldList) iter.Seq[*types.Var] {
-	return func(yield func(*types.Var) bool) {
-		if list == nil {
-			return
-		}
-		for _, field := range list.List {
-			for _, name := range field.Names {
-				if v := s.localVar(name); v != nil && !yield(v) {
-					return
-				}
-			}
-		}
-	}
-}
-
-func (s *frameScan) noteAssign(a *ast.AssignStmt) {
-	values := a.Rhs
-	if a.Tok != token.ASSIGN && a.Tok != token.DEFINE {
-		values = nil
-	}
-	for i, target := range a.Lhs {
-		s.noteTarget(target, pairedValue(values, len(a.Lhs), i))
-	}
-}
-
-func (s *frameScan) noteDecl(spec *ast.ValueSpec) {
-	if spec.Values == nil {
-		return
-	}
-	for i, name := range spec.Names {
-		s.noteTarget(name, pairedValue(spec.Values, len(spec.Names), i))
-	}
-}
-
-func pairedValue(values []ast.Expr, targets, i int) ast.Expr {
-	if len(values) != targets {
-		return nil
-	}
-	return values[i]
-}
-
-func (s *frameScan) noteTarget(target, value ast.Expr) {
-	id, ok := ast.Unparen(target).(*ast.Ident)
-	if !ok {
-		return
-	}
-	v := s.localVar(id)
-	if v == nil {
-		return
-	}
-	delete(s.addrs, v)
-	if s.pointers[v] == pointerOther {
-		return
-	}
-	kind, call := s.carry(value)
-	switch {
-	case kind == addrPointer:
-		s.pointers[v] = pointerFrame
-		s.addrs[v] = call
-	case s.directAddr(value):
-		s.pointers[v] = pointerFrame
-	default:
-		s.pointers[v] = pointerOther
-	}
-}
-
-func (s *frameScan) scan(n ast.Node) bool {
-	switch n := n.(type) {
-	case *ast.AssignStmt:
-		s.assign(n)
-	case *ast.ValueSpec:
-		s.declare(n)
-	case *ast.ReturnStmt:
-		for _, result := range n.Results {
-			s.leave(result)
-		}
-	case *ast.SendStmt:
-		s.leave(n.Value)
-	}
-	return true
-}
-
-func (s *frameScan) assign(a *ast.AssignStmt) {
-	if len(a.Lhs) != len(a.Rhs) {
-		return
-	}
-	for i, target := range a.Lhs {
-		s.store(target, a.Rhs[i])
-	}
-}
-
-func (s *frameScan) declare(spec *ast.ValueSpec) {
-	if len(spec.Values) != len(spec.Names) {
-		return
-	}
-	for i, name := range spec.Names {
-		s.store(name, spec.Values[i])
-	}
-}
-
-func (s *frameScan) store(target, value ast.Expr) {
-	if isBlank(target) {
-		return
-	}
-	if s.withinFrame(target) {
-		s.keep(value)
-		return
-	}
-	s.leave(value)
-}
-
-func isBlank(x ast.Expr) bool {
-	id, ok := x.(*ast.Ident)
-	return ok && id.Name == "_"
-}
-
-func (s *frameScan) withinFrame(target ast.Expr) bool {
-	v := s.frameRoot(target)
-	return v != nil && !s.results[v]
-}
-
-func (s *frameScan) leave(x ast.Expr) {
-	if kind, call := s.carry(x); kind != addrNone {
-		s.report(kind, call)
-	}
-}
-
-func (s *frameScan) keep(x ast.Expr) {
-	if kind, call := s.carry(x); kind == addrInteger {
-		s.report(kind, call)
-	}
-}
-
-func (s *frameScan) report(kind addrKind, call *ast.CallExpr) {
-	format := integerMessage
-	if kind == addrPointer {
-		format = pointerMessage
-	}
-	s.pass.ReportRangef(call, format, types.ExprString(call))
-}
-
-func (s *frameScan) carry(x ast.Expr) (addrKind, *ast.CallExpr) {
-	switch x := ast.Unparen(x).(type) {
-	case *ast.Ident:
-		return s.carryVar(x)
 	case *ast.CallExpr:
-		return s.carryConversion(x)
-	case *ast.BinaryExpr:
-		return s.carryArith(x)
-	case *ast.CompositeLit:
-		return s.carryElems(x)
+		checkUnsafeConversion(pass, n)
+	case *ast.StarExpr:
+		checkHeaderDeref(pass, n)
 	case *ast.UnaryExpr:
-		if lit, ok := ast.Unparen(x.X).(*ast.CompositeLit); x.Op == token.AND && ok {
-			return s.carryElems(lit)
-		}
+		checkHeaderAddr(pass, n)
 	}
-	return addrNone, nil
 }
 
-func (s *frameScan) carryVar(id *ast.Ident) (addrKind, *ast.CallExpr) {
-	if call := s.addrs[s.localVar(id)]; call != nil {
-		return addrPointer, call
+// checkUnsafeConversion reports an unsafe.Pointer built from a uintptr the
+// conversion does not derive from a pointer in the same expression.
+func checkUnsafeConversion(pass *analysis.Pass, call *ast.CallExpr) {
+	if !convertsType(pass.TypesInfo, call) {
+		return
 	}
-	return addrNone, nil
+	if !basicKind(pass.TypesInfo.TypeOf(call), types.UnsafePointer) {
+		return
+	}
+	arg := argOf(call)
+	if !basicKind(pass.TypesInfo.TypeOf(arg), types.Uintptr) {
+		return
+	}
+	if safeUintptr(pass, arg) {
+		return
+	}
+	pass.Reportf(call.Pos(), unsafePointerMisuse)
 }
 
-func (s *frameScan) carryConversion(c *ast.CallExpr) (addrKind, *ast.CallExpr) {
-	switch {
-	case isConversionTo(s.pass.TypesInfo, c, types.UnsafePointer):
-		if kind, _ := s.carry(c.Args[0]); kind != addrNone || s.frameAddr(c.Args[0]) {
-			return addrPointer, c
-		}
-	case isConversionTo(s.pass.TypesInfo, c, types.Uintptr):
-		if kind, _ := s.carry(c.Args[0]); kind != addrNone {
-			return addrInteger, c
-		}
+func checkHeaderDeref(pass *analysis.Pass, n *ast.StarExpr) {
+	if name := reflectTypeName(pass.TypesInfo.TypeOf(n)); isHeaderName(name) {
+		pass.Reportf(n.Pos(), headerMisuse, name)
 	}
-	return addrNone, nil
 }
 
-func (s *frameScan) carryArith(op *ast.BinaryExpr) (addrKind, *ast.CallExpr) {
-	if op.Op.Precedence() <= token.EQL.Precedence() {
-		return addrNone, nil
+func checkHeaderAddr(pass *analysis.Pass, n *ast.UnaryExpr) {
+	if n.Op != token.AND {
+		return
 	}
-	if kind, call := s.carry(op.X); kind != addrNone {
-		return kind, call
+	if name := reflectTypeName(pass.TypesInfo.TypeOf(n.X)); isHeaderName(name) {
+		pass.Reportf(n.Pos(), headerMisuse, name)
 	}
-	return s.carry(op.Y)
 }
 
-func (s *frameScan) carryElems(lit *ast.CompositeLit) (addrKind, *ast.CallExpr) {
-	found, at := addrNone, (*ast.CallExpr)(nil)
-	for _, x := range elemExprs(lit) {
-		kind, call := s.carry(x)
-		if kind == addrInteger {
-			return kind, call
-		}
-		if found == addrNone {
-			found, at = kind, call
-		}
-	}
-	return found, at
+func isHeaderName(name string) bool {
+	return name == sliceHeader || name == stringHeader
 }
 
-func elemExprs(lit *ast.CompositeLit) []ast.Expr {
-	exprs := make([]ast.Expr, 0, len(lit.Elts))
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			exprs = append(exprs, kv.Key, kv.Value)
-			continue
-		}
-		exprs = append(exprs, elt)
-	}
-	return exprs
-}
-
-func (s *frameScan) frameAddr(x ast.Expr) bool {
-	if s.directAddr(x) {
-		return true
-	}
-	id, ok := ast.Unparen(x).(*ast.Ident)
-	if !ok {
-		return false
-	}
-	v := s.localVar(id)
-	return v != nil && s.pointers[v] == pointerFrame
-}
-
-func (s *frameScan) directAddr(x ast.Expr) bool {
-	switch x := ast.Unparen(x).(type) {
-	case *ast.UnaryExpr:
-		return x.Op == token.AND && s.frameObject(x.X)
-	case *ast.CallExpr:
-		return s.callsNew(x)
-	}
-	return false
-}
-
-func (s *frameScan) frameObject(x ast.Expr) bool {
-	if _, ok := ast.Unparen(x).(*ast.CompositeLit); ok {
-		return true
-	}
-	return s.frameRoot(x) != nil
-}
-
-func (s *frameScan) callsNew(call *ast.CallExpr) bool {
-	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
-	if !ok || id.Name != "new" {
-		return false
-	}
-	_, ok = s.pass.TypesInfo.Uses[id].(*types.Builtin)
-	return ok
-}
-
-func (s *frameScan) frameRoot(x ast.Expr) *types.Var {
-	switch x := ast.Unparen(x).(type) {
-	case *ast.Ident:
-		return s.localVar(x)
-	case *ast.SelectorExpr:
-		if sel := s.pass.TypesInfo.Selections[x]; sel != nil && sel.Kind() == types.FieldVal && !sel.Indirect() {
-			return s.frameRoot(x.X)
-		}
-	case *ast.IndexExpr:
-		if _, ok := s.pass.TypesInfo.TypeOf(x.X).Underlying().(*types.Array); ok {
-			return s.frameRoot(x.X)
-		}
+func argOf(call *ast.CallExpr) ast.Expr {
+	if len(call.Args) == 1 {
+		return call.Args[0]
 	}
 	return nil
 }
 
-func (s *frameScan) localVar(id *ast.Ident) *types.Var {
-	v, ok := cmp.Or(s.pass.TypesInfo.Defs[id], s.pass.TypesInfo.Uses[id]).(*types.Var)
-	if !ok || v.Kind() == types.PackageVar || v.Kind() == types.FieldVar {
-		return nil
-	}
-	return v
+func convertsType(info *types.Info, call *ast.CallExpr) bool {
+	return len(call.Args) == 1 && info.Types[call.Fun].IsType()
 }
 
-func isConversionTo(info *types.Info, call *ast.CallExpr, kind types.BasicKind) bool {
-	if len(call.Args) != 1 || !info.Types[call.Fun].IsType() {
+func basicKind(t types.Type, kind types.BasicKind) bool {
+	if t == nil {
 		return false
 	}
-	basic, ok := info.TypeOf(call).Underlying().(*types.Basic)
+	basic, ok := t.Underlying().(*types.Basic)
 	return ok && basic.Kind() == kind
+}
+
+func safeUintptr(pass *analysis.Pass, expr ast.Expr) bool {
+	switch x := ast.Unparen(expr).(type) {
+	case *ast.SelectorExpr:
+		return safeHeaderData(pass, x)
+	case *ast.CallExpr:
+		if safeReflectCall(pass, x) {
+			return true
+		}
+	}
+	return pointerArithmetic(pass.TypesInfo, expr) == arithmeticPointer
+}
+
+// safeHeaderData reports whether sel reads the Data field of a pointer to a
+// reflect header value, which keeps the original slice or string alive.
+func safeHeaderData(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
+	if sel.Sel.Name != "Data" {
+		return false
+	}
+	t := pass.TypesInfo.TypeOf(sel.X)
+	if t == nil {
+		return false
+	}
+	ptr, ok := t.Underlying().(*types.Pointer)
+	if !ok {
+		return false
+	}
+	return isHeaderName(reflectTypeName(ptr.Elem()))
+}
+
+// safeReflectCall reports whether call is reflect.Value.Pointer or
+// reflect.Value.UnsafeAddr, which derive the uintptr from a live Value.
+func safeReflectCall(pass *analysis.Pass, call *ast.CallExpr) bool {
+	fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != reflectPkg {
+		return false
+	}
+	if fn.Name() != "Pointer" && fn.Name() != "UnsafeAddr" {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok {
+		return false
+	}
+	recv := sig.Recv()
+	return recv != nil && reflectTypeName(recv.Type()) == valueType
+}
+
+type arithmeticKind uint8
+
+const (
+	arithmeticScalar arithmeticKind = iota
+	arithmeticPointer
+	arithmeticInvalid
+)
+
+// arithTable classifies binary pointer arithmetic: each entry maps an
+// operator with left and right operand kinds to the result kind. A shape
+// missing from the table is invalid, matching the loGos rule.
+type arithKey struct {
+	op          token.Token
+	left, right arithmeticKind
+}
+
+var arithTable = map[arithKey]arithmeticKind{
+	{token.ADD, arithmeticScalar, arithmeticPointer}:     arithmeticPointer,
+	{token.ADD, arithmeticPointer, arithmeticScalar}:     arithmeticPointer,
+	{token.SUB, arithmeticPointer, arithmeticScalar}:     arithmeticPointer,
+	{token.AND_NOT, arithmeticPointer, arithmeticScalar}: arithmeticPointer,
+}
+
+func pointerArithmetic(info *types.Info, expr ast.Expr) arithmeticKind {
+	switch x := ast.Unparen(expr).(type) {
+	case *ast.CallExpr:
+		return conversionArithmetic(info, x)
+	case *ast.UnaryExpr:
+		return unaryArithmetic(info, x)
+	case *ast.BinaryExpr:
+		return binaryArithmetic(info, x)
+	}
+	return arithmeticScalar
+}
+
+func unaryArithmetic(info *types.Info, expr *ast.UnaryExpr) arithmeticKind {
+	if pointerArithmetic(info, expr.X) != arithmeticScalar {
+		return arithmeticInvalid
+	}
+	return arithmeticScalar
+}
+
+func conversionArithmetic(info *types.Info, call *ast.CallExpr) arithmeticKind {
+	if !convertsType(info, call) {
+		return arithmeticScalar
+	}
+	if basicKind(info.TypeOf(call), types.Uintptr) && basicKind(info.TypeOf(call.Args[0]), types.UnsafePointer) {
+		return arithmeticPointer
+	}
+	if pointerArithmetic(info, call.Args[0]) != arithmeticScalar {
+		return arithmeticInvalid
+	}
+	return arithmeticScalar
+}
+
+func binaryArithmetic(info *types.Info, op *ast.BinaryExpr) arithmeticKind {
+	left := pointerArithmetic(info, op.X)
+	right := pointerArithmetic(info, op.Y)
+	if left == arithmeticScalar && right == arithmeticScalar {
+		return arithmeticScalar
+	}
+	if kind, ok := arithTable[arithKey{op: op.Op, left: left, right: right}]; ok {
+		return kind
+	}
+	return arithmeticInvalid
+}
+
+func reflectTypeName(t types.Type) string {
+	if t == nil {
+		return ""
+	}
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok || named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != reflectPkg {
+		return ""
+	}
+	return named.Obj().Name()
 }

@@ -294,7 +294,7 @@ The catalog has 104 rules. `basic` runs 51 of them, `standard` runs 92, and `str
 | `shift` | go/analysis | check for shifts that equal or exceed the width of the integer |
 | `sigchanyzer` | go/analysis | check for unbuffered channel of os.Signal |
 | `slog` | go/analysis | check for invalid structured logging calls |
-| `stackaddr` | logos | Reports a stack address kept as uintptr, or an unsafe.Pointer to stack storage that leaves its function. |
+| `stackaddr` | logos | Reports unsafe.Pointer built from a non-pointer-derived uintptr, and copied or addressed reflect header values. |
 | `staticcheck` | staticcheck | Staticcheck SA bug checks; standard adds SA1019 (deprecated API use). |
 | `stdmethods` | go/analysis | check signature of methods of well-known interfaces |
 | `stdversion` | go/analysis | report uses of too-new standard library symbols |
