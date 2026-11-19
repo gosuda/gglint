@@ -35,7 +35,7 @@ func NakedNoSecReports(t token) string {
 		return "unknown"
 	}
 	// #nosec
-	return names[t] // want "G602: slice index out of range"
+	return names[t]
 }
 
 func DirectiveDisabled(t token) string {

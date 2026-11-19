@@ -49,9 +49,9 @@ func suppressedByDirective(pass *analysis.Pass, found constLeftFinding) bool {
 }
 
 // directiveSuppressesGroup reports whether a comment group carries a directive
-// that suppresses G602: #nosec G602, //gosec:disable G602, or the legacy
-// "block" keyword. A naked directive or one naming only other rules does not
-// suppress.
+// that suppresses G602: #nosec G602, //gosec:disable G602, the legacy "block"
+// keyword, or a naked directive, which gosec treats as all rules. A directive
+// naming only other rules does not suppress.
 func directiveSuppressesGroup(group *ast.CommentGroup) bool {
 	ids := directiveRuleIDs(group)
 	return ids[boundRuleID] || ids[allRules]
@@ -94,11 +94,11 @@ func attachedNodeEnd(fset *token.FileSet, comments ast.CommentMap, group *ast.Co
 // after "--" is ignored.
 func directiveRuleIDs(group *ast.CommentGroup) map[string]bool {
 	ids := make(map[string]bool)
-	directive := directiveText(group)
-	if directive == "" {
+	directive, found := directiveText(group)
+	if !found {
 		return ids
 	}
-	if directive == legacyBlock {
+	if directive == "" || directive == legacyBlock {
 		ids[allRules] = true
 		return ids
 	}
@@ -139,23 +139,25 @@ func disableArgs(group *ast.CommentGroup) (string, bool) {
 	return "", false
 }
 
-// directiveText returns the trimmed directive argument of a comment group, or
-// "" when the group carries no #nosec or //gosec:disable directive.
-func directiveText(group *ast.CommentGroup) string {
+// directiveText returns the trimmed directive argument of a comment group and
+// whether the group carries a #nosec or //gosec:disable directive at all. An
+// empty argument is a naked directive, which gosec treats as suppressing
+// every rule.
+func directiveText(group *ast.CommentGroup) (string, bool) {
 	if group == nil {
-		return ""
+		return "", false
 	}
 	args, found := nosecArgs(group)
 	if !found {
 		args, found = disableArgs(group)
 	}
 	if !found {
-		return ""
+		return "", false
 	}
 	if idx := strings.Index(args, "--"); idx > -1 {
 		args = args[:idx]
 	}
-	return strings.TrimSpace(args)
+	return strings.TrimSpace(args), true
 }
 
 // validRuleID reports whether s has the G followed by three digits form.
