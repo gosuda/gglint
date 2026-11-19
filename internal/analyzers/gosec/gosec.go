@@ -47,6 +47,7 @@ func New(excluded []string) *analysis.Analyzer {
 				return nil, fmt.Errorf("gosec: %s: %s", names[0], errs[names[0]][0].Err)
 			}
 			guarded := guardedArrayIndices(pass.Fset, result, issues)
+			issues = append(issues, constLeftViolations(pass.Fset, result, pass.TypesSizes, issues)...)
 			for _, iss := range issues {
 				if iss.RuleID == "G602" && iss.What == "slice index out of range" &&
 					guarded[issueLocation{iss.File, iss.Line, iss.Col}] {

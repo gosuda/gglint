@@ -32,6 +32,14 @@ func ConstantOnLeft(t token) string {
 	return names[t]
 }
 
+func ConstOnLeftInsufficient(t token) string {
+	names := [...]string{"light", "dark"}
+	if tokenCount < t {
+		return "unknown"
+	}
+	return names[t] // want "G602: slice index out of range"
+}
+
 func TrueBranch(t token) string {
 	names := [...]string{"light", "dark"}
 	if t < tokenCount {
