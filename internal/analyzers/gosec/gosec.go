@@ -48,7 +48,9 @@ func New(excluded []string) *analysis.Analyzer {
 			}
 			guarded := guardedArrayIndices(pass.Fset, result, issues)
 			for _, found := range constLeftViolations(pass.Fset, result, pass.TypesSizes, issues) {
-				reportSupplemental(pass, found)
+				if !suppressedByDirective(pass, found) {
+					reportSupplemental(pass, found)
+				}
 			}
 			for _, iss := range issues {
 				if iss.RuleID == "G602" && iss.What == "slice index out of range" &&
