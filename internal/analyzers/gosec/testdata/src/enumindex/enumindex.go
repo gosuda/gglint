@@ -40,6 +40,25 @@ func ConstOnLeftInsufficient(t token) string {
 	return names[t] // want "G602: slice index out of range"
 }
 
+func EqualityGuarded(t token) string {
+	names := [...]string{"light", "dark"}
+	if tokenCount < t {
+		return "unknown"
+	}
+	if t == tokenCount {
+		return "unknown"
+	}
+	return names[t]
+}
+
+func NotEqualTrueBranch(t token) string {
+	names := [...]string{"light", "dark"}
+	if t != tokenDark {
+		return names[t] // want "G602: slice index out of range"
+	}
+	return "unknown"
+}
+
 func TrueBranch(t token) string {
 	names := [...]string{"light", "dark"}
 	if t < tokenCount {
