@@ -125,6 +125,19 @@ func TestMainReportsMissingConfigAsInternalError(t *testing.T) {
 	}
 }
 
+func TestBuildNamesTheCorruptUnitFile(t *testing.T) {
+	t.Parallel()
+	configPath := writeFile(t, "config.json", config.Config{Mode: config.Standard}.Encode())
+	unit := writeFile(t, "unit.cfg", []byte("not json"))
+	analyzers, err := build(configPath, unit)
+	if err == nil {
+		t.Fatalf("build accepted a unit file that is not JSON and returned %d analyzers", len(analyzers))
+	}
+	if !strings.Contains(err.Error(), unit) {
+		t.Fatalf("error = %q, want it to name %s", err, unit)
+	}
+}
+
 func panicking() *analysis.Analyzer {
 	return &analysis.Analyzer{
 		Name:      "boom",
