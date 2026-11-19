@@ -19,7 +19,7 @@ Real output from `main.go` containing `fmt.Printf("%d\n", "not a number")`. The 
 
 gglint needs Go 1.27 or later, as `go.mod` declares. It supports every platform `go vet` supports; CI runs on Linux and Windows.
 
-`go install github.com/gosuda/gglint/cmd/gglint@latest` is the only supported installation method.
+`go install github.com/gosuda/gglint/cmd/gglint@latest` is the only supported installation method. The binary lands in `$(go env GOPATH)/bin` (or `$GOBIN` when set), so make sure that directory is on your `PATH`.
 
 ## Quick start
 
