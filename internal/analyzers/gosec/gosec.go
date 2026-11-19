@@ -47,9 +47,11 @@ func New(excluded []string) *analysis.Analyzer {
 				return nil, fmt.Errorf("gosec: %s: %s", names[0], errs[names[0]][0].Err)
 			}
 			guarded := guardedArrayIndices(pass.Fset, result, issues)
-			for _, found := range constLeftViolations(pass.Fset, result, pass.TypesSizes, issues) {
-				if !suppressedByDirective(pass, found) {
-					reportSupplemental(pass, found)
+			if !slices.Contains(excluded, boundRuleID) {
+				for _, found := range constLeftViolations(pass.Fset, result, pass.TypesSizes, issues) {
+					if !suppressedByDirective(pass, found) {
+						reportSupplemental(pass, found)
+					}
 				}
 			}
 			for _, iss := range issues {
