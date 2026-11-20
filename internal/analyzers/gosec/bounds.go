@@ -360,26 +360,26 @@ func boundarySuccessor(block *ssa.BasicBlock, param ssa.Value, length int64, mat
 // a constant to its value, and anything else to unknown, which stops the
 // proof (LoGOs compoundBoundary and equalityBoundary report; disjointGuard
 // stays silent). Traversed comparisons mark the walk as guarded.
-func boundaryOutcome(cond ssa.Value, param ssa.Value, length int64, matched *bool) (take bool, ok bool) {
-	if c, ok := cond.(*ssa.Const); ok {
+func boundaryOutcome(cond, param ssa.Value, length int64, matched *bool) (take, ok bool) {
+	if c, isConst := cond.(*ssa.Const); isConst {
 		return constant.BoolVal(c.Value), true
 	}
-	comparison, ok := cond.(*ssa.BinOp)
-	if !ok || !boundsComparisonOp(comparison.Op) {
+	comparison, isBinOp := cond.(*ssa.BinOp)
+	if !isBinOp || !boundsComparisonOp(comparison.Op) {
 		return false, false
 	}
 	boundary := constant.MakeInt64(length)
 	if comparison.X == param {
-		limit, ok := comparison.Y.(*ssa.Const)
-		if !ok {
+		limit, isConst := comparison.Y.(*ssa.Const)
+		if !isConst {
 			return false, false
 		}
 		*matched = true
 		return constant.Compare(boundary, comparison.Op, limit.Value), true
 	}
 	if comparison.Y == param {
-		limit, ok := comparison.X.(*ssa.Const)
-		if !ok {
+		limit, isConst := comparison.X.(*ssa.Const)
+		if !isConst {
 			return false, false
 		}
 		*matched = true
