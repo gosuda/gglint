@@ -367,15 +367,9 @@ func provableInstruction(instr ssa.Instruction) bool {
 	case *ssa.BinOp:
 		return boundsComparisonOp(instr.Op)
 	case *ssa.UnOp:
-		if instr.Op == token.NOT {
-			return true
-		}
-		_, local := instr.X.(*ssa.Alloc)
-		return instr.Op == token.MUL && local
+		return provableUnOp(instr)
 	case *ssa.IndexAddr:
-		alloc, isAlloc := instr.X.(*ssa.Alloc)
-		_, isConst := instr.Index.(*ssa.Const)
-		return isAlloc && isConst && alloc.Comment == "complit"
+		return literalElement(instr)
 	case *ssa.Store:
 		return provableStoreAddr(instr.Addr)
 	case *ssa.Alloc:
@@ -384,6 +378,28 @@ func provableInstruction(instr ssa.Instruction) bool {
 		return true
 	}
 	return false
+}
+
+// provableUnOp reports whether a unary operation is provable: a boolean
+// negation the LoGOs operand rule evaluates, or a load of a local variable,
+// which reads as a plain name at source level. A dereference of any other
+// value stops the proof.
+func provableUnOp(op *ssa.UnOp) bool {
+	if op.Op == token.NOT {
+		return true
+	}
+	_, local := op.X.(*ssa.Alloc)
+	return op.Op == token.MUL && local
+}
+
+// literalElement reports whether addr indexes a constant position of the
+// array literal under construction, the SSA shape of a provable composite
+// literal element. Any other index expression — another array access — is
+// not the target and stops the proof.
+func literalElement(addr *ssa.IndexAddr) bool {
+	alloc, isAlloc := addr.X.(*ssa.Alloc)
+	_, isConst := addr.Index.(*ssa.Const)
+	return isAlloc && isConst && alloc.Comment == "complit"
 }
 
 // provableStoreAddr reports whether a store's destination is a statement the
@@ -395,9 +411,7 @@ func provableStoreAddr(addr ssa.Value) bool {
 	case *ssa.Alloc, *ssa.Global:
 		return true
 	case *ssa.IndexAddr:
-		alloc, isAlloc := addr.X.(*ssa.Alloc)
-		_, isConst := addr.Index.(*ssa.Const)
-		return isAlloc && isConst && alloc.Comment == "complit"
+		return literalElement(addr)
 	}
 	return false
 }
