@@ -68,7 +68,7 @@ func reportSupplementalBounds(pass *analysis.Pass, result *buildssa.SSA, exclude
 	if slices.Contains(excluded, boundRuleID) {
 		return
 	}
-	for _, found := range constLeftViolations(pass.Fset, result, pass.TypesSizes, issues) {
+	for _, found := range constLeftViolations(pass, result, issues) {
 		if !suppressedByDirective(pass, found) {
 			reportSupplemental(pass, found)
 		}

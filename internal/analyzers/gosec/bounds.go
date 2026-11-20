@@ -1,13 +1,16 @@
 package gosec
 
 import (
+	"go/ast"
 	"go/constant"
 	"go/token"
 	"go/types"
 	"strconv"
 
 	"github.com/securego/gosec/v2/issue"
+	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/buildssa"
+	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/ssa"
 )
 
@@ -147,7 +150,7 @@ func upperBoundComparison(op token.Token, onLeft, truth bool) bool {
 // access inside or after a loop (the LoGOs proof stops at loops), an index
 // that is not a bare function parameter, a use captured by a closure, and
 // an array that is not a local fixed array.
-func constLeftViolations(fset *token.FileSet, result *buildssa.SSA, sizes types.Sizes, issues []*issue.Issue) []constLeftFinding {
+func constLeftViolations(pass *analysis.Pass, result *buildssa.SSA, issues []*issue.Issue) []constLeftFinding {
 	candidates := make(map[issueLocation]bool)
 	for _, iss := range issues {
 		if iss.RuleID == boundRuleID && iss.What == boundWhat {
@@ -156,7 +159,7 @@ func constLeftViolations(fset *token.FileSet, result *buildssa.SSA, sizes types.
 	}
 	var added []constLeftFinding
 	for _, fn := range result.SrcFuncs {
-		added = append(added, constLeftFuncViolations(fset, sizes, fn, candidates)...)
+		added = append(added, constLeftFuncViolations(pass, fn, candidates)...)
 	}
 	return added
 }
@@ -171,7 +174,7 @@ type constLeftFinding struct {
 }
 
 // constLeftFuncViolations reports the const-on-left accesses in one function.
-func constLeftFuncViolations(fset *token.FileSet, sizes types.Sizes, fn *ssa.Function, candidates map[issueLocation]bool) []constLeftFinding {
+func constLeftFuncViolations(pass *analysis.Pass, fn *ssa.Function, candidates map[issueLocation]bool) []constLeftFinding {
 	headers := loopHeaders(fn)
 	var added []constLeftFinding
 	for _, block := range fn.Blocks {
@@ -180,7 +183,7 @@ func constLeftFuncViolations(fset *token.FileSet, sizes types.Sizes, fn *ssa.Fun
 			if !ok {
 				continue
 			}
-			if found := constLeftIndexViolation(fset, sizes, fn, headers, candidates, index); found != nil {
+			if found := constLeftIndexViolation(pass, fn, headers, candidates, index); found != nil {
 				added = append(added, *found)
 			}
 		}
@@ -191,16 +194,16 @@ func constLeftFuncViolations(fset *token.FileSet, sizes types.Sizes, fn *ssa.Fun
 // constLeftIndexViolation decides one indexed access: recognize the local
 // fixed-array target, match it against upstream candidates and proven-safe
 // guards, then derive whether the const-on-left guard admits the boundary.
-func constLeftIndexViolation(fset *token.FileSet, sizes types.Sizes, fn *ssa.Function, headers map[*ssa.BasicBlock]bool, candidates map[issueLocation]bool, index *ssa.IndexAddr) *constLeftFinding {
-	length, param, ok := constLeftTarget(sizes, index)
+func constLeftIndexViolation(pass *analysis.Pass, fn *ssa.Function, headers map[*ssa.BasicBlock]bool, candidates map[issueLocation]bool, index *ssa.IndexAddr) *constLeftFinding {
+	length, param, ok := constLeftTarget(pass.TypesSizes, index)
 	if !ok {
 		return nil
 	}
-	file := fset.File(index.Pos())
+	file := pass.Fset.File(index.Pos())
 	if file == nil {
 		return nil
 	}
-	loc := issueLocation{file.Name(), strconv.Itoa(file.Line(index.Pos())), strconv.Itoa(fset.Position(index.Pos()).Column)}
+	loc := issueLocation{file.Name(), strconv.Itoa(file.Line(index.Pos())), strconv.Itoa(pass.Fset.Position(index.Pos()).Column)}
 	if candidates[loc] {
 		return nil // upstream already reports it
 	}
@@ -213,7 +216,7 @@ func constLeftIndexViolation(fset *token.FileSet, sizes types.Sizes, fn *ssa.Fun
 	if captured(param, fn) {
 		return nil // a closure use removes it from the LoGOs rule
 	}
-	if !constLeftAdmitsBoundary(fn, index, param, length) {
+	if !constLeftAdmitsBoundary(fn, pass.Files, index, param, length) {
 		return nil
 	}
 	return &constLeftFinding{
@@ -313,7 +316,7 @@ func captured(param *ssa.Parameter, fn *ssa.Function) bool {
 // guard must be traversed: with none, the access is not the const-comparison
 // shape this pass adds, and the walk reports reached only when the access
 // block is on the boundary path.
-func constLeftAdmitsBoundary(fn *ssa.Function, index *ssa.IndexAddr, param ssa.Value, length int64) bool {
+func constLeftAdmitsBoundary(fn *ssa.Function, files []*ast.File, index *ssa.IndexAddr, param ssa.Value, length int64) bool {
 	matched := false
 	visited := make(map[*ssa.BasicBlock]bool)
 	block := fn.Blocks[0]
@@ -322,7 +325,7 @@ func constLeftAdmitsBoundary(fn *ssa.Function, index *ssa.IndexAddr, param ssa.V
 			return false
 		}
 		visited[block] = true
-		if !provablePath(block, index) {
+		if !provablePath(block, index, files) {
 			return false
 		}
 		if block == index.Block() {
@@ -337,22 +340,54 @@ func constLeftAdmitsBoundary(fn *ssa.Function, index *ssa.IndexAddr, param ssa.V
 }
 
 // provablePath reports whether the witnessed path through block holds only
-// instructions the LoGOs proof can evaluate, stopping at the target access
-// since instructions after it cannot execute before it. The terminator is
-// excluded: the walk resolves its edge separately.
-func provablePath(block *ssa.BasicBlock, index *ssa.IndexAddr) bool {
+// instructions the LoGOs proof can evaluate. In the access's block it checks
+// the whole source statement around the access — a later operand in the same
+// return or assignment still executes before it — and stops scanning at the
+// statement's end since later statements cannot run before the access. The
+// terminator is excluded: the walk resolves its edge separately.
+func provablePath(block *ssa.BasicBlock, index *ssa.IndexAddr, files []*ast.File) bool {
+	targetEnd := token.NoPos
 	for i, instr := range block.Instrs {
-		if instr == index {
-			return true
-		}
 		if i == len(block.Instrs)-1 {
 			continue
 		}
-		if !provableInstruction(instr) {
+		if instr == index {
+			targetEnd = targetStmtEnd(files, instr.Pos())
+			continue
+		}
+		if targetEnd != token.NoPos {
+			pos := instr.Pos()
+			if pos == token.NoPos || pos > targetEnd {
+				return true
+			}
+		}
+		if !provableInstruction(instr, index, files) {
 			return false
 		}
 	}
 	return true
+}
+
+// targetStmtEnd returns the end of the statement region the proof evaluates
+// around the access: the whole statement for a return, assignment or
+// declaration, and the init-plus-condition region for an if statement, since
+// the proof evaluates only the condition before reaching the access.
+func targetStmtEnd(files []*ast.File, pos token.Pos) token.Pos {
+	for _, file := range files {
+		path, exact := astutil.PathEnclosingInterval(file, pos, pos)
+		if !exact {
+			continue
+		}
+		for _, node := range path {
+			switch stmt := node.(type) {
+			case *ast.IfStmt:
+				return stmt.Cond.End()
+			case ast.Stmt:
+				return stmt.End()
+			}
+		}
+	}
+	return pos
 }
 
 // provableInstruction reports whether instr is an evaluation artifact of a
@@ -362,18 +397,20 @@ func provablePath(block *ssa.BasicBlock, index *ssa.IndexAddr) bool {
 // operation, and every other instruction kind maps to a statement or
 // expression the proof cannot evaluate, so it stops — and this walk stays
 // silent — wherever one appears on the witnessed path.
-func provableInstruction(instr ssa.Instruction) bool {
+func provableInstruction(instr ssa.Instruction, index *ssa.IndexAddr, files []*ast.File) bool {
 	switch instr := instr.(type) {
 	case *ssa.BinOp:
 		return boundsComparisonOp(instr.Op)
 	case *ssa.UnOp:
-		return provableUnOp(instr)
+		return provableUnOp(instr, index)
 	case *ssa.IndexAddr:
 		return literalElement(instr)
 	case *ssa.Store:
 		return provableStoreAddr(instr.Addr)
 	case *ssa.Alloc:
-		return !instr.Heap
+		return provableAlloc(instr)
+	case *ssa.ChangeType:
+		return provableChangeType(instr, files)
 	case *ssa.Phi, *ssa.Extract, *ssa.DebugRef, *ssa.RunDefers:
 		return true
 	}
@@ -381,15 +418,80 @@ func provableInstruction(instr ssa.Instruction) bool {
 }
 
 // provableUnOp reports whether a unary operation is provable: a boolean
-// negation the LoGOs operand rule evaluates, or a load of a local variable,
-// which reads as a plain name at source level. A dereference of any other
-// value stops the proof.
-func provableUnOp(op *ssa.UnOp) bool {
+// negation the LoGOs operand rule evaluates, or a load reading a variable by
+// name — a local, global, free variable, or the target access itself — which
+// reads as a plain name at source level. Dereferencing any other value is an
+// explicit dereference and stops the proof.
+func provableUnOp(op *ssa.UnOp, index *ssa.IndexAddr) bool {
 	if op.Op == token.NOT {
 		return true
 	}
-	_, local := op.X.(*ssa.Alloc)
-	return op.Op == token.MUL && local
+	if op.Op != token.MUL {
+		return false
+	}
+	if op.X == index {
+		return true
+	}
+	switch op.X.(type) {
+	case *ssa.Alloc, *ssa.Global, *ssa.FreeVar:
+		return true
+	}
+	return false
+}
+
+// provableAlloc reports whether an allocation is provable. Heap construction
+// helpers — new, make, slice literals, varargs — lower to call expressions
+// the proof cannot evaluate and stop it; a lifted local array keeps its
+// declaration provable regardless of its Heap flag, which describes the
+// whole function, not the prefix before the access.
+func provableAlloc(alloc *ssa.Alloc) bool {
+	switch alloc.Comment {
+	case "new", "makeslice", "slicelit", "varargs":
+		return false
+	}
+	return true
+}
+
+// provableChangeType reports whether an implicit assignment type change is
+// provable: the result keeps a scalar or array-of-scalar declaration type
+// the LoGOs declaration rule accepts, and the instruction does not lower an
+// explicit source conversion, which the proof sees as a call and stops at.
+func provableChangeType(instr *ssa.ChangeType, files []*ast.File) bool {
+	return boundPlainType(instr.Type()) && !insideCallExpr(files, instr.Pos())
+}
+
+// boundPlainType mirrors the LoGOs declaration rule's accepted types: scalar
+// types and fixed arrays of scalar elements.
+func boundPlainType(typ types.Type) bool {
+	if scalarBoundType(typ) {
+		return true
+	}
+	array, ok := typ.Underlying().(*types.Array)
+	return ok && scalarBoundType(array.Elem())
+}
+
+// scalarBoundType mirrors the LoGOs scalar check: a basic const-capable type.
+func scalarBoundType(typ types.Type) bool {
+	basic, ok := typ.Underlying().(*types.Basic)
+	return ok && basic.Info()&types.IsConstType != 0
+}
+
+// insideCallExpr reports whether pos lies inside a call expression in one of
+// the package's syntax files.
+func insideCallExpr(files []*ast.File, pos token.Pos) bool {
+	for _, file := range files {
+		path, exact := astutil.PathEnclosingInterval(file, pos, pos)
+		if !exact {
+			continue
+		}
+		for _, node := range path {
+			if _, ok := node.(*ast.CallExpr); ok {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 // literalElement reports whether addr indexes a constant position of the

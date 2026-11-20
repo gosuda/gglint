@@ -67,6 +67,56 @@ func CompoundBoundary(t token) string {
 	return "unknown"
 }
 
+var lightLabel = "light"
+
+func GlobalElement(t token) string {
+	names := [...]string{lightLabel, "dark"}
+	if tokenCount < t {
+		return "unknown"
+	}
+	return names[t] // want "G602: slice index out of range"
+}
+
+type namedNames [2]string
+
+func NamedArray(t token) string {
+	var names namedNames = [...]string{"light", "dark"}
+	if tokenCount < t {
+		return "unknown"
+	}
+	return names[t] // want "G602: slice index out of range"
+}
+
+func SlicedAfterAccess(t token) (string, []string) {
+	names := [...]string{"light", "dark"}
+	if tokenCount < t {
+		return "unknown", nil
+	}
+	name := names[t] // want "G602: slice index out of range"
+	return name, names[:]
+}
+
+func tokenLabel(t token) string { return "" }
+
+func ReturnCallOperand(t token) (string, string) {
+	names := [...]string{"light", "dark"}
+	if tokenCount < t {
+		return "unknown", ""
+	}
+	return names[t], tokenLabel(t)
+}
+
+func ExplicitDeref(t token, p *token) string {
+	names := [...]string{"light", "dark"}
+	if *p == tokenLight {
+		return "unknown"
+	}
+	if tokenCount < t {
+		return "unknown"
+	}
+	return names[t]
+}
+
 func validate(t token) {}
 
 func ValidatedBoundary(t token) string {
