@@ -55,7 +55,7 @@ func vetxOnly(unitConfig string) (bool, error) {
 	}
 	var unit struct{ VetxOnly bool }
 	if err := json.Unmarshal(data, &unit); err != nil {
-		return false, fmt.Errorf("decode unit config: %w", err)
+		return false, fmt.Errorf("decode unit config %s: %w", unitConfig, err)
 	}
 	return unit.VetxOnly, nil
 }
