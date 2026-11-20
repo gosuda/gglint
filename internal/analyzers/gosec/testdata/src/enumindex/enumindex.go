@@ -59,6 +59,33 @@ func NotEqualTrueBranch(t token) string {
 	return "unknown"
 }
 
+func CompoundBoundary(t token) string {
+	names := [...]string{"light", "dark"}
+	if t == tokenLight || t == tokenCount {
+		return names[t] // want "G602: slice index out of range"
+	}
+	return "unknown"
+}
+
+func UnreachableBoundary(t token) string {
+	names := [...]string{"light", "dark"}
+	if t < tokenCount && t == tokenCount {
+		return names[t]
+	}
+	return "unknown"
+}
+
+func UnknownMidGuard(t token, valid bool) string {
+	names := [...]string{"light", "dark"}
+	if valid {
+		return "unknown"
+	}
+	if tokenCount < t {
+		return "unknown"
+	}
+	return names[t]
+}
+
 func CapturedIndex(t token) string {
 	names := [...]string{"light", "dark"}
 	defer func() { _ = t }()

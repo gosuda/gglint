@@ -19,28 +19,28 @@ const (
 )
 
 // suppressedByDirective reports whether a supplemental G602 finding is
-// suppressed by a #nosec G602 or //gosec:disable G602 directive. It applies the
-// same source-suppression rules gosec applies to its own findings: the
-// directive must name the rule (a naked directive or one naming another rule
-// does not suppress), and the directive's line range must cover the finding.
-// Ranges are computed on physical file lines, which is what gosec's own
-// ignore ranges use.
+// suppressed by a #nosec or //gosec:disable directive. It mirrors the
+// suppression rules gosec applies to its own findings: comments attach to
+// nodes through the file's comment map, the first recognized directive on a
+// node is decisive, a directive without rule IDs suppresses every rule, and
+// the node-plus-comment span covers the finding's line. Filenames are the
+// token files' physical names and lines are //line-adjusted, the same
+// pairing upstream's ignore ranges and issue locations use.
 func suppressedByDirective(pass *analysis.Pass, found constLeftFinding) bool {
-	pos := pass.Fset.Position(found.pos)
-	if pos.Filename == "" {
+	tf := pass.Fset.File(found.pos)
+	if tf == nil {
 		return false
 	}
+	filename := tf.Name()
+	line := tf.Position(found.pos).Line
 	for _, file := range pass.Files {
-		tf := pass.Fset.File(file.FileStart)
-		if tf == nil || tf.Name() != pos.Filename {
+		ff := pass.Fset.File(file.FileStart)
+		if ff == nil || ff.Name() != filename {
 			continue
 		}
 		comments := ast.NewCommentMap(pass.Fset, file, file.Comments)
-		for _, group := range file.Comments {
-			if !directiveSuppressesGroup(group) {
-				continue
-			}
-			if groupCoversLine(pass.Fset, comments, group, pos.Line) {
+		for node, groups := range comments {
+			if nodeSuppressesG602(pass.Fset, node, groups, line) {
 				return true
 			}
 		}
@@ -48,84 +48,100 @@ func suppressedByDirective(pass *analysis.Pass, found constLeftFinding) bool {
 	return false
 }
 
-// directiveSuppressesGroup reports whether a comment group carries a directive
-// that suppresses G602: #nosec G602, //gosec:disable G602, the legacy "block"
-// keyword, or a naked directive, which gosec treats as all rules. A directive
-// naming only other rules does not suppress.
-func directiveSuppressesGroup(group *ast.CommentGroup) bool {
-	ids := directiveRuleIDs(group)
-	return ids[boundRuleID] || ids[allRules]
+// nodeSuppressesG602 mirrors gosec's per-node ignore: only the first comment
+// group carrying a recognized directive decides. When that directive names
+// G602 or suppresses every rule, the finding is suppressed if its line falls
+// inside the span covering both the node and the comment group; a directive
+// naming only other rules leaves the finding reported, as upstream leaves it.
+func nodeSuppressesG602(fset *token.FileSet, node ast.Node, groups []*ast.CommentGroup, line int) bool {
+	for _, group := range groups {
+		ids, found := directiveIDs(group)
+		if !found {
+			continue
+		}
+		if !ids[boundRuleID] && !ids[allRules] {
+			return false
+		}
+		return directiveSpanCoversLine(fset, node, group, line)
+	}
+	return false
 }
 
-// groupCoversLine reports whether line falls inside the directive's range: the
-// comment group's lines extended through the end of the node the group is
-// attached to, mirroring gosec's node-plus-comment span.
-func groupCoversLine(fset *token.FileSet, comments ast.CommentMap, group *ast.CommentGroup, line int) bool {
-	tf := fset.File(group.Pos())
-	if tf == nil {
+// directiveSpanCoversLine reports whether line falls inside the directive's
+// range: min(node.Pos, group.Pos) through max(node.End, group.End) in
+// //line-adjusted lines, the span gosec stores for each ignored node. The
+// adjusted lines are compared unordered because a //line directive inside a
+// remapped region can invert them; upstream's range containment matches a
+// finding either way around.
+func directiveSpanCoversLine(fset *token.FileSet, node ast.Node, group *ast.CommentGroup, line int) bool {
+	start, end := node.Pos(), node.End()
+	if group.Pos() < start {
+		start = group.Pos()
+	}
+	if group.End() > end {
+		end = group.End()
+	}
+	sf, ef := fset.File(start), fset.File(end)
+	if sf == nil || ef == nil {
 		return false
 	}
-	start, end := tf.Line(group.Pos()), tf.Line(group.End())
-	if nodeEnd := attachedNodeEnd(fset, comments, group); nodeEnd > end {
-		end = nodeEnd
+	lo, hi := sf.Line(start), ef.Line(end)
+	if lo > hi {
+		lo, hi = hi, lo
 	}
-	return start <= line && line <= end
+	return lo <= line && line <= hi
 }
 
-// attachedNodeEnd returns the last line of the node the comment group is
-// attached to, or 0 when the group maps to no node.
-func attachedNodeEnd(fset *token.FileSet, comments ast.CommentMap, group *ast.CommentGroup) int {
-	end := 0
-	for node, groups := range comments {
-		for _, g := range groups {
-			if g == group {
-				if nodeFile := fset.File(node.End()); nodeFile != nil {
-					end = nodeFile.Line(node.End())
-				}
-			}
-		}
-	}
-	return end
-}
-
-// directiveRuleIDs parses a comment group's directive text into the set of
-// suppressed rule IDs. It accepts #nosec and //gosec:disable forms, the legacy
-// "block" keyword (all rules), and G followed by three digits. Justification
-// after "--" is ignored.
-func directiveRuleIDs(group *ast.CommentGroup) map[string]bool {
+// directiveIDs parses a comment group's directive into the rule IDs it
+// suppresses and whether the group carries a directive at all. A directive
+// that is empty, the legacy "block" keyword, or text with no G followed by
+// three digits suppresses every rule, matching upstream's naked case.
+func directiveIDs(group *ast.CommentGroup) (map[string]bool, bool) {
 	ids := make(map[string]bool)
 	directive, found := directiveText(group)
 	if !found {
-		return ids
+		return nil, false
 	}
-	if directive == "" || directive == legacyBlock {
+	if directive != "" && directive != legacyBlock {
+		for i := 0; i+4 <= len(directive); i++ {
+			if directive[i] != 'G' {
+				continue
+			}
+			if candidate := directive[i : i+4]; validRuleID(candidate) {
+				ids[candidate] = true
+				i += 3
+			}
+		}
+	}
+	if len(ids) == 0 {
 		ids[allRules] = true
-		return ids
 	}
-	for i := 0; i+4 <= len(directive); i++ {
-		if directive[i] != 'G' {
-			continue
-		}
-		candidate := directive[i : i+4]
-		if validRuleID(candidate) {
-			ids[candidate] = true
-			i += 3
-		}
-	}
-	return ids
+	return ids, true
 }
 
 // nosecArgs returns the argument of a #nosec directive in the group's text.
+// The tag must start the comment text or begin a line inside it, possibly
+// after whitespace; a mid-sentence mention is not a directive, matching
+// gosec's findNoSecTag.
 func nosecArgs(group *ast.CommentGroup) (string, bool) {
-	text := group.Text()
+	text := strings.TrimSpace(group.Text())
 	if text == "" {
 		return "", false
 	}
-	_, after, ok := strings.Cut(text, nosecTag)
-	if !ok {
-		return "", false
+	if strings.HasPrefix(text, nosecTag) {
+		return text[len(nosecTag):], true
 	}
-	return after, true
+	if idx := strings.Index(text, nosecTag); idx > 0 {
+		for i := idx - 1; i >= 0; i-- {
+			if text[i] == '\n' {
+				return text[idx+len(nosecTag):], true
+			}
+			if text[i] != ' ' && text[i] != '\t' {
+				break
+			}
+		}
+	}
+	return "", false
 }
 
 // disableArgs returns the argument of a //gosec:disable comment in the group.
@@ -142,7 +158,7 @@ func disableArgs(group *ast.CommentGroup) (string, bool) {
 // directiveText returns the trimmed directive argument of a comment group and
 // whether the group carries a #nosec or //gosec:disable directive at all. An
 // empty argument is a naked directive, which gosec treats as suppressing
-// every rule.
+// every rule. Justification after "--" is ignored.
 func directiveText(group *ast.CommentGroup) (string, bool) {
 	if group == nil {
 		return "", false

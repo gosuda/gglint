@@ -136,9 +136,10 @@ func upperBoundComparison(op token.Token, onLeft, truth bool) bool {
 // the right, so these accesses never become candidates. This mirrors the
 // const-on-left shape of LoGOs correctness::array_index_out_of_bounds
 // (LoGOs 7d15ec76); every other shape in that rule's Go fixture is already
-// covered by upstream candidates plus arrayIndexGuarded. A report needs every
-// dominating parameter-against-constant guard, in either operand order and
-// including equality, to admit the boundary; one rejecting guard silences it.
+// covered by upstream candidates plus arrayIndexGuarded. A report needs the
+// boundary witness to reach the access along a fully resolved path that
+// traverses at least one parameter-against-constant guard, in either operand
+// order and including equality, mirroring the LoGOs proof's witness walk.
 //
 // The check stays silent wherever the LoGOs proof stays silent: a guard that
 // proves the access safe in either operand order (arrayIndexGuarded), a
@@ -212,7 +213,7 @@ func constLeftIndexViolation(fset *token.FileSet, sizes types.Sizes, fn *ssa.Fun
 	if captured(param, fn) {
 		return nil // a closure use removes it from the LoGOs rule
 	}
-	if !constLeftAdmitsBoundary(index, param, length) {
+	if !constLeftAdmitsBoundary(fn, index, param, length) {
 		return nil
 	}
 	return &constLeftFinding{
@@ -299,45 +300,90 @@ func captured(param *ssa.Parameter, fn *ssa.Function) bool {
 	return false
 }
 
-// constLeftAdmitsBoundary reports whether every dominating guard that compares
-// the index against a constant admits the boundary value length on the path to
-// the access. A single rejecting guard proves the witness cannot reach the
-// access, mirroring the LoGOs proof, which evaluates every dominating
-// comparison against the same witness (LoGOs unreachableBoundary).
-func constLeftAdmitsBoundary(index *ssa.IndexAddr, param ssa.Value, length int64) bool {
+// constLeftAdmitsBoundary reports whether the boundary witness reaches the
+// access along the path the function takes under param = length, walking
+// resolved edges from the entry block as the LoGOs proof walks statements
+// with the parameter fixed to the witness (LoGOs arrayIndexProof). A
+// parameter-against-constant condition resolves to its outcome at the
+// boundary; a constant condition resolves statically; any other condition or
+// terminator ends the walk, mirroring the proof stopping at the first
+// statement it cannot evaluate. At least one parameter-against-constant
+// guard must be traversed: with none, the access is not the const-comparison
+// shape this pass adds, and the walk reports reached only when the access
+// block is on the boundary path.
+func constLeftAdmitsBoundary(fn *ssa.Function, index *ssa.IndexAddr, param ssa.Value, length int64) bool {
 	matched := false
-	for block := index.Block().Idom(); block != nil; block = block.Idom() {
-		admits, ok := guardAdmitsBoundary(block, index, param, length)
-		if !ok {
-			continue
-		}
-		if !admits {
+	visited := make(map[*ssa.BasicBlock]bool)
+	block := fn.Blocks[0]
+	for block != index.Block() {
+		if visited[block] {
 			return false
 		}
-		matched = true
+		visited[block] = true
+		next, ok := boundarySuccessor(block, param, length, &matched)
+		if !ok {
+			return false
+		}
+		block = next
 	}
 	return matched
 }
 
-// guardAdmitsBoundary evaluates the if-block's guard with the index fixed to
-// the boundary value. It reports ok=false when the block ends in no usable
-// guard: a non-comparison condition, an operator outside the LoGOs comparison
-// set, operands that are not the parameter against a constant, or no
-// successor leading to the access.
-func guardAdmitsBoundary(block *ssa.BasicBlock, index *ssa.IndexAddr, param ssa.Value, length int64) (admits, ok bool) {
-	branch, ok := block.Instrs[len(block.Instrs)-1].(*ssa.If)
-	if !ok {
-		return false, false
+// boundarySuccessor resolves the edge the boundary witness takes out of
+// block: the successor chosen by the condition's outcome at the boundary
+// value. It reports ok=false when the walk ends here — a terminator that does
+// not transfer control (return, panic) or a condition the proof cannot
+// resolve (a non-comparison, an operator outside the LoGOs comparison set, or
+// operands that are not the parameter against a constant).
+func boundarySuccessor(block *ssa.BasicBlock, param ssa.Value, length int64, matched *bool) (*ssa.BasicBlock, bool) {
+	last := block.Instrs[len(block.Instrs)-1]
+	if branch, ok := last.(*ssa.If); ok {
+		outcome, resolved := boundaryOutcome(branch.Cond, param, length, matched)
+		if !resolved {
+			return nil, false
+		}
+		if outcome {
+			return block.Succs[0], true
+		}
+		return block.Succs[1], true
 	}
-	comparison, ok := branch.Cond.(*ssa.BinOp)
+	if _, ok := last.(*ssa.Jump); ok {
+		return block.Succs[0], true
+	}
+	return nil, false
+}
+
+// boundaryOutcome evaluates an if condition with param fixed to the boundary
+// value. Only a parameter-against-constant comparison — in either operand
+// order, equality included — or a statically known condition resolves to a
+// definite edge, as the LoGOs operand rule maps the parameter to the witness,
+// a constant to its value, and anything else to unknown, which stops the
+// proof (LoGOs compoundBoundary and equalityBoundary report; disjointGuard
+// stays silent). Traversed comparisons mark the walk as guarded.
+func boundaryOutcome(cond ssa.Value, param ssa.Value, length int64, matched *bool) (take bool, ok bool) {
+	if c, ok := cond.(*ssa.Const); ok {
+		return constant.BoolVal(c.Value), true
+	}
+	comparison, ok := cond.(*ssa.BinOp)
 	if !ok || !boundsComparisonOp(comparison.Op) {
 		return false, false
 	}
-	for successor, next := range block.Succs {
-		if len(next.Preds) != 1 || !next.Dominates(index.Block()) {
-			continue
+	boundary := constant.MakeInt64(length)
+	if comparison.X == param {
+		limit, ok := comparison.Y.(*ssa.Const)
+		if !ok {
+			return false, false
 		}
-		return admitsOnPath(comparison, param, length, successor == 0)
+		*matched = true
+		return constant.Compare(boundary, comparison.Op, limit.Value), true
+	}
+	if comparison.Y == param {
+		limit, ok := comparison.X.(*ssa.Const)
+		if !ok {
+			return false, false
+		}
+		*matched = true
+		return constant.Compare(limit.Value, comparison.Op, boundary), true
 	}
 	return false, false
 }
@@ -347,29 +393,4 @@ func guardAdmitsBoundary(block *ssa.BasicBlock, index *ssa.IndexAddr, param ssa.
 func boundsComparisonOp(op token.Token) bool {
 	return op == token.LSS || op == token.LEQ || op == token.GTR ||
 		op == token.GEQ || op == token.EQL || op == token.NEQ
-}
-
-// admitsOnPath evaluates the comparison with the index fixed to the boundary
-// value and reports whether the outcome matches the path taken toward the
-// access. It reports ok=false when the comparison does not set the parameter
-// against a constant. Both operand orders are evaluated, equality included, as
-// the LoGOs proof does (LoGOs compoundBoundary and equalityBoundary report;
-// disjointGuard stays silent through the all-guards rule above).
-func admitsOnPath(comparison *ssa.BinOp, param ssa.Value, length int64, truth bool) (admits, ok bool) {
-	boundary := constant.MakeInt64(length)
-	if comparison.X == param {
-		limit, ok := comparison.Y.(*ssa.Const)
-		if !ok {
-			return false, false
-		}
-		return constant.Compare(boundary, comparison.Op, limit.Value) == truth, true
-	}
-	if comparison.Y == param {
-		limit, ok := comparison.X.(*ssa.Const)
-		if !ok {
-			return false, false
-		}
-		return constant.Compare(limit.Value, comparison.Op, boundary) == truth, true
-	}
-	return false, false
 }
