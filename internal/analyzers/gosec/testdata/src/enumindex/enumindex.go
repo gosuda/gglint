@@ -114,6 +114,13 @@ func NewNamedArray(t token) string {
 	return new[t] // want "G602: slice index out of range"
 }
 
+func ParamArray(new [2]string, t token) string {
+	if tokenCount < t {
+		return "unknown"
+	}
+	return new[t]
+}
+
 func PointerArray(t token) string {
 	p := &[2]string{"light", "dark"}
 	if tokenCount < t {

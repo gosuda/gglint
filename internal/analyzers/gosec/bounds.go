@@ -244,20 +244,51 @@ func sourceIndexArray(pass *analysis.Pass, pos token.Pos) bool {
 			continue
 		}
 		for _, node := range path {
-			expr, ok := node.(*ast.IndexExpr)
-			if !ok {
-				continue
+			if expr, ok := node.(*ast.IndexExpr); ok {
+				return indexArrayOperand(pass, path, expr)
 			}
-			typ := pass.TypesInfo.TypeOf(expr.X)
-			if typ == nil {
-				return false
-			}
-			_, isArray := typ.Underlying().(*types.Array)
-			return isArray
 		}
 		return false
 	}
 	return false
+}
+
+// indexArrayOperand requires the indexed expression to be array-typed and,
+// when it is a plain name, a variable declared inside the enclosing
+// function's body — SSA gives array parameters and results stack slots that
+// look identical to local declarations.
+func indexArrayOperand(pass *analysis.Pass, path []ast.Node, expr *ast.IndexExpr) bool {
+	typ := pass.TypesInfo.TypeOf(expr.X)
+	if typ == nil {
+		return false
+	}
+	if _, isArray := typ.Underlying().(*types.Array); !isArray {
+		return false
+	}
+	ident, isIdent := expr.X.(*ast.Ident)
+	if !isIdent {
+		return true // an array literal or expression is provable by type
+	}
+	v, isVar := pass.TypesInfo.ObjectOf(ident).(*types.Var)
+	if !isVar {
+		return false
+	}
+	body := enclosingBody(path)
+	return body != nil && v.Pos() > body.Pos() && v.Pos() < body.End()
+}
+
+// enclosingBody returns the body of the innermost function literal or
+// declaration containing the path.
+func enclosingBody(path []ast.Node) *ast.BlockStmt {
+	for _, node := range path {
+		switch fn := node.(type) {
+		case *ast.FuncDecl:
+			return fn.Body
+		case *ast.FuncLit:
+			return fn.Body
+		}
+	}
+	return nil
 }
 
 // witness representability check of the LoGOs rule.
