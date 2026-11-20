@@ -1,7 +1,8 @@
 # gglint
 
-[![CI](https://github.com/gosuda/gglint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gosuda/gglint/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Built with Depot](https://depot.dev/badges/built-with-depot.svg)](https://depot.dev?utm_source=Mealie)
+[![CI](https://github.com/gosuda/gglint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gosuda/gglint/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
+[![Built with Depot](https://depot.dev/badges/built-with-depot.svg)](https://depot.dev?utm_source=gosuda)
 
 One `go vet` linter binary with 104 rules, organized into nested `basic`, `standard`, and `strict` modes.
 
