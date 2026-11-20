@@ -303,7 +303,9 @@ func captured(param *ssa.Parameter, fn *ssa.Function) bool {
 // constLeftAdmitsBoundary reports whether the boundary witness reaches the
 // access along the path the function takes under param = length, walking
 // resolved edges from the entry block as the LoGOs proof walks statements
-// with the parameter fixed to the witness (LoGOs arrayIndexProof). A
+// with the parameter fixed to the witness (LoGOs arrayIndexProof). Every
+// instruction on the walked path must be provable, matching the proof
+// stopping at a call or any other statement it cannot evaluate. A
 // parameter-against-constant condition resolves to its outcome at the
 // boundary; a constant condition resolves statically; any other condition or
 // terminator ends the walk, mirroring the proof stopping at the first
@@ -315,18 +317,89 @@ func constLeftAdmitsBoundary(fn *ssa.Function, index *ssa.IndexAddr, param ssa.V
 	matched := false
 	visited := make(map[*ssa.BasicBlock]bool)
 	block := fn.Blocks[0]
-	for block != index.Block() {
+	for {
 		if visited[block] {
 			return false
 		}
 		visited[block] = true
+		if !provablePath(block, index) {
+			return false
+		}
+		if block == index.Block() {
+			return matched
+		}
 		next, ok := boundarySuccessor(block, param, length, &matched)
 		if !ok {
 			return false
 		}
 		block = next
 	}
-	return matched
+}
+
+// provablePath reports whether the witnessed path through block holds only
+// instructions the LoGOs proof can evaluate, stopping at the target access
+// since instructions after it cannot execute before it. The terminator is
+// excluded: the walk resolves its edge separately.
+func provablePath(block *ssa.BasicBlock, index *ssa.IndexAddr) bool {
+	for i, instr := range block.Instrs {
+		if instr == index {
+			return true
+		}
+		if i == len(block.Instrs)-1 {
+			continue
+		}
+		if !provableInstruction(instr) {
+			return false
+		}
+	}
+	return true
+}
+
+// provableInstruction reports whether instr is an evaluation artifact of a
+// statement the LoGOs proof walks: scalar comparisons, array construction
+// and stores into locals, SSA join artifacts, local loads, and a boolean
+// negation. A call, conversion, field or other index access, map or channel
+// operation, and every other instruction kind maps to a statement or
+// expression the proof cannot evaluate, so it stops — and this walk stays
+// silent — wherever one appears on the witnessed path.
+func provableInstruction(instr ssa.Instruction) bool {
+	switch instr := instr.(type) {
+	case *ssa.BinOp:
+		return boundsComparisonOp(instr.Op)
+	case *ssa.UnOp:
+		if instr.Op == token.NOT {
+			return true
+		}
+		_, local := instr.X.(*ssa.Alloc)
+		return instr.Op == token.MUL && local
+	case *ssa.IndexAddr:
+		alloc, isAlloc := instr.X.(*ssa.Alloc)
+		_, isConst := instr.Index.(*ssa.Const)
+		return isAlloc && isConst && alloc.Comment == "complit"
+	case *ssa.Store:
+		return provableStoreAddr(instr.Addr)
+	case *ssa.Alloc:
+		return !instr.Heap
+	case *ssa.Phi, *ssa.Extract, *ssa.DebugRef, *ssa.RunDefers:
+		return true
+	}
+	return false
+}
+
+// provableStoreAddr reports whether a store's destination is a statement the
+// LoGOs proof can evaluate: a plain local or global name, or an element of
+// the array literal being built. A store through a pointer or into any other
+// indexed or selected destination stops the proof.
+func provableStoreAddr(addr ssa.Value) bool {
+	switch addr := addr.(type) {
+	case *ssa.Alloc, *ssa.Global:
+		return true
+	case *ssa.IndexAddr:
+		alloc, isAlloc := addr.X.(*ssa.Alloc)
+		_, isConst := addr.Index.(*ssa.Const)
+		return isAlloc && isConst && alloc.Comment == "complit"
+	}
+	return false
 }
 
 // boundarySuccessor resolves the edge the boundary witness takes out of

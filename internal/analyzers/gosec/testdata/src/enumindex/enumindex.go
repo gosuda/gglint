@@ -67,6 +67,17 @@ func CompoundBoundary(t token) string {
 	return "unknown"
 }
 
+func validate(t token) {}
+
+func ValidatedBoundary(t token) string {
+	names := [...]string{"light", "dark"}
+	if t == tokenLight || t == tokenCount {
+		validate(t)
+		return names[t]
+	}
+	return "unknown"
+}
+
 func UnreachableBoundary(t token) string {
 	names := [...]string{"light", "dark"}
 	if t < tokenCount && t == tokenCount {

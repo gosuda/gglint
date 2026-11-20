@@ -13,10 +13,9 @@ func SuppressedAccess(t token) string {
 func LineSuppressedAccess(t token) string {
 	names := [...]string{"light", "dark"}
 	if tokenCount < t {
+		// #nosec G602 -- covers the early return only
 		return "unknown"
 	}
-	// #nosec G602 -- covers the statement below
-	_ = names[t]
 	return names[t] // want "G602: slice index out of range"
 }
 
