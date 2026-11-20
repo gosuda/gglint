@@ -121,6 +121,13 @@ func ParamArray(new [2]string, t token) string {
 	return new[t]
 }
 
+func ParenParamArray(new [2]string, t token) string {
+	if tokenCount < t {
+		return "unknown"
+	}
+	return (new)[t]
+}
+
 func PointerArray(t token) string {
 	p := &[2]string{"light", "dark"}
 	if tokenCount < t {

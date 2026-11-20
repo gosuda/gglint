@@ -265,7 +265,15 @@ func indexArrayOperand(pass *analysis.Pass, path []ast.Node, expr *ast.IndexExpr
 	if _, isArray := typ.Underlying().(*types.Array); !isArray {
 		return false
 	}
-	ident, isIdent := expr.X.(*ast.Ident)
+	operand := expr.X
+	for {
+		paren, isParen := operand.(*ast.ParenExpr)
+		if !isParen {
+			break
+		}
+		operand = paren.X
+	}
+	ident, isIdent := operand.(*ast.Ident)
 	if !isIdent {
 		return true // an array literal or expression is provable by type
 	}
