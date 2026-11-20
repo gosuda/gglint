@@ -106,6 +106,22 @@ func ReturnCallOperand(t token) (string, string) {
 	return names[t], tokenLabel(t)
 }
 
+func NewNamedArray(t token) string {
+	new := [...]string{"light", "dark"}
+	if tokenCount < t {
+		return "unknown"
+	}
+	return new[t] // want "G602: slice index out of range"
+}
+
+func PointerArray(t token) string {
+	p := &[2]string{"light", "dark"}
+	if tokenCount < t {
+		return "unknown"
+	}
+	return p[t]
+}
+
 func ExplicitDeref(t token, p *token) string {
 	names := [...]string{"light", "dark"}
 	if *p == tokenLight {

@@ -195,7 +195,7 @@ func constLeftFuncViolations(pass *analysis.Pass, fn *ssa.Function, candidates m
 // fixed-array target, match it against upstream candidates and proven-safe
 // guards, then derive whether the const-on-left guard admits the boundary.
 func constLeftIndexViolation(pass *analysis.Pass, fn *ssa.Function, headers map[*ssa.BasicBlock]bool, candidates map[issueLocation]bool, index *ssa.IndexAddr) *constLeftFinding {
-	length, param, ok := constLeftTarget(pass.TypesSizes, index)
+	length, param, ok := constLeftTarget(pass, index)
 	if !ok {
 		return nil
 	}
@@ -233,8 +233,36 @@ func constLeftIndexViolation(pass *analysis.Pass, fn *ssa.Function, headers map[
 
 // constLeftTarget recognizes an index into a local fixed array through a bare
 // unsigned function parameter whose type can represent length, mirroring the
+// sourceIndexArray requires the index expression at pos to index an actual
+// array-typed expression — a local array variable or an array literal — so a
+// pointer to an array (`p := &[2]string{...}`) is not mistaken for the local
+// fixed array the LoGOs declaration rule covers.
+func sourceIndexArray(pass *analysis.Pass, pos token.Pos) bool {
+	for _, file := range pass.Files {
+		path, exact := astutil.PathEnclosingInterval(file, pos, pos)
+		if !exact {
+			continue
+		}
+		for _, node := range path {
+			expr, ok := node.(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			typ := pass.TypesInfo.TypeOf(expr.X)
+			if typ == nil {
+				return false
+			}
+			_, isArray := typ.Underlying().(*types.Array)
+			return isArray
+		}
+		return false
+	}
+	return false
+}
+
 // witness representability check of the LoGOs rule.
-func constLeftTarget(sizes types.Sizes, index *ssa.IndexAddr) (int64, *ssa.Parameter, bool) {
+func constLeftTarget(pass *analysis.Pass, index *ssa.IndexAddr) (int64, *ssa.Parameter, bool) {
+	sizes := pass.TypesSizes
 	param, ok := index.Index.(*ssa.Parameter)
 	if !ok {
 		return 0, nil, false
@@ -257,6 +285,9 @@ func constLeftTarget(sizes types.Sizes, index *ssa.IndexAddr) (int64, *ssa.Param
 	}
 	length := array.Len()
 	if int64(constant.BitLen(constant.MakeInt64(length))) > sizes.Sizeof(basic)*8 {
+		return 0, nil, false
+	}
+	if !sourceIndexArray(pass, index.Pos()) {
 		return 0, nil, false
 	}
 	return length, param, true
@@ -408,7 +439,7 @@ func provableInstruction(instr ssa.Instruction, index *ssa.IndexAddr, files []*a
 	case *ssa.Store:
 		return provableStoreAddr(instr.Addr)
 	case *ssa.Alloc:
-		return provableAlloc(instr)
+		return provableAlloc(instr, files)
 	case *ssa.ChangeType:
 		return provableChangeType(instr, files)
 	case *ssa.Phi, *ssa.Extract, *ssa.DebugRef, *ssa.RunDefers:
@@ -444,10 +475,18 @@ func provableUnOp(op *ssa.UnOp, index *ssa.IndexAddr) bool {
 // the proof cannot evaluate and stop it; a lifted local array keeps its
 // declaration provable regardless of its Heap flag, which describes the
 // whole function, not the prefix before the access.
-func provableAlloc(alloc *ssa.Alloc) bool {
+func provableAlloc(alloc *ssa.Alloc, files []*ast.File) bool {
 	switch alloc.Comment {
 	case "new", "makeslice", "slicelit", "varargs":
-		return false
+		// SSA tags synthetic heap construction with these comments, but a
+		// source variable named `new` collides. A real helper sits inside a
+		// call expression (new, make, spread call); a declaration does not —
+		// and a declared variable keeps a scalar or array-of-scalar type.
+		if insideCallExpr(files, alloc.Pos()) {
+			return false
+		}
+		ptr, ok := alloc.Type().Underlying().(*types.Pointer)
+		return ok && boundPlainType(ptr.Elem())
 	}
 	return true
 }
