@@ -24,38 +24,54 @@ const doc = "gosec reports security problems found by the gosec rules and SSA an
 	"Each finding is printed as <rule ID>: <description>; excluded rule IDs are never run."
 
 func New(excluded []string) *analysis.Analyzer {
-	ruleList := rules.Generate(false, rules.NewRuleFilter(true, excluded...))
-	analyzerList := analyzers.Generate(false, analyzers.NewAnalyzerFilter(true, excluded...))
 	return &analysis.Analyzer{
 		Name:     "gosec",
 		Doc:      doc,
 		Requires: []*analysis.Analyzer{buildssa.Analyzer},
-		Run: func(pass *analysis.Pass) (any, error) {
-			result, ok := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
-			if !ok {
-				panic("gosec: missing buildssa result")
-			}
-			scanner := securego.NewAnalyzer(securego.NewConfig(), true, true, false, 1, log.New(io.Discard, "", 0))
-			scanner.LoadRules(ruleList.RulesInfo())
-			scanner.LoadAnalyzers(analyzerList.AnalyzersInfo())
-			pkg := toPackage(pass)
-			scanner.CheckRules(pkg)
-			scanner.CheckAnalyzersWithSSA(pkg, result)
-			issues, _, errs := scanner.Report()
-			if len(errs) > 0 {
-				names := slices.Sorted(maps.Keys(errs))
-				return nil, fmt.Errorf("gosec: %s: %s", names[0], errs[names[0]][0].Err)
-			}
-			guarded := guardedArrayIndices(pass.Fset, result, issues)
-			for _, iss := range issues {
-				if iss.RuleID == "G602" && iss.What == "slice index out of range" &&
-					guarded[issueLocation{iss.File, iss.Line, iss.Col}] {
-					continue
-				}
-				report(pass, iss)
-			}
-			return nil, nil
-		},
+		Run:      func(pass *analysis.Pass) (any, error) { return runGosec(pass, excluded) },
+	}
+}
+
+// runGosec scans the package with the loaded gosec rules and analyzers, then
+// appends the const-on-left bounds findings the upstream analyzer misses.
+func runGosec(pass *analysis.Pass, excluded []string) (any, error) {
+	result, ok := pass.ResultOf[buildssa.Analyzer].(*buildssa.SSA)
+	if !ok {
+		panic("gosec: missing buildssa result")
+	}
+	scanner := securego.NewAnalyzer(securego.NewConfig(), true, true, false, 1, log.New(io.Discard, "", 0))
+	scanner.LoadRules(rules.Generate(false, rules.NewRuleFilter(true, excluded...)).RulesInfo())
+	scanner.LoadAnalyzers(analyzers.Generate(false, analyzers.NewAnalyzerFilter(true, excluded...)).AnalyzersInfo())
+	pkg := toPackage(pass)
+	scanner.CheckRules(pkg)
+	scanner.CheckAnalyzersWithSSA(pkg, result)
+	issues, _, errs := scanner.Report()
+	if len(errs) > 0 {
+		names := slices.Sorted(maps.Keys(errs))
+		return nil, fmt.Errorf("gosec: %s: %s", names[0], errs[names[0]][0].Err)
+	}
+	guarded := guardedArrayIndices(pass.Fset, result, issues)
+	reportSupplementalBounds(pass, result, excluded, issues)
+	for _, iss := range issues {
+		if iss.RuleID == boundRuleID && iss.What == boundWhat &&
+			guarded[issueLocation{iss.File, iss.Line, iss.Col}] {
+			continue
+		}
+		report(pass, iss)
+	}
+	return nil, nil
+}
+
+// reportSupplementalBounds emits the const-on-left findings unless the caller
+// excluded the rule; each one still honors #nosec and //gosec:disable.
+func reportSupplementalBounds(pass *analysis.Pass, result *buildssa.SSA, excluded []string, issues []*issue.Issue) {
+	if slices.Contains(excluded, boundRuleID) {
+		return
+	}
+	for _, found := range constLeftViolations(pass, result, issues) {
+		if !suppressedByDirective(pass, found) {
+			reportSupplemental(pass, found)
+		}
 	}
 }
 
@@ -66,6 +82,12 @@ func report(pass *analysis.Pass, iss *issue.Issue) {
 		return
 	}
 	pass.Reportf(position(pass, file, iss), "%s: %s", iss.RuleID, iss.What)
+}
+
+// reportSupplemental reports a const-left finding at the access position the
+// SSA pass recorded, without reconstructing it from line coordinates.
+func reportSupplemental(pass *analysis.Pass, found constLeftFinding) {
+	pass.Reportf(found.pos, "%s: %s", found.issue.RuleID, found.issue.What)
 }
 
 func toPackage(pass *analysis.Pass) *packages.Package {

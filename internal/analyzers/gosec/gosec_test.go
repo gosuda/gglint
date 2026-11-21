@@ -22,3 +22,8 @@ func TestGuardedEnumIndices(t *testing.T) {
 	t.Parallel()
 	analysistest.Run(t, analysistest.TestData(), gosec.New(nil), "enumindex")
 }
+
+func TestExcludedBoundsStaySilent(t *testing.T) {
+	t.Parallel()
+	analysistest.Run(t, analysistest.TestData(), gosec.New([]string{"G602"}), "secbounds")
+}

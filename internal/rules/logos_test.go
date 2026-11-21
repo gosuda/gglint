@@ -31,6 +31,7 @@ func logosPorts() []logosPort {
 		{dir: "correctness_typed_nil_return", rule: "typednil", cfg: strict},
 		{dir: "correctness_unclosed_io_closer", rule: "closer", cfg: strict},
 		{dir: "correctness_unbounded_channel_op", rule: "chanblock", cfg: strict},
+		{dir: "correctness_array_index_out_of_bounds", rule: "gosec", cfg: standard},
 		{dir: "correctness_printf_misuse", rule: "printf", cfg: basic},
 		{dir: "correctness_httpresponse", rule: "httpresponse", cfg: basic},
 		{dir: "concurrency_unsupervised_goroutine", rule: "goroutine", cfg: config.Config{Mode: config.Standard, Enable: []string{"goroutine"}}},
