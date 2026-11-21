@@ -186,8 +186,9 @@ func TestConcurrentBuildsKeepSharedAnalyzersIsolated(t *testing.T) {
 		pkg *packages.Package
 	}
 	var jobs []job
-	for _, mode := range []config.Mode{config.Basic, config.Standard, config.Strict} {
-		for range workersPerMode {
+	// Interleave modes so the bounded in-flight set always spans them.
+	for range workersPerMode {
+		for _, mode := range []config.Mode{config.Basic, config.Standard, config.Strict} {
 			cfg := config.Config{Mode: mode, Complexity: config.ComplexityFor(mode), Tests: true}
 			if mode < config.Strict {
 				cfg.Enable = []string{"checklocks"}
@@ -195,10 +196,17 @@ func TestConcurrentBuildsKeepSharedAnalyzersIsolated(t *testing.T) {
 			jobs = append(jobs, job{cfg: cfg, pkg: loadTinyPackage(t)})
 		}
 	}
+	// Bound in-flight analyses: -parallel cannot cap this fan-out, and nine
+	// race-instrumented engine runs at once blew past the CI memory limit.
+	sem := make(chan struct{}, workersPerMode)
 	errs := make(chan error, len(jobs))
 	var wg sync.WaitGroup
 	for _, job := range jobs {
-		wg.Go(func() { errs <- analyzeWithEngine(job.cfg, job.pkg) })
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			errs <- analyzeWithEngine(job.cfg, job.pkg)
+		})
 	}
 	wg.Wait()
 	close(errs)
