@@ -186,8 +186,9 @@ func TestConcurrentBuildsKeepSharedAnalyzersIsolated(t *testing.T) {
 		pkg *packages.Package
 	}
 	var jobs []job
-	for _, mode := range []config.Mode{config.Basic, config.Standard, config.Strict} {
-		for range workersPerMode {
+	// Interleave modes so the bounded in-flight set always spans them.
+	for range workersPerMode {
+		for _, mode := range []config.Mode{config.Basic, config.Standard, config.Strict} {
 			cfg := config.Config{Mode: mode, Complexity: config.ComplexityFor(mode), Tests: true}
 			if mode < config.Strict {
 				cfg.Enable = []string{"checklocks"}
