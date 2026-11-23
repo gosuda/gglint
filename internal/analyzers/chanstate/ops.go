@@ -253,11 +253,21 @@ func (w *opWalker) expr(x ast.Expr) {
 	case *ast.CallExpr:
 		w.call(x)
 	case *ast.BinaryExpr:
-		w.expr(x.X)
-		w.expr(x.Y)
+		w.binary(x)
 	default:
 		w.compound(x)
 	}
+}
+
+func (w *opWalker) binary(x *ast.BinaryExpr) {
+	w.expr(x.X)
+	if value := w.info.Types[x.X].Value; value != nil {
+		if x.Op == token.LAND && !constant.BoolVal(value) ||
+			x.Op == token.LOR && constant.BoolVal(value) {
+			return
+		}
+	}
+	w.expr(x.Y)
 }
 
 func (w *opWalker) compound(x ast.Expr) {

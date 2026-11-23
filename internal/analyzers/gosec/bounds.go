@@ -46,7 +46,6 @@ func recordArrayGuards(fset *token.FileSet, block *ssa.BasicBlock, candidates, p
 		if file == nil {
 			continue
 		}
-		// Match gosec's physical filename and adjusted //line coordinates.
 		loc := issueLocation{file.Name(), strconv.Itoa(file.Line(index.Pos())), strconv.Itoa(file.Position(index.Pos()).Column)}
 		if !candidates[loc] {
 			continue

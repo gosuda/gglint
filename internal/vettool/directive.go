@@ -87,7 +87,7 @@ func collectDirectives(fset *token.FileSet, file *ast.File, src []byte) []*direc
 }
 
 func scopeOf(fset *token.FileSet, file *ast.File, src []byte, c *ast.Comment) (first, last int) {
-	line := fset.Position(c.Slash).Line
+	line := fset.PositionFor(c.Slash, false).Line
 	if c.Slash < file.Package {
 		return 1, math.MaxInt
 	}
@@ -98,12 +98,12 @@ func scopeOf(fset *token.FileSet, file *ast.File, src []byte, c *ast.Comment) (f
 	if next == nil {
 		return line, line
 	}
-	return fset.Position(next.Pos()).Line, fset.Position(next.End()).Line
+	return fset.PositionFor(next.Pos(), false).Line, fset.PositionFor(next.End(), false).Line
 }
 
 func trailing(fset *token.FileSet, src []byte, c *ast.Comment) bool {
 	tf := fset.File(c.Slash)
-	line := tf.Line(c.Slash)
+	line := tf.PositionFor(c.Slash, false).Line
 	before := src[tf.Offset(tf.LineStart(line)):tf.Offset(c.Slash)]
 	return len(bytes.TrimSpace(before)) > 0
 }
