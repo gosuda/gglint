@@ -23,7 +23,19 @@ func TestExcludedRulesStaySilent(t *testing.T) {
 
 func TestGuardedEnumIndices(t *testing.T) {
 	t.Parallel()
-	analysistest.Run(t, analysistest.TestData(), gosec.New(nil), "enumindex")
+	results := analysistest.Run(t, analysistest.TestData(), gosec.New(nil), "enumindex")
+	var collisionLines []int
+	for _, result := range results {
+		for _, diagnostic := range result.Action.Diagnostics {
+			pos := result.Action.Package.Fset.PositionFor(diagnostic.Pos, false)
+			if filepath.Base(pos.Filename) == "position.go" {
+				collisionLines = append(collisionLines, pos.Line)
+			}
+		}
+	}
+	if want := []int{8}; !slices.Equal(collisionLines, want) {
+		t.Errorf("physical collision lines = %v, want unsafe access at %v", collisionLines, want)
+	}
 }
 
 func TestLineDirectivePositions(t *testing.T) {
