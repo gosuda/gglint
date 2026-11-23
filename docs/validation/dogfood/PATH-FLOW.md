@@ -89,8 +89,10 @@ sha256sum -c docs/validation/dogfood/CURRENT.sha256
 
 `ANALYZERS.md` and `ANALYZERS.sha256` retain the earlier release-effect checkpoint.
 They do not describe the later path-flow source hashes. `CURRENT.sha256` is the
-source manifest for this follow-up. The final driver checkpoint below records
-the later signature-validator extraction; `DRIVER.sha256` remains historical.
+source manifest for this follow-up. It does not match the current tree, because
+later commits changed eight of its files. The final driver checkpoint below
+records the later signature-validator extraction; `DRIVER.sha256` remains
+historical.
 
 ## Broader limits
 
@@ -164,8 +166,9 @@ The separate final executable has SHA-256
 `625120495f2ab131024ccfff69db08a9c4df43597dc8f48fd646a7b97e308d9a`.
 Its `v2-buildinfo.txt` records clean source revision `38be774`. The earlier
 executable remains untouched so earlier corpus observations retain their exact
-binary identity. `CURRENT.sha256` identifies the final combined sources;
-`DRIVER.sha256` remains the historical pre-extraction source checkpoint.
+binary identity. `CURRENT.sha256` identifies the combined sources at this
+checkpoint; `DRIVER.sha256` remains the historical pre-extraction source
+checkpoint.
 
 The final executable's standard-mode self-lint then completed with exit 0 and
 `findings: []` across all four changed analyzer/driver packages. The complete
@@ -183,5 +186,6 @@ The merge keeps the already verified compound-initialization restriction, its
 paired fixture, and the driver signature-validator extraction. Every Go source
 file is byte-identical to local pre-merge revision `12d48e8`; no additional
 production or test change was introduced by conflict resolution. Both recorded
-executables remain unchanged. `CURRENT.sha256` verifies the combined sources,
-and `FLOW-EVIDENCE.sha256` verifies the concurrently published historical record.
+executables remain unchanged. `CURRENT.sha256` verified the combined sources at
+the merge, and `FLOW-EVIDENCE.sha256` verifies the concurrently published
+historical record.
