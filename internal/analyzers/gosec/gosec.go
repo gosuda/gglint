@@ -46,7 +46,7 @@ func New(excluded []string) *analysis.Analyzer {
 				names := slices.Sorted(maps.Keys(errs))
 				return nil, fmt.Errorf("gosec: %s: %s", names[0], errs[names[0]][0].Err)
 			}
-			guarded := guardedArrayIndices(pass.Fset, result, issues)
+			guarded := guardedArrayIndices(pkg.Fset, result, issues)
 			for _, iss := range issues {
 				if iss.RuleID == "G602" && iss.What == "slice index out of range" &&
 					guarded[issueLocation{iss.File, iss.Line, iss.Col}] {
@@ -69,6 +69,13 @@ func report(pass *analysis.Pass, iss *issue.Issue) {
 }
 
 func toPackage(pass *analysis.Pass) *packages.Package {
+	// gosec drops token.Pos, so adjusted coordinates cannot distinguish
+	// accesses that reuse a location through //line directives.
+	fset := token.NewFileSet()
+	pass.Fset.Iterate(func(file *token.File) bool {
+		fset.AddFile(file.Name(), file.Base(), file.Size()).SetLines(file.Lines())
+		return true
+	})
 	names := make([]string, len(pass.Files))
 	for i, file := range pass.Files {
 		names[i] = pass.Fset.File(file.FileStart).Name()
@@ -80,7 +87,7 @@ func toPackage(pass *analysis.Pass) *packages.Package {
 		OtherFiles:   pass.OtherFiles,
 		IgnoredFiles: pass.IgnoredFiles,
 		Types:        pass.Pkg,
-		Fset:         pass.Fset,
+		Fset:         fset,
 		Syntax:       pass.Files,
 		TypesInfo:    pass.TypesInfo,
 		TypesSizes:   pass.TypesSizes,
