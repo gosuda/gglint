@@ -262,15 +262,9 @@ func (w *opWalker) expr(x ast.Expr) {
 func (w *opWalker) binary(x *ast.BinaryExpr) {
 	w.expr(x.X)
 	if value := w.info.Types[x.X].Value; value != nil {
-		switch x.Op {
-		case token.LAND:
-			if !constant.BoolVal(value) {
-				return
-			}
-		case token.LOR:
-			if constant.BoolVal(value) {
-				return
-			}
+		if x.Op == token.LAND && !constant.BoolVal(value) ||
+			x.Op == token.LOR && constant.BoolVal(value) {
+			return
 		}
 	}
 	w.expr(x.Y)
