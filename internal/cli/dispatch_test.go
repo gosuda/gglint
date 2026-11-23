@@ -12,6 +12,7 @@ func TestCommandsAcceptConfigNamesUsedByVettool(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			dir := filepath.Join(workspace(t, ""), "b")
+			writeFile(t, filepath.Join(dir, "b.go"), "package b\n\nconst Value = 1\n")
 			writeFile(t, filepath.Join(dir, name), "mode = \"basic\"\n")
 			for _, flags := range [][]string{{"-config", name}, {"-config=" + name}} {
 				assertResult(t, gglint(t, dir, append([]string{"run"}, flags...)...), result{

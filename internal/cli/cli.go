@@ -21,9 +21,6 @@ const (
 )
 
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	if isVettoolInvocation(args) {
-		return vettool.Main(args)
-	}
 	if len(args) == 0 {
 		return fail(stderr, exitUsage, errors.New("usage: gglint run|rules|version [flags]"))
 	}
@@ -35,6 +32,9 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "version":
 		return versionCommand(stdout, stderr)
 	default:
+		if isVettoolInvocation(args) {
+			return vettool.Main(args)
+		}
 		return fail(stderr, exitUsage, fmt.Errorf("unknown command %q (want run, rules, or version)", args[0]))
 	}
 }
