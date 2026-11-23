@@ -131,7 +131,7 @@ func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysi
 		return true
 	}
 	state := e.stateOf(pass, file)
-	return !state.generated && (r.Name == rules.NolintName || !e.suppressed(state, pass.Fset.Position(d.Pos).Line, r.Name, check))
+	return !state.generated && (r.Name == rules.NolintName || !e.suppressed(state, pass.Fset.PositionFor(d.Pos, false).Line, r.Name, check))
 }
 
 func (e *engine) filtered(r rules.Rule, filename string, d analysis.Diagnostic) bool {
