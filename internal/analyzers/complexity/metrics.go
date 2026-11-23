@@ -25,7 +25,7 @@ func bodyMetrics(fset *token.FileSet, start token.Pos, params *ast.FieldList, bo
 	return metrics{
 		depth:      w.depth,
 		params:     countParams(params),
-		lines:      fset.Position(body.Rbrace).Line - fset.Position(start).Line + 1,
+		lines:      fset.PositionFor(body.Rbrace, false).Line - fset.PositionFor(start, false).Line + 1,
 		score:      w.score,
 		cyclomatic: 1 + w.cyclomatic,
 	}
