@@ -1,6 +1,9 @@
 package gosec_test
 
 import (
+	"fmt"
+	"path/filepath"
+	"slices"
 	"testing"
 
 	"golang.org/x/tools/go/analysis/analysistest"
@@ -21,4 +24,21 @@ func TestExcludedRulesStaySilent(t *testing.T) {
 func TestGuardedEnumIndices(t *testing.T) {
 	t.Parallel()
 	analysistest.Run(t, analysistest.TestData(), gosec.New(nil), "enumindex")
+}
+
+func TestLineDirectivePositions(t *testing.T) {
+	t.Parallel()
+	results := analysistest.Run(t, analysistest.TestData(), gosec.New(nil), "secposition")
+	var got []string
+	for _, result := range results {
+		for _, diagnostic := range result.Action.Diagnostics {
+			pos := result.Action.Package.Fset.Position(diagnostic.Pos)
+			got = append(got, fmt.Sprintf("%s:%d:%d", filepath.Base(pos.Filename), pos.Line, pos.Column))
+		}
+	}
+	slices.Sort(got)
+	want := []string{"ast.go:400:28", "bounds.go:1000:53", "inline.go:1700:12", "shown.go:700:53", "unknown.go:2000:0"}
+	if !slices.Equal(got, want) {
+		t.Errorf("diagnostic positions = %v, want %v", got, want)
+	}
 }
