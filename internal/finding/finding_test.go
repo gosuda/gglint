@@ -31,7 +31,7 @@ func at(path string, line, column int) finding.Position {
 
 func process(t *testing.T, fs []finding.Finding, opts finding.Options) []finding.Finding {
 	t.Helper()
-	out, err := finding.Process(t.Context(), fs, opts)
+	out, err := finding.Prepare(t.Context(), fs, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func keys(fs []finding.Finding) []string {
 	return out
 }
 
-func TestProcessPrintsEveryPathRelativeToWorkDir(t *testing.T) {
+func TestPreparePrintsEveryPathRelativeToWorkDir(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		"/w/repo/pkg/x.go": "pkg/x.go",
@@ -71,7 +71,7 @@ func TestProcessPrintsEveryPathRelativeToWorkDir(t *testing.T) {
 	}
 }
 
-func TestProcessMissingColumnPrintsOne(t *testing.T) {
+func TestPrepareMissingColumnPrintsOne(t *testing.T) {
 	t.Parallel()
 	for column, want := range map[int]int{0: 1, 1: 1, 2: 2, 17: 17} {
 		t.Run(strconv.Itoa(column), func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestProcessMissingColumnPrintsOne(t *testing.T) {
 	}
 }
 
-func TestProcessTestsFalseDropsExactlyTestFileFindings(t *testing.T) {
+func TestPrepareTestsFalseDropsExactlyTestFileFindings(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		rule, path, related string
@@ -123,7 +123,7 @@ func TestProcessTestsFalseDropsExactlyTestFileFindings(t *testing.T) {
 	}
 }
 
-func TestProcessDedupeKeyIsTokenPathLineColumnMessage(t *testing.T) {
+func TestPrepareDedupeKeyIsTokenPathLineColumnMessage(t *testing.T) {
 	t.Parallel()
 	base := finding.Finding{Rule: "a", Message: "m", Pos: at(abs("/w/repo/a.go"), 3, 1)}
 	other := finding.Finding{Rule: "z", Message: "z", Pos: at(abs("/w/repo/z.go"), 1, 1)}
@@ -159,7 +159,7 @@ func TestProcessDedupeKeyIsTokenPathLineColumnMessage(t *testing.T) {
 	}
 }
 
-func TestProcessSortIsPathLineColumnTokenMessageForAnyInputOrder(t *testing.T) {
+func TestPrepareSortIsPathLineColumnTokenMessageForAnyInputOrder(t *testing.T) {
 	t.Parallel()
 	root := abs("/w/m")
 	in := []finding.Finding{
@@ -238,7 +238,7 @@ func committedRepo(t *testing.T, files map[string]string) string {
 
 const fiveLines = "package a\n\nvar one = 1\nvar two = 2\nvar three = 3\n"
 
-func TestProcessNewFromRevKeepsOnlyChangedLinesAndEveryTypecheck(t *testing.T) {
+func TestPrepareNewFromRevKeepsOnlyChangedLinesAndEveryTypecheck(t *testing.T) {
 	repo := committedRepo(t, map[string]string{"a.go": fiveLines, "b.go": fiveLines})
 	a, b := filepath.Join(repo, "a.go"), filepath.Join(repo, "b.go")
 	writeFile(t, a, strings.Replace(fiveLines, "var two = 2", "var two = 22", 1))
@@ -262,7 +262,7 @@ func TestProcessNewFromRevKeepsOnlyChangedLinesAndEveryTypecheck(t *testing.T) {
 	}
 }
 
-func TestProcessNewFromRevMatchesPrintedPathsBelowRepoRoot(t *testing.T) {
+func TestPrepareNewFromRevMatchesPrintedPathsBelowRepoRoot(t *testing.T) {
 	repo := committedRepo(t, map[string]string{"sub/c.go": fiveLines})
 	sub := filepath.Join(repo, "sub")
 	c := filepath.Join(sub, "c.go")
@@ -278,7 +278,7 @@ func TestProcessNewFromRevMatchesPrintedPathsBelowRepoRoot(t *testing.T) {
 	}
 }
 
-func TestProcessNewFromRevGitFailureIsDiffError(t *testing.T) {
+func TestPrepareNewFromRevGitFailureIsDiffError(t *testing.T) {
 	isolateGit(t)
 	cases := map[string]func(t *testing.T) string{
 		"not a repository": func(t *testing.T) string {
@@ -297,15 +297,15 @@ func TestProcessNewFromRevGitFailureIsDiffError(t *testing.T) {
 			wd := dir(t)
 			t.Chdir(wd)
 			in := []finding.Finding{{Rule: finding.TypecheckRule, Message: "m", Pos: at(filepath.Join(wd, "a.go"), 1, 1)}}
-			out, err := finding.Process(t.Context(), in, finding.Options{WorkDir: wd, Tests: true, NewFromRev: "no-such-rev"})
+			out, err := finding.Prepare(t.Context(), in, finding.Options{WorkDir: wd, Tests: true, NewFromRev: "no-such-rev"})
 			if err == nil || !strings.HasPrefix(err.Error(), "diff: ") || out != nil {
-				t.Fatalf("Process = %v, %v; want no findings and a diff: error", out, err)
+				t.Fatalf("Prepare = %v, %v; want no findings and a diff: error", out, err)
 			}
 		})
 	}
 }
 
-func TestProcessNewFromRevOptionLikeRevisionNeverReachesGit(t *testing.T) {
+func TestPrepareNewFromRevOptionLikeRevisionNeverReachesGit(t *testing.T) {
 	repo := committedRepo(t, map[string]string{"a.go": fiveLines, "victim.txt": "keep me\n"})
 	a := filepath.Join(repo, "a.go")
 	writeFile(t, a, strings.Replace(fiveLines, "var two = 2", "var two = 22", 1))
@@ -313,9 +313,9 @@ func TestProcessNewFromRevOptionLikeRevisionNeverReachesGit(t *testing.T) {
 	victim := filepath.Join(repo, "victim.txt")
 	for _, rev := range []string{"--output=" + victim, "-p", "-"} {
 		in := []finding.Finding{{Rule: "r", Message: "changed", Pos: at(a, 4, 1)}}
-		out, err := finding.Process(t.Context(), in, finding.Options{WorkDir: repo, Tests: true, NewFromRev: rev})
+		out, err := finding.Prepare(t.Context(), in, finding.Options{WorkDir: repo, Tests: true, NewFromRev: rev})
 		if err == nil || err.Error() != "diff: revision must not start with '-'" || out != nil {
-			t.Errorf("rev %q: Process = %v, %v; want no findings and diff: revision must not start with '-'", rev, out, err)
+			t.Errorf("rev %q: Prepare = %v, %v; want no findings and diff: revision must not start with '-'", rev, out, err)
 		}
 		data, readErr := os.ReadFile(victim)
 		if readErr != nil || string(data) != "keep me\n" {
