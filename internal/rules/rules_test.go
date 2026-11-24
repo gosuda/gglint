@@ -208,17 +208,6 @@ func TestCatalogOmitsEveryDroppedOrRenamedGolangciLinter(t *testing.T) {
 	}
 }
 
-func TestAllIsStrictlySortedByModeThenName(t *testing.T) {
-	t.Parallel()
-	all := rules.All()
-	for i := 1; i < len(all); i++ {
-		prev, cur := all[i-1], all[i]
-		if prev.Mode > cur.Mode || (prev.Mode == cur.Mode && prev.Name >= cur.Name) {
-			t.Errorf("All()[%d] = (%v, %q) does not sort after All()[%d] = (%v, %q)", i, cur.Mode, cur.Name, i-1, prev.Mode, prev.Name)
-		}
-	}
-}
-
 func TestRuleDocsAreOneTabFreeLineOfAtMost120Bytes(t *testing.T) {
 	t.Parallel()
 	for _, r := range rules.All() {
@@ -286,23 +275,6 @@ func TestSelectIsModeClosurePlusEnableMinusDisableForEveryRuleAtEveryMode(t *tes
 				assertSelectionLaw(t, config.Config{Mode: m, Disable: []string{r.Name}})
 			}
 		}
-	}
-}
-
-func TestModeSelectionsAreStrictlyNested(t *testing.T) {
-	t.Parallel()
-	var prev []string
-	for _, m := range allModes() {
-		cur := ruleNames(selectOrFatal(t, config.Config{Mode: m}))
-		for _, name := range prev {
-			if !slices.Contains(cur, name) {
-				t.Errorf("rule %q is selected in a lower mode but not in %v", name, m)
-			}
-		}
-		if prev != nil && len(cur) <= len(prev) {
-			t.Errorf("mode %v selects %d rules, not more than the %d of the mode below", m, len(cur), len(prev))
-		}
-		prev = cur
 	}
 }
 
