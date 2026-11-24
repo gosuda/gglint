@@ -127,7 +127,7 @@ func (s *session) lint(ctx context.Context) ([]finding.Finding, error) {
 	for i := range raw {
 		raw[i].Rule, raw[i].Check = rules.Token(raw[i].Rule, s.selected)
 	}
-	return finding.Process(ctx, raw, finding.Options{WorkDir: s.wd, Tests: s.cfg.Tests, NewFromRev: s.opts.newFromRev})
+	return finding.Prepare(ctx, raw, finding.Options{WorkDir: s.wd, Tests: s.cfg.Tests, NewFromRev: s.opts.newFromRev})
 }
 
 func (s *session) invocation() (driver.Invocation, error) {

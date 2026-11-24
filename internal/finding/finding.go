@@ -45,7 +45,7 @@ func (f Finding) Token() string {
 	return f.Rule + ":" + f.Check
 }
 
-func Process(ctx context.Context, fs []Finding, opts Options) ([]Finding, error) {
+func Prepare(ctx context.Context, fs []Finding, opts Options) ([]Finding, error) {
 	kept := make([]Finding, 0, len(fs))
 	for _, f := range fs {
 		f = printed(f, opts.WorkDir)
