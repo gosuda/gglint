@@ -84,13 +84,14 @@ go test -race -p 1 -parallel 1 -count=1 -timeout 10m \
   ./internal/analyzers/infiniterecursion ./internal/driver
 go vet -p 1 ./internal/analyzers/reentrantlock ./internal/analyzers/closer \
   ./internal/analyzers/infiniterecursion ./internal/driver ./internal/rules
+git checkout 14a66d9d83269017225a45f8f98792e777a7d04f
 sha256sum -c docs/validation/dogfood/CURRENT.sha256
 ```
 
 `ANALYZERS.md` and `ANALYZERS.sha256` retain the earlier release-effect checkpoint.
 They do not describe the later path-flow source hashes. `CURRENT.sha256` is the
 source manifest for this follow-up. It does not match the current tree, because
-later commits changed eight of its files. The final driver checkpoint below
+later commits changed eight of its files; replay it at published merge `14a66d9`. The final driver checkpoint below
 records the later signature-validator extraction; `DRIVER.sha256` remains
 historical.
 
