@@ -268,6 +268,7 @@ The catalog has 104 rules. `basic` runs 51 of them, `standard` runs 92, and `str
 | `unused` | staticcheck | Reports unused constants, variables, functions, types, and fields (staticcheck U1000). |
 | `unusedresult` | go/analysis | check for unused results of calls to some functions |
 | `waitgroup` | go/analysis | check for misuses of sync.WaitGroup |
+
 ### Added in standard
 
 | Rule | Origin | Description |

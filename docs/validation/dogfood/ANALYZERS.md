@@ -1,9 +1,10 @@
 # Analyzer hardening evidence
 
 This is the earlier release-effect checkpoint. The subsequent executed-path
-repair and its current source manifest are recorded in [PATH-FLOW.md](PATH-FLOW.md).
-The historical `ANALYZERS.sha256` applies to the source revision below; use
-`CURRENT.sha256` to verify the current follow-up sources.
+repair and its source manifest are recorded in [PATH-FLOW.md](PATH-FLOW.md).
+The historical `ANALYZERS.sha256` applies to the source revision below.
+`CURRENT.sha256` applies to the follow-up checkpoint. Later commits changed
+eight of its files. Check it against the recorded tree, not the current tree.
 
 This record covers the mutex handoff, explicit closer, and recursion-exit
 repairs. The focused normal, race, parity, formatting, vet, and self-lint gates
@@ -25,8 +26,8 @@ This record and its source manifest retain that historical identity. The later
 race gates, complete rules retry, mutation controls, and final executable hash.
 Its `FLOW.sha256` applies to the recorded `058707e` checkpoint; checking
 `ANALYZERS.sha256` requires the earlier source snapshot named above. The further
-[compound-initialization and driver follow-up](PATH-FLOW.md) supplies the final
-combined source manifest, `CURRENT.sha256`.
+[compound-initialization and driver follow-up](PATH-FLOW.md) supplies that
+follow-up's combined source manifest, `CURRENT.sha256`.
 
 The toolchain reports `go1.27.4 linux/amd64`. Its `go` executable SHA-256 is
 `de0ae3e082ce7599eae4fb69fa2ef1e43b8f31ffd3fce62cdf81930aa9005050`.

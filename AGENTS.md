@@ -23,4 +23,4 @@
 
 ## Dependencies
 
-- Do not add `github.com/golangci/golangci-lint`, `github.com/spf13/cobra`, or `github.com/spf13/viper` as direct requirements. golangci-lint is an external dev tool, not a module dependency. (Human-supplied: approved project plan.)
+- Do not add `github.com/golangci/golangci-lint`, `github.com/spf13/cobra`, or `github.com/spf13/viper` as direct requirements. golangci-lint is an external dev tool, not a module dependency.
