@@ -59,7 +59,8 @@ func TestStageUnitSkipsUnitsOutsideMainModule(t *testing.T) {
 }
 
 func TestStageUnitAcceptsWhitespaceSeparatedModuleDirective(t *testing.T) {
-	t.Parallel()
+	// Sequential: staging is verified against the working directory.
+	t.Setenv("GOWORK", "")
 	for _, tc := range []struct {
 		name       string
 		goMod      string
@@ -71,25 +72,13 @@ func TestStageUnitAcceptsWhitespaceSeparatedModuleDirective(t *testing.T) {
 		{"tab separated std stays skipped", "module\tstd\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			mod := t.TempDir()
 			if err := os.WriteFile(filepath.Join(mod, "go.mod"), []byte(tc.goMod), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			arg := writeModuleFile(t, mod, "p/p.go")
-			cfg, err := json.Marshal(&unitchecker.Config{
-				ID:         "command-line-arguments",
-				ImportPath: "command-line-arguments",
-				GoFiles:    []string{arg},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			unit := writeFile(t, "unit.cfg", cfg)
-			got, err := stageUnit(unit, t.TempDir())
-			if err != nil {
-				t.Fatalf("stageUnit: %v", err)
-			}
+			t.Chdir(mod)
+			got := stageFiles(t, []string{arg})
 			if tc.wantStaged != (got != "") {
 				t.Fatalf("stageUnit = %q, want staged = %v", got, tc.wantStaged)
 			}
@@ -110,48 +99,82 @@ func writeModuleFile(t *testing.T, dir, rel string) string {
 }
 
 func TestStageUnitVerifiesMetadataLessUnits(t *testing.T) {
-	t.Parallel()
+	// Sequential: each case runs with a different working directory, and
+	// the scope under test is defined by that directory.
+	t.Setenv("GOWORK", "")
 	mod := t.TempDir()
-	if err := os.WriteFile(filepath.Join(mod, "go.mod"), []byte("module example.com/m\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	inModule := writeModuleFile(t, mod, "p/p.go")
-	vendored := writeModuleFile(t, mod, "vendor/example.com/dep/dep.go")
+	writeGoMod(t, mod, "module example.com/m\n")
+	nested := filepath.Join(mod, "sub", "nested")
+	writeGoMod(t, nested, "module example.com/nested\n")
 	outside := writeModuleFile(t, t.TempDir(), "q.go")
 	other := t.TempDir()
-	if err := os.WriteFile(filepath.Join(other, "go.mod"), []byte("module example.com/o\n"), 0o600); err != nil {
+	writeGoMod(t, other, "module example.com/o\n")
+	ws := t.TempDir()
+	if err := os.MkdirAll(ws, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	otherFile := writeModuleFile(t, other, "r.go")
+	if err := os.WriteFile(filepath.Join(ws, "go.work"), []byte("go 1.27\n\nuse ./a\nuse ./b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"a", "b"} {
+		writeGoMod(t, filepath.Join(ws, dir), "module example.com/"+dir+"\n")
+	}
 	for _, tc := range []struct {
 		name       string
+		cwd        string
 		goFiles    []string
 		wantStaged bool
 	}{
-		{"named file in main module", []string{inModule}, true},
-		{"file outside any module", []string{outside}, false},
-		{"vendored file", []string{vendored}, false},
-		{"no files", nil, false},
-		{"files across modules", []string{inModule, otherFile}, false},
+		{"named file in main module", mod, []string{filepath.Join(mod, "p", "p.go")}, true},
+		{"file outside any module", mod, []string{outside}, false},
+		{"vendored file", mod, []string{filepath.Join(mod, "vendor", "example.com", "dep", "dep.go")}, false},
+		{"no files", mod, nil, false},
+		{"files across modules", mod, []string{filepath.Join(mod, "p", "p.go"), filepath.Join(other, "r.go")}, false},
+		{"nested module file from parent", mod, []string{filepath.Join(nested, "n.go")}, false},
+		{"nested module file from itself", nested, []string{filepath.Join(nested, "n.go")}, true},
+		{"workspace member file", filepath.Join(ws, "a"), []string{filepath.Join(ws, "b", "x.go")}, true},
+		{"inactive nested file in workspace", filepath.Join(ws, "a"), []string{filepath.Join(ws, "a", "sub", "nested", "n.go")}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg, err := json.Marshal(&unitchecker.Config{
-				ID:         "command-line-arguments",
-				ImportPath: "command-line-arguments",
-				GoFiles:    tc.goFiles,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			unit := writeFile(t, "unit.cfg", cfg)
-			got, err := stageUnit(unit, t.TempDir())
-			if err != nil {
-				t.Fatalf("stageUnit: %v", err)
-			}
+			writeModuleFile(t, mod, "p/p.go")
+			writeModuleFile(t, nested, "n.go")
+			writeModuleFile(t, other, "r.go")
+			writeModuleFile(t, filepath.Join(ws, "b"), "x.go")
+			writeModuleFile(t, filepath.Join(ws, "a", "sub", "nested"), "n.go")
+			writeGoMod(t, filepath.Join(ws, "a", "sub", "nested"), "module example.com/anested\n")
+			t.Chdir(tc.cwd)
+			got := stageFiles(t, tc.goFiles)
 			if tc.wantStaged != (got != "") {
 				t.Fatalf("stageUnit = %q, want staged = %v", got, tc.wantStaged)
 			}
 		})
 	}
+}
+
+func writeGoMod(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func stageFiles(t *testing.T, files []string) string {
+	t.Helper()
+	cfg, err := json.Marshal(&unitchecker.Config{
+		ID:         "command-line-arguments",
+		ImportPath: "command-line-arguments",
+		GoFiles:    files,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit := writeFile(t, "unit.cfg", cfg)
+	got, err := stageUnit(unit, t.TempDir())
+	if err != nil {
+		t.Fatalf("stageUnit: %v", err)
+	}
+	return got
 }

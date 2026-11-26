@@ -122,7 +122,7 @@ func stageEligible(unit *unitchecker.Config) bool {
 }
 
 // verifiedModuleUnit reports whether every file in the unit sits inside one
-// main module and outside its vendor directories. Synthetic file packages
+// active module and outside its vendor directories. Synthetic file packages
 // carry no module metadata, so their scope is verified by directory.
 func verifiedModuleUnit(unit *unitchecker.Config) bool {
 	if len(unit.GoFiles) == 0 {
@@ -132,7 +132,11 @@ func verifiedModuleUnit(unit *unitchecker.Config) bool {
 	if err != nil {
 		return false
 	}
-	root, ok := unitModuleRoot(unit.GoFiles, cwd)
+	roots := config.ActiveModuleRoots(cwd)
+	if len(roots) == 0 {
+		return false
+	}
+	root, ok := unitModuleRoot(unit.GoFiles, cwd, roots)
 	if !ok {
 		return false
 	}
@@ -145,9 +149,9 @@ func verifiedModuleUnit(unit *unitchecker.Config) bool {
 }
 
 // unitModuleRoot returns the single enclosing module of every file, or
-// reports false when a file sits outside any module, files span modules,
-// or a file sits under a vendor directory.
-func unitModuleRoot(files []string, cwd string) (string, bool) {
+// reports false when a file sits outside any active module, files span
+// modules, or a file sits under a vendor directory.
+func unitModuleRoot(files []string, cwd string, roots []string) (string, bool) {
 	root := ""
 	for _, name := range files {
 		abs := name
@@ -156,10 +160,14 @@ func unitModuleRoot(files []string, cwd string) (string, bool) {
 		}
 		dir := filepath.Dir(abs)
 		found, ok := config.EnclosingModule(dir)
-		if !ok || (root != "" && found != root) {
+		if !ok || !config.ContainsRoot(roots, found) {
 			return "", false
 		}
-		root = found
+		if root == "" {
+			root = found
+		} else if root != found {
+			return "", false
+		}
 		if config.InModuleVendor(root, dir) {
 			return "", false
 		}
