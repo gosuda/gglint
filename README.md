@@ -190,7 +190,9 @@ fixer writes and what it refuses is fixed by this contract:
   `changed without an applied fix`, `deleted during fix`, and `created during
   fix`. An unexpected source change is restored through an already-open
   package directory. Restoring a file replaces a symlink at its destination
-  instead of following it. Ordinary refusals continue to the final report;
+  instead of following it. A replaced file keeps its permission bits, but
+  extended attributes and hard-link sharing are not preserved across
+  replacement or rollback. Ordinary refusals continue to the final report;
   analysis, publication or restoration failures remain errors.
 - Suggested only: every finding without an applied fix stays in the report.
   Rules without fixes, such as `checkimports` denials, and files the fixer
