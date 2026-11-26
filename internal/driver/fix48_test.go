@@ -16,10 +16,15 @@ import (
 // sub/sub_windows.go and ignored.go are excluded by build constraints.
 // With vendorDep a vendored copy of the dependency is present. The go
 // directive, dependency version and sums come from the enclosing module
-// so the fixture survives upgrades.
 func scopeFixture(t *testing.T, vendorDep bool) string {
 	t.Helper()
 	root := t.TempDir()
+	writeScopeFixture(t, root, vendorDep)
+	return root
+}
+
+func writeScopeFixture(t *testing.T, root string, vendorDep bool) {
+	t.Helper()
 	goMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
 		t.Fatalf("read enclosing go.mod: %v", err)
@@ -65,7 +70,6 @@ func scopeFixture(t *testing.T, vendorDep bool) string {
 			t.Fatalf("go mod vendor: %v\n%s", err, out)
 		}
 	}
-	return root
 }
 
 func TestPackageGoFilesExcludesDependencyAndStandardSources(t *testing.T) {

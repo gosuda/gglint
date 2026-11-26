@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/gosuda/gglint/internal/config"
 )
 
 // GoSnapshot owns the source bytes and open package directories until Close.
@@ -69,6 +71,7 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 			Standard bool
 			Module   *struct {
 				Main bool
+				Dir  string
 			}
 		}
 		if err := json.UnmarshalDecode(dec, &pkg); errors.Is(err, io.EOF) {
@@ -79,7 +82,7 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 		if pkg.Dir == "" {
 			continue
 		}
-		if pkg.Standard || pkg.Module == nil || !pkg.Module.Main || inVendorDir(pkg.Dir) {
+		if pkg.Standard || pkg.Module == nil || !pkg.Module.Main || config.InModuleVendor(pkg.Module.Dir, pkg.Dir) {
 			continue
 		}
 		// IgnoredGoFiles are existing sources the build excludes for this
@@ -93,22 +96,6 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 	}
 	slices.Sort(files)
 	return slices.Compact(files), nil
-}
-
-// inVendorDir reports whether dir sits under a vendor directory. The go
-// command ignores vendor directories for package patterns, so their copies
-// belong to dependencies even when queried through an explicit vendor path.
-func inVendorDir(dir string) bool {
-	for current := dir; ; {
-		if filepath.Base(current) == "vendor" {
-			return true
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return false
-		}
-		current = parent
-	}
 }
 
 // SnapshotGoFiles opens only the selected source files. Each package directory
