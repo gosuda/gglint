@@ -38,7 +38,7 @@ A clean run prints `gglint: 0 findings in 0 files (mode standard)` and exits 0. 
 - One binary, one catalog: no plugin loading, no linter config schema to learn beyond `gglint.toml`.
 - Nested modes: `basic` reports defects with positive evidence, `standard` (the default) adds rewrites and the gglint concurrency and lifetime rules, `strict` adds rules that report missing proof of safety.
 - Agent-readable output: the default `agent` format puts each finding on one line and ends with per-rule counts; `-format json` emits one object.
-- Suggested fixes: `gglint run -fix` runs `go vet -fix` through the same vettool, then reports what remains.
+- Suggested fixes: `gglint run -fix` applies admitted fixes, refuses the rest with a message, and reports what is left (see "Automatic fixes").
 - Kept evidence: every rule name, mode, origin, and description in this file is tested against the registered catalog.
 
 ## Usage
@@ -58,7 +58,7 @@ A clean run prints `gglint: 0 findings in 0 files (mode standard)` and exits 0. 
 | `-config PATH` | Use this `gglint.toml` instead of searching for one. A relative path is resolved against the working directory. |
 | `-mode basic\|standard\|strict` | Override the `mode` in the config file. |
 | `-format agent\|text\|json` | Output format. The default is `agent`. |
-| `-fix` | Apply suggested fixes, then report what is left. |
+| `-fix` | Apply admitted fixes, refuse the rest with a message, then report what is left. |
 | `-new-from-rev REV` | Report only findings on lines changed since `REV`, by comparing each finding with `git diff REV`. `typecheck` findings are always kept. |
 
 ### `gglint rules`
@@ -169,6 +169,31 @@ The `nolint` rule checks the directives themselves: it reports malformed or unkn
 The modes are nested: every rule in `basic` is in `standard`, and every rule in `standard` is in `strict`. Some rules also check more in a higher mode; their descriptions in [Rules](#rules) say how.
 
 The rewrite rules `modernize`, `gofumpt`, `gosimple`, `misspell`, and `usetesting` report only findings that carry a fix, so `gglint run -fix` resolves every finding of such a rule.
+
+### Automatic fixes
+
+`gglint run -fix` recomputes diagnostics from the current file content in the
+same run: fixes are never stored, so there is no cross-run staleness. What the
+fixer writes and what it refuses is fixed by this contract:
+
+- Admitted: a fix is applied only to a `.go` file in the analyzed packages
+  that is not generated, with test files admitted only when tests are on.
+  After the fix, every changed file must still parse when it parsed before.
+- Refused with a message: a suggested fix the gate will not apply leaves its
+  file byte-identical and prints `gglint: refused <path>: <reason>` on
+  stderr. The reasons are `outside the analysis scope`, `generated file`,
+  `test file excluded when tests are off`, `does not parse after fix`,
+  `changed without an applied fix`, and `created during fix`. A refused file
+  is restored to its pre-fix bytes, so a refusal never leaves a partial
+  write behind.
+- Suggested only: every finding without an applied fix stays in the report.
+  Rules without fixes, such as `checkimports` denials, and files the fixer
+  cannot parse never change on disk.
+
+Applying the fix twice yields a byte-identical file, and repeated runs on a
+clean tree change nothing. Do not modify files concurrently with `-fix`: the
+gate restores files that fail its post-fix checks, but a concurrent write
+that still parses is indistinguishable from an applied fix.
 
 ### Complexity limits
 

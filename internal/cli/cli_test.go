@@ -788,7 +788,7 @@ func TestFixWithTestsOffLeavesTestFilesByteIdentical(t *testing.T) {
 	testFile := filepath.Join(dir, "fixtests", "f_test.go")
 	before := readFile(t, testFile)
 	writeFile(t, filepath.Join(dir, config.FileName), testsOff)
-	assertResult(t, gglint(t, dir, "run", "-format", "text", "-fix", "./fixtests"), result{stderr: configLine(testsOff)})
+	assertResult(t, gglint(t, dir, "run", "-format", "text", "-fix", "./fixtests"), result{stderr: configLine(testsOff) + "gglint: refused fixtests/f_test.go: test file excluded when tests are off\n"})
 	if got, want := readFile(t, filepath.Join(dir, "fixtests", "f.go")), "package fixtests\n\nfunc Two() int {\n\treturn 2\n}\n"; got != want {
 		t.Errorf("fixed fixtests/f.go = %q, want %q", got, want)
 	}

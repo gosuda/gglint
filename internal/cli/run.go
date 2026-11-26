@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/driver"
@@ -35,7 +36,7 @@ func parseRunFlags(args []string, stderr io.Writer) (runOptions, error) {
 	fs.StringVar(&opts.configPath, "config", "", "path of gglint.toml")
 	fs.StringVar(&opts.mode, "mode", "", "basic, standard, or strict")
 	fs.StringVar(&opts.format, "format", report.FormatAgent, "agent, text, or json")
-	fs.BoolVar(&opts.fix, "fix", false, "apply suggested fixes before reporting")
+	fs.BoolVar(&opts.fix, "fix", false, "apply admitted fixes, refuse the rest with a message, then report what is left")
 	fs.StringVar(&opts.newFromRev, "new-from-rev", "", "report only findings in lines changed since REV")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
@@ -86,7 +87,7 @@ func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if s.printed != "" && say(stderr, "config %s", s.printed) != nil {
 		return exitFailure
 	}
-	findings, err := s.lint(ctx)
+	findings, err := s.lint(ctx, stderr)
 	switch {
 	case err == nil:
 		return s.finish(stdout, stderr, findings)
@@ -110,13 +111,13 @@ func (s *session) finish(stdout, stderr io.Writer, findings []finding.Finding) i
 	return exitFindings
 }
 
-func (s *session) lint(ctx context.Context) ([]finding.Finding, error) {
+func (s *session) lint(ctx context.Context, stderr io.Writer) ([]finding.Finding, error) {
 	inv, err := s.invocation()
 	if err != nil {
 		return nil, fmt.Errorf("internal: %w", err)
 	}
 	if s.opts.fix {
-		if fixErr := driver.Fix(ctx, inv); fixErr != nil {
+		if fixErr := s.fix(ctx, inv, stderr); fixErr != nil {
 			return nil, fixErr
 		}
 	}
@@ -128,6 +129,37 @@ func (s *session) lint(ctx context.Context) ([]finding.Finding, error) {
 		raw[i].Rule, raw[i].Check = rules.Token(raw[i].Rule, s.selected)
 	}
 	return finding.Prepare(ctx, raw, finding.Options{WorkDir: s.wd, Tests: s.cfg.Tests, NewFromRev: s.opts.newFromRev})
+}
+
+// fix runs the fixer, surfaces every refused fix on stderr, and verifies the
+// tree. A refused file is restored to its pre-fix bytes, so a refusal never
+// leaves a partial write behind.
+func (s *session) fix(ctx context.Context, inv driver.Invocation, stderr io.Writer) error {
+	pre, err := driver.SnapshotGoFiles(s.wd)
+	if err != nil {
+		return fmt.Errorf("fix refused: cannot snapshot: %w", err)
+	}
+	refusals, fixErr := driver.Fix(ctx, inv)
+	for _, r := range refusals {
+		if _, err := fmt.Fprintln(stderr, r); err != nil {
+			return fmt.Errorf("internal: %w", err)
+		}
+	}
+	if fixErr != nil {
+		return fixErr
+	}
+	var violated []string
+	for _, v := range driver.VerifyFixed(s.wd, pre, nil, s.cfg.Tests) {
+		if uerr := v.Undo(s.wd); uerr != nil {
+			violated = append(violated, v.Path+": "+v.Reason+" (restore failed: "+uerr.Error()+")")
+			continue
+		}
+		violated = append(violated, v.Path+": "+v.Reason+"; file restored")
+	}
+	if len(violated) > 0 {
+		return fmt.Errorf("fix refused: %s", strings.Join(violated, "; "))
+	}
+	return nil
 }
 
 func (s *session) invocation() (driver.Invocation, error) {
