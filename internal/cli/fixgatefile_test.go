@@ -3,6 +3,7 @@ package cli_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,6 +11,7 @@ func TestFixNamesFileInMainModule(t *testing.T) {
 	t.Parallel()
 	dir := workspace(t, "")
 	nested, _ := writeNestedFixable(t, dir)
+
 	got := gglint(t, dir, "run", "-fix", "./nested/nested.go")
 	if got.code != 0 {
 		t.Fatalf("named file result = %+v", got)
@@ -32,7 +34,7 @@ func TestFixDoesNotRewriteNamedVendoredFile(t *testing.T) {
 	if after := readFile(t, filepath.Join(vendored, "dep.go")); after != before {
 		t.Fatalf("vendored file was rewritten: %q", after)
 	}
-	if got.stdout == "" {
-		t.Fatalf("vendored finding left the report: %+v", got)
+	if !strings.Contains(got.stdout, "dep.go") {
+		t.Fatalf("vendored diagnostic missing from report: %+v", got)
 	}
 }
