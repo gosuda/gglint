@@ -405,12 +405,8 @@ golangci-lint run ./...
 go test -count=1 -run TestCorpusBudget ./internal/precision/
 ```
 
-GitHub Actions runs these gates on pull requests, pushes to `main`, merge groups, and manual dispatches. Three Linux jobs separate the race suite, the memory-heavy vettool race tests, and linting; a Windows job runs the test suite. README changes run the checks because the rule catalog tests read this file.
+Native Depot CI runs the Linux race, vettool, and lint checks for internal pull requests, merge groups, main pushes, and Depot dispatches. Fork pull requests use the same Linux checks through GitHub Actions on Depot runners. Windows checks run weekly or through GitHub workflow dispatch on `depot-windows-2022-4`. All runner allocations use Depot. Runtime and billing savings require completed runs on these runners; job-count reductions do not establish either. README changes run the checks because the rule catalog tests read this file.
 
 ## License
 
 gglint is licensed under Apache-2.0; see [LICENSE](LICENSE). Code copied from gVisor keeps its file headers and is covered by [third_party/gvisor/LICENSE](third_party/gvisor/LICENSE). Test fixtures copied from loGos are covered by [third_party/logos/LICENSE](third_party/logos/LICENSE).
-
-## CI ownership
-
-Native Depot CI runs the Linux race, vettool, and lint checks for internal pull requests, merge groups, main pushes, and Depot dispatches. Fork pull requests use the same Linux checks through GitHub Actions on Depot runners. Windows checks run weekly or through GitHub workflow dispatch on `depot-windows-2022-4`. All runner allocations use Depot. Runtime and billing savings require completed runs on these runners; job-count reductions do not establish either.
