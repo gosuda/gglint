@@ -10,6 +10,7 @@ import (
 )
 
 func TestPackageGoFilesKeepsModuleUnderVendorPath(t *testing.T) {
+	t.Parallel()
 	parent := t.TempDir()
 	root := filepath.Join(parent, "vendor", "proj")
 	if err := os.MkdirAll(root, 0o750); err != nil {

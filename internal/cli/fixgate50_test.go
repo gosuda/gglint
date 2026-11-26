@@ -6,8 +6,10 @@ import (
 	"testing"
 )
 
-const nestedFixable = "package nested\n\nfunc One() int {\n\n\treturn 1\n}\n"
-const deepFixable = "package deep\n\nfunc One() int {\n\n\treturn 1\n}\n"
+const (
+	nestedFixable = "package nested\n\nfunc One() int {\n\n\treturn 1\n}\n"
+	deepFixable   = "package deep\n\nfunc One() int {\n\n\treturn 1\n}\n"
+)
 
 func writeNestedFixable(t *testing.T, dir string) (nested, deep string) {
 	t.Helper()

@@ -23,13 +23,14 @@ func scopeFixture(t *testing.T, vendorDep bool) string {
 	return root
 }
 
-func writeScopeFixture(t *testing.T, root string, vendorDep bool) {
+// enclosingDependency pins the dependency version, go directive and sums
+// from the enclosing module, so the fixture survives upgrades.
+func enclosingDependency(t *testing.T) (version, directive string, sums []string) {
 	t.Helper()
 	goMod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
 		t.Fatalf("read enclosing go.mod: %v", err)
 	}
-	var version, directive string
 	for line := range strings.Lines(strings.TrimSpace(string(goMod))) {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[0] == "golang.org/x/tools" {
@@ -46,7 +47,6 @@ func writeScopeFixture(t *testing.T, root string, vendorDep bool) {
 	if err != nil {
 		t.Fatalf("read enclosing go.sum: %v", err)
 	}
-	var sums []string
 	for line := range strings.Lines(strings.TrimSpace(string(goSum))) {
 		if strings.HasPrefix(line, "golang.org/x/tools "+version+" ") ||
 			strings.HasPrefix(line, "golang.org/x/tools "+version+"/go.mod ") {
@@ -56,6 +56,12 @@ func writeScopeFixture(t *testing.T, root string, vendorDep bool) {
 	if len(sums) != 2 {
 		t.Fatalf("want source and module sums for golang.org/x/tools %s, got %q", version, sums)
 	}
+	return version, directive, sums
+}
+
+func writeScopeFixture(t *testing.T, root string, vendorDep bool) {
+	t.Helper()
+	version, directive, sums := enclosingDependency(t)
 	writeGo(t, root, "go.mod", "module example.com/fixscope\n\n"+directive+"\n\nrequire golang.org/x/tools "+version+"\n")
 	writeGo(t, root, "go.sum", strings.Join(sums, "\n")+"\n")
 	writeGo(t, root, "main.go", "package main\n\nimport _ \"golang.org/x/tools/go/ast/astutil\"\n\nfunc main() {}\n")
@@ -73,6 +79,7 @@ func writeScopeFixture(t *testing.T, root string, vendorDep bool) {
 }
 
 func TestPackageGoFilesExcludesDependencyAndStandardSources(t *testing.T) {
+	t.Parallel()
 	root := scopeFixture(t, true)
 	inv := invocation(root)
 	inv.Patterns = []string{"./...", "fmt", "golang.org/x/tools/go/ast/astutil", "example.com/fixscope/vendor/golang.org/x/tools/go/ast/astutil"}
@@ -84,7 +91,7 @@ func TestPackageGoFilesExcludesDependencyAndStandardSources(t *testing.T) {
 		if !strings.HasPrefix(f, root+string(os.PathSeparator)) {
 			t.Errorf("selected %q outside the main module", f)
 		}
-		for _, elem := range strings.Split(f, string(os.PathSeparator)) {
+		for elem := range strings.SplitSeq(f, string(os.PathSeparator)) {
 			if elem == "vendor" {
 				t.Errorf("selected vendored source %q", f)
 			}

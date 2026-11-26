@@ -48,17 +48,26 @@ type FixResult struct {
 	Files    map[string][]byte
 }
 
-func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
+// stageDir creates the private staging directory for one fix run and
+// resolves it to absolute: the vettool starts in each package directory,
+// so a relative TMPDIR would otherwise resolve the staging directory
+// against the wrong directory for subpackages.
+func stageDir() (string, error) {
 	directory, err := os.MkdirTemp("", "gglint-fixes-")
 	if err != nil {
-		return FixResult{}, loadError(err.Error())
+		return "", loadError(err.Error())
 	}
-	// The vettool starts in each package directory, so a relative TMPDIR
-	// would resolve the staging directory against the wrong directory for
-	// every subpackage. Resolve it once against the invoking directory.
 	directory, err = filepath.Abs(directory)
 	if err != nil {
-		return FixResult{}, loadError(err.Error())
+		return "", loadError(err.Error())
+	}
+	return directory, nil
+}
+
+func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
+	directory, err := stageDir()
+	if err != nil {
+		return FixResult{}, err
 	}
 	defer func() { _ = os.RemoveAll(directory) }()
 	out, err := execute(ctx, inv, "-json", "-fix-output="+directory)

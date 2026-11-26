@@ -8,6 +8,7 @@ import (
 )
 
 func TestPackageGoFilesAdmitsNamedFileInMainModule(t *testing.T) {
+	t.Parallel()
 	root := scopeFixture(t, false)
 	inv := invocation(root)
 	inv.Patterns = []string{"main.go"}
@@ -21,6 +22,7 @@ func TestPackageGoFilesAdmitsNamedFileInMainModule(t *testing.T) {
 }
 
 func TestPackageGoFilesSkipsNamedVendoredFile(t *testing.T) {
+	t.Parallel()
 	root := scopeFixture(t, true)
 	inv := invocation(root)
 	inv.Patterns = []string{"vendor/golang.org/x/tools/go/ast/astutil/rewrite.go"}

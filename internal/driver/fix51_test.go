@@ -10,6 +10,7 @@ import (
 )
 
 func TestPackageGoFilesIncludesBuildExcludedSources(t *testing.T) {
+	t.Parallel()
 	root := scopeFixture(t, false)
 	inv := invocation(root)
 	inv.Patterns = []string{"./..."}

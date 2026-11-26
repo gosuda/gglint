@@ -57,8 +57,8 @@ func TestApplyRefusesFixForSkippedSymlink(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := pre.Close(); err != nil {
-			t.Error(err)
+		if cerr := pre.Close(); cerr != nil {
+			t.Error(cerr)
 		}
 	})
 	changed := strings.Replace(plainMain, "return 1", "return 2", 1)
