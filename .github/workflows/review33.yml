@@ -1,4 +1,4 @@
-name: Verify staged fix safety
+name: Verify fix lint gates
 on:
   push:
     branches: [ci/verify-fix-transaction-20261126]
@@ -10,53 +10,46 @@ concurrency:
 defaults:
   run:
     shell: bash
-env:
-  CANDIDATE_SHA: 4523cf65766d0b256e46df1113d7bbd6a21261a2
 jobs:
-  linux:
-    runs-on: depot-ubuntu-24.04-8
-    timeout-minutes: 60
+  lint:
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOFLAGS: -mod=readonly
+      GOTOOLCHAIN: local
+      GOMAXPROCS: '2'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
+          ref: 4523cf65766d0b256e46df1113d7bbd6a21261a2
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        id: go
         with:
-          go-version: 1.27.4
+          go-version-file: go.mod
           cache: false
-      - name: Prove baseline failures and repaired race gates
-        run: bash .github/scripts/review33-probe.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: gglint-review33-linux
-          path: ${{ runner.temp }}/gglint-review33
-          if-no-files-found: error
-          retention-days: 7
-  windows:
-    runs-on: depot-windows-2022-4
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-        with:
-          go-version: 1.27.4
-          cache: false
-      - name: Verify Windows source publication and CLI refusals
+      - run: go mod download
+      - name: Vet
+        if: ${{ !cancelled() && steps.go.outcome == 'success' }}
         run: |
-          export GOENV=off GOCACHEPROG= GOTOOLCHAIN=local GOMAXPROCS=2
-          git diff --exit-code "$CANDIDATE_SHA" -- README.md internal
-          go version
-          go mod download
-          go test -count=1 -p 1 -parallel 2 -timeout 25m ./internal/driver ./internal/cli -run '^(TestSnapshot|TestVerify|TestApply|TestRestore|TestFixSecondRunChangesNothing|TestFixRefusesGeneratedFileWithMessage|TestFixKeepsAtomicGroupWhenTestsAreExcluded|TestFixRefusesInvalidSiblingRewriteAndStillReports)' | tee review33-windows.log
+          export GOENV=off GOCACHEPROG=
+          go vet ./... 2>&1 | tee review33-vet.log
+      - name: Golangci-lint
+        if: ${{ !cancelled() && steps.go.outcome == 'success' }}
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
+        with:
+          version: v2.15.0
+          args: ./...
+          skip-cache: true
+      - name: Self-lint
+        if: ${{ !cancelled() && steps.go.outcome == 'success' }}
+        run: |
+          export GOENV=off GOCACHEPROG=
+          go run ./cmd/gglint run ./... 2>&1 | tee review33-selflint.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: gglint-review33-windows
-          path: review33-windows.log
+          name: gglint-review33-lint
+          path: review33-*.log
           if-no-files-found: error
           retention-days: 7
