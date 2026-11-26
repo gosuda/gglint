@@ -97,15 +97,30 @@ jobs:
     name: windows
     runs-on: windows-2022
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
         with:
           go-version-file: go.mod
           cache: false
+
+      # Same lockfile-keyed cache as the check jobs. The key keeps the
+      # operating system so Windows reuses only Windows build outputs;
+      # restore-keys fall back to the previous lockfile revision.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~\AppData\Local\go-build
+          key: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-windows-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: |
+            go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-windows-
 
       - name: Download dependencies
         run: go mod download
