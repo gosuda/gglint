@@ -1,8 +1,10 @@
-# Linux parity for .github/workflows/ci.yml. The Windows job stays on GitHub
-# Actions until cutover; Depot CI is Linux-only here.
+# Internal PR, merge-queue, and main Linux checks run in native Depot CI.
+# GitHub Actions runs fork Linux checks and weekly/manual Windows on Depot.
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
   merge_group:
   workflow_dispatch:
