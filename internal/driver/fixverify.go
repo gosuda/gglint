@@ -83,6 +83,13 @@ func appendPackageFiles(files []string, dir string, groups ...[]string) []string
 	return files
 }
 
+// scopeCache remembers the active main modules across the packages of one
+// selection, so synthetic file packages resolve them only once.
+type scopeCache struct {
+	roots   []string
+	checked bool
+}
+
 // selectPackage appends the snapshot files of one listed package, or
 // nothing when the package sits outside the writable scope.
 func (s *scopeCache) selectPackage(inv Invocation, files []string, pkg packageRecord) []string {
@@ -116,13 +123,6 @@ type packageRecord struct {
 type packageModule struct {
 	Main bool
 	Dir  string
-}
-
-// scopeCache remembers the active main modules across the packages of one
-// selection, so synthetic file packages resolve them only once.
-type scopeCache struct {
-	roots   []string
-	checked bool
 }
 
 // moduleDir returns the module directory governing a package for snapshots:
