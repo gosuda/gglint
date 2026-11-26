@@ -1,0 +1,62 @@
+name: Verify staged fix safety
+on:
+  push:
+    branches: [ci/verify-fix-transaction-20261126]
+permissions:
+  contents: read
+concurrency:
+  group: review33-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+env:
+  CANDIDATE_SHA: e467a91a2631ee2f3a73842fc35077e5832589ef
+jobs:
+  linux:
+    runs-on: depot-ubuntu-24.04-8
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: 1.27.4
+          cache: false
+      - name: Prove baseline failures and repaired race gates
+        run: bash .github/scripts/review33-probe.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: gglint-review33-linux
+          path: ${{ runner.temp }}/gglint-review33
+          if-no-files-found: error
+          retention-days: 7
+  windows:
+    runs-on: depot-windows-2022-4
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: 1.27.4
+          cache: false
+      - name: Verify Windows source publication and CLI refusals
+        run: |
+          export GOENV=off GOCACHEPROG= GOTOOLCHAIN=local GOMAXPROCS=2
+          git diff --exit-code "$CANDIDATE_SHA" -- README.md internal
+          go version
+          go mod download
+          go test -count=1 -p 1 -parallel 2 -timeout 25m ./internal/driver ./internal/cli -run '^(TestSnapshot|TestVerify|TestApply|TestRestore|TestFixSecondRunChangesNothing|TestFixRefusesGeneratedFileWithMessage|TestFixKeepsAtomicGroupWhenTestsAreExcluded|TestFixRefusesInvalidSiblingRewriteAndStillReports)' | tee review33-windows.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: gglint-review33-windows
+          path: review33-windows.log
+          if-no-files-found: error
+          retention-days: 7
