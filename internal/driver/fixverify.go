@@ -66,7 +66,7 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 		} else if err != nil {
 			return nil, fmt.Errorf("decode fix packages: %w", err)
 		}
-		files = scope.selectPackage(ctx, inv, files, pkg)
+		files = scope.selectPackage(inv, files, pkg)
 	}
 	slices.Sort(files)
 	return slices.Compact(files), nil
@@ -81,6 +81,21 @@ func appendPackageFiles(files []string, dir string, groups ...[]string) []string
 		}
 	}
 	return files
+}
+
+// selectPackage appends the snapshot files of one listed package, or
+// nothing when the package sits outside the writable scope.
+func (s *scopeCache) selectPackage(inv Invocation, files []string, pkg packageRecord) []string {
+	if pkg.Dir == "" || pkg.Standard {
+		return files
+	}
+	if _, ok := s.moduleDir(inv.WorkDir, pkg.Module, pkg.Dir); !ok {
+		return files
+	}
+	// IgnoredGoFiles are existing sources the build excludes for this
+	// configuration. They are snapshotted so verification still refuses
+	// any change to them, even though no staged fix can target them.
+	return appendPackageFiles(files, pkg.Dir, pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles, pkg.IgnoredGoFiles)
 }
 
 // packageRecord is one go list -json package description.
@@ -103,32 +118,17 @@ type packageModule struct {
 	Dir  string
 }
 
-// scopeCache remembers the active main module across the packages of one
-// selection, so synthetic file packages resolve it only once.
+// scopeCache remembers the active main modules across the packages of one
+// selection, so synthetic file packages resolve them only once.
 type scopeCache struct {
-	dir     string
+	roots   []string
 	checked bool
-}
-
-// selectPackage appends the snapshot files of one listed package, or
-// nothing when the package sits outside the writable scope.
-func (s *scopeCache) selectPackage(ctx context.Context, inv Invocation, files []string, pkg packageRecord) []string {
-	if pkg.Dir == "" || pkg.Standard {
-		return files
-	}
-	if _, ok := s.moduleDir(ctx, inv.WorkDir, pkg.Module, pkg.Dir); !ok {
-		return files
-	}
-	// IgnoredGoFiles are existing sources the build excludes for this
-	// configuration. They are snapshotted so verification still refuses
-	// any change to them, even though no staged fix can target them.
-	return appendPackageFiles(files, pkg.Dir, pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles, pkg.IgnoredGoFiles)
 }
 
 // moduleDir returns the module directory governing a package for snapshots:
 // the package's own main module, or the active main module for synthetic
 // file packages without metadata. It reports false for anything outside.
-func (s *scopeCache) moduleDir(ctx context.Context, workDir string, module *packageModule, pkgDir string) (string, bool) {
+func (s *scopeCache) moduleDir(workDir string, module *packageModule, pkgDir string) (string, bool) {
 	if module != nil {
 		if !module.Main {
 			return "", false
@@ -139,37 +139,21 @@ func (s *scopeCache) moduleDir(ctx context.Context, workDir string, module *pack
 		return module.Dir, true
 	}
 	// Synthetic file packages carry no module metadata: verify their
-	// directory against the active main module instead of skipping
-	// their fixes silently.
+	// directory against the active main modules instead of skipping
+	// their fixes silently. A single newline-joined path would admit
+	// nothing; the workspace members are checked one by one.
 	if !s.checked {
 		s.checked = true
-		if dir, err := mainModuleDir(ctx, workDir); err == nil {
-			s.dir = dir
-		}
+		s.roots = config.ActiveModuleRoots(workDir)
 	}
-	if s.dir == "" || config.InModuleVendor(s.dir, pkgDir) {
+	root, ok := config.EnclosingModule(pkgDir)
+	if !ok || !config.ContainsRoot(s.roots, root) {
 		return "", false
 	}
-	return s.dir, true
-}
-
-// mainModuleDir resolves the active main module directory for workDir. It
-// fails when workDir is not inside a module, so callers fail closed.
-func mainModuleDir(ctx context.Context, workDir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}")
-	cmd.Dir = workDir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		return "", fmt.Errorf("resolve main module: %w: %s", err, strings.TrimSpace(stderr.String()))
+	if config.InModuleVendor(root, pkgDir) {
+		return "", false
 	}
-	if dir := strings.TrimSpace(stdout.String()); dir != "" {
-		return dir, nil
-	}
-	return "", errors.New("resolve main module: empty directory")
+	return root, true
 }
 
 // SnapshotGoFiles opens only the selected source files. Each package directory
