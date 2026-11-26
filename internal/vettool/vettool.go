@@ -174,10 +174,9 @@ func modulePathOf(root string) (string, bool) {
 		return "", false
 	}
 	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
-		if path, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
-			if name := strings.TrimSpace(path); name != "" {
-				return name, true
-			}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "module" {
+			return fields[1], true
 		}
 	}
 	return "", false

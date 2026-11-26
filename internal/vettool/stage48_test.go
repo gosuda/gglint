@@ -58,6 +58,45 @@ func TestStageUnitSkipsUnitsOutsideMainModule(t *testing.T) {
 	}
 }
 
+func TestStageUnitAcceptsWhitespaceSeparatedModuleDirective(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		goMod      string
+		wantStaged bool
+	}{
+		{"space separated", "module example.com/m\n", true},
+		{"tab separated", "module\texample.com/m\n", true},
+		{"padded with comment", "  module   example.com/m   // local\n", true},
+		{"tab separated std stays skipped", "module\tstd\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mod := t.TempDir()
+			if err := os.WriteFile(filepath.Join(mod, "go.mod"), []byte(tc.goMod), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			arg := writeModuleFile(t, mod, "p/p.go")
+			cfg, err := json.Marshal(&unitchecker.Config{
+				ID:         "command-line-arguments",
+				ImportPath: "command-line-arguments",
+				GoFiles:    []string{arg},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			unit := writeFile(t, "unit.cfg", cfg)
+			got, err := stageUnit(unit, t.TempDir())
+			if err != nil {
+				t.Fatalf("stageUnit: %v", err)
+			}
+			if tc.wantStaged != (got != "") {
+				t.Fatalf("stageUnit = %q, want staged = %v", got, tc.wantStaged)
+			}
+		})
+	}
+}
+
 func writeModuleFile(t *testing.T, dir, rel string) string {
 	t.Helper()
 	path := filepath.Join(dir, rel)
