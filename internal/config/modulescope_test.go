@@ -22,18 +22,17 @@ func TestEnclosingModuleFindsNearestGoMod(t *testing.T) {
 	if !ok {
 		t.Fatalf("EnclosingModule(%q) failed inside a module", nested)
 	}
-	want, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Fatalf("EnclosingModule(%q) = %q, want %q", nested, got, want)
+	// Compare canonically: under a symlinked TMPDIR the input spelling
+	// and the resolved expectation name the same directory.
+	if !config.SameDir(got, root) {
+		t.Fatalf("EnclosingModule(%q) = %q, want %q", nested, got, root)
 	}
 }
 
 func TestEnclosingModuleFailsClosedOutsideModules(t *testing.T) {
 	t.Parallel()
-	outside, err := filepath.EvalSymlinks(t.TempDir())
+	outside := t.TempDir()
+	outside, err := filepath.EvalSymlinks(outside)
 	if err != nil {
 		t.Fatal(err)
 	}
