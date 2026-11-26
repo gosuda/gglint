@@ -53,6 +53,13 @@ func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
 	if err != nil {
 		return FixResult{}, loadError(err.Error())
 	}
+	// The vettool starts in each package directory, so a relative TMPDIR
+	// would resolve the staging directory against the wrong directory for
+	// every subpackage. Resolve it once against the invoking directory.
+	directory, err = filepath.Abs(directory)
+	if err != nil {
+		return FixResult{}, loadError(err.Error())
+	}
 	defer func() { _ = os.RemoveAll(directory) }()
 	out, err := execute(ctx, inv, "-json", "-fix-output="+directory)
 	result := FixResult{Refusals: Refusals(out.stderr), Files: map[string][]byte{}}
