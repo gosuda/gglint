@@ -56,7 +56,7 @@ func TestInModuleVendorScopesToModuleRoot(t *testing.T) {
 		{"vendored copy", sep + "m", filepath.Join(sep+"m", "vendor", "example.com", "dep"), true},
 		{"ordinary package", sep + "m", filepath.Join(sep+"m", "pkg"), false},
 		{"module root itself", root, root, false},
-		{"outside the module", sep + "m", filepath.Join(sep + "other"), true},
+		{"outside the module", sep + "m", sep + "other", true},
 		{"empty module root", "", filepath.Join(sep+"m", "pkg"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
