@@ -11,7 +11,7 @@ defaults:
   run:
     shell: bash
 env:
-  CANDIDATE_SHA: e467a91a2631ee2f3a73842fc35077e5832589ef
+  CANDIDATE_SHA: 4523cf65766d0b256e46df1113d7bbd6a21261a2
 jobs:
   linux:
     runs-on: depot-ubuntu-24.04-8

@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/driver"
