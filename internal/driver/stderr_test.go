@@ -64,7 +64,7 @@ func TestFailedCommandsPreserveMixedToolErrors(t *testing.T) {
 					if err == nil || err.Error() != want || got != nil {
 						t.Fatalf("Vet = %+v, %v; want no partial findings and %q", got, err, want)
 					}
-					if err := driver.Fix(t.Context(), inv); err == nil || err.Error() != want {
+					if _, err := driver.Fix(t.Context(), inv); err == nil || err.Error() != want {
 						t.Fatalf("Fix error = %v; want %q", err, want)
 					}
 				})
@@ -199,7 +199,7 @@ func TestFailedCommandsKeepOrdinarySourceReports(t *testing.T) {
 			if !slices.Equal(messages, want) {
 				t.Fatalf("findings = %q; want %q", messages, want)
 			}
-			if err := driver.Fix(t.Context(), inv); err != nil {
+			if _, err := driver.Fix(t.Context(), inv); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -216,7 +216,7 @@ func TestSuccessfulCommandsKeepStderrHandling(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].Rule != "printf" {
 		t.Fatalf("Vet = %+v, %v; want the analyzer finding without an error", got, err)
 	}
-	if err := driver.Fix(t.Context(), inv); err != nil {
+	if _, err := driver.Fix(t.Context(), inv); err != nil {
 		t.Fatal(err)
 	}
 }

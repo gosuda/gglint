@@ -39,16 +39,35 @@ func Vet(ctx context.Context, inv Invocation) ([]finding.Finding, error) {
 	return append(typecheck, findings...), nil
 }
 
-func Fix(ctx context.Context, inv Invocation) error {
+func Fix(ctx context.Context, inv Invocation) ([]string, error) {
 	out, err := execute(ctx, inv, "-fix")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	_, sourceOnly := parseStderr(out.stderr, inv.WorkDir)
 	if out.failed && !sourceOnly {
-		return loadError(strings.TrimSpace(string(out.stderr)))
+		return nil, loadError(strings.TrimSpace(string(out.stderr)))
 	}
-	return nil
+	return Refusals(out.stderr), nil
+}
+
+// RefusalPrefix marks a vettool refusal line on stderr. The vettool prints
+// one per refused suggested fix during a `-fix` run; report runs stay
+// silent. The text after the prefix is the publication contract: it names
+// the refused path and the reason, and the same strings appear in the README
+// section "Automatic fixes".
+const RefusalPrefix = "gglint: refused "
+
+// Refusals extracts the vettool refusal lines from vet stderr, verbatim.
+func Refusals(stderr []byte) []string {
+	var out []string
+	for line := range strings.SplitSeq(string(stderr), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.HasPrefix(line, RefusalPrefix) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 type output struct {
