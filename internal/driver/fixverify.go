@@ -126,7 +126,11 @@ func SnapshotGoFiles(workDir string, filenames ...string) (GoSnapshot, error) {
 			return nil, err
 		}
 		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("source is not a regular file: %s", path)
+			// Symlinks, FIFOs and other non-regular sources stay out of the
+			// snapshot: go list reports symlinked files, but the verifier
+			// cannot own their bytes. A staged fix that targets a skipped
+			// path is refused as outside the analysis scope.
+			continue
 		}
 		data, err := readRootFile(directory.root, name)
 		if err != nil {
