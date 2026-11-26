@@ -60,6 +60,16 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 		var pkg struct {
 			Dir                                          string
 			GoFiles, CgoFiles, TestGoFiles, XTestGoFiles []string
+			IgnoredGoFiles                               []string
+			// Standard packages and dependencies outside the main module
+			// resolve here too, but staged fixes never leave the main
+			// module: their files stay out of the writable snapshot, so
+			// publication refuses any fix archived for them as outside
+			// the analysis scope.
+			Standard bool
+			Module   *struct {
+				Main bool
+			}
 		}
 		if err := json.UnmarshalDecode(dec, &pkg); errors.Is(err, io.EOF) {
 			break
@@ -67,6 +77,9 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 			return nil, fmt.Errorf("decode fix packages: %w", err)
 		}
 		if pkg.Dir == "" {
+			continue
+		}
+		if pkg.Standard || pkg.Module == nil || !pkg.Module.Main || inVendorDir(pkg.Dir) {
 			continue
 		}
 		for _, group := range [][]string{pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles} {
@@ -77,6 +90,22 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 	}
 	slices.Sort(files)
 	return slices.Compact(files), nil
+}
+
+// inVendorDir reports whether dir sits under a vendor directory. The go
+// command ignores vendor directories for package patterns, so their copies
+// belong to dependencies even when queried through an explicit vendor path.
+func inVendorDir(dir string) bool {
+	for current := dir; ; {
+		if filepath.Base(current) == "vendor" {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
 }
 
 // SnapshotGoFiles opens only the selected source files. Each package directory

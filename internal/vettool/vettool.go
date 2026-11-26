@@ -86,6 +86,12 @@ func stageUnit(path, directory string) (string, error) {
 	if unit.VetxOnly {
 		return "", nil
 	}
+	// Fixes stay inside the main module: units from standard packages,
+	// dependencies and module-less files report normally, but no fix
+	// archive is staged for them, so publication cannot rewrite them.
+	if unit.Module == nil || !unit.Module.Main {
+		return "", nil
+	}
 	file, err := os.CreateTemp(directory, "unit-*.cfg")
 	if err != nil {
 		return "", fmt.Errorf("create fix unit: %w", err)
