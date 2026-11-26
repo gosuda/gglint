@@ -82,7 +82,10 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 		if pkg.Standard || pkg.Module == nil || !pkg.Module.Main || inVendorDir(pkg.Dir) {
 			continue
 		}
-		for _, group := range [][]string{pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles} {
+		// IgnoredGoFiles are existing sources the build excludes for this
+		// configuration. They are snapshotted so verification still refuses
+		// any change to them, even though no staged fix can target them.
+		for _, group := range [][]string{pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles, pkg.IgnoredGoFiles} {
 			for _, name := range group {
 				files = append(files, filepath.Join(pkg.Dir, name))
 			}
