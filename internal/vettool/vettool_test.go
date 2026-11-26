@@ -29,7 +29,7 @@ func buildUnit(t *testing.T, cfg config.Config, unit string) []*analysis.Analyze
 	t.Helper()
 	configPath := writeFile(t, "config.json", cfg.Encode())
 	unitPath := writeFile(t, "unit.cfg", []byte(unit))
-	got, err := build(configPath, unitPath)
+	got, err := build(configPath, unitPath, false)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestBuildNamesTheCorruptUnitFile(t *testing.T) {
 	t.Parallel()
 	configPath := writeFile(t, "config.json", config.Config{Mode: config.Standard}.Encode())
 	unit := writeFile(t, "unit.cfg", []byte("not json"))
-	analyzers, err := build(configPath, unit)
+	analyzers, err := build(configPath, unit, false)
 	if err == nil {
 		t.Fatalf("build accepted a unit file that is not JSON and returned %d analyzers", len(analyzers))
 	}

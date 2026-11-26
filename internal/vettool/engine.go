@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"io"
+	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -20,11 +22,29 @@ type engine struct {
 	excludes []config.CompiledExclude
 	known    map[string]bool
 	selected map[string]bool
+	// fix reports diagnostics whose suggested fix is refused instead of
+	// applying it. It is set for `go vet -fix` runs and stays false for
+	// report runs, so plain `gglint run` never prints refusal lines.
+	fix bool
+	// err receives refusal lines; it is os.Stderr in production and a
+	// test-owned buffer in tests, so parallel tests never swap the global
+	// os.Stderr.
+	err     io.Writer
+	refused map[string]bool
 
 	mu      sync.Mutex
 	files   map[*ast.File]func() *fileState
 	sources map[string]func() ([]byte, error)
 }
+
+// Reasons a suggested fix is refused. The strings are the publication
+// contract of `gglint run -fix`: they appear verbatim on stderr and in the
+// README section "Automatic fixes".
+const (
+	refuseScope = "outside the analysis scope"
+	refuseGen   = "generated file"
+	refuseTests = "test file excluded when tests are off"
+)
 
 type fileState struct {
 	generated  bool
@@ -113,35 +133,100 @@ func reportPanics(analyzers []*analysis.Analyzer) []*analysis.Analyzer {
 }
 
 func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysis.Diagnostic) bool {
+	keep, reason := e.admit(pass, r, check, d)
+	// A dropped diagnostic that carries edits would have rewritten the file
+	// under `go vet -fix`. Refusing it is a safety decision, so a fix run
+	// says so on stderr; a report run stays silent.
+	if !keep && reason != "" && hasEdits(d) {
+		e.refuse(pass, d, reason)
+	}
+	return keep
+}
+
+// admit decides whether a diagnostic stays in the report. The refusal reason
+// is empty when nothing is refused: the diagnostic carries no fix, or the
+// user asked to skip it through configuration or a directive.
+func (e *engine) admit(pass *analysis.Pass, r rules.Rule, check string, d analysis.Diagnostic) (keep bool, reason string) {
 	if pass.Fset.File(d.Pos) == nil {
-		return false
+		return false, ""
 	}
 	filename := realName(pass.Fset, d.Pos)
-	if e.filtered(r, filename, d) || e.excluded(filename, r.Name, check, d.Message) {
-		return false
+	if drop, reason := e.filteredOut(r, filename, d); drop {
+		return false, reason
+	}
+	if e.excluded(filename, r.Name, check, d.Message) {
+		return false, ""
 	}
 	// A diagnostic outside both the analysis root and the package's own
 	// directory — a cgo build-cache artifact, a //line remap, a stdlib
 	// position — reports a file the user cannot act on.
-	if !insideDir(e.cfg.ExcludeBase, filename) && !insideDir(pkgDir(pass), filename) {
-		return false
+	if e.outOfScope(pass, filename) {
+		return false, refuseScope
 	}
-	file := fileAt(pass.Files, d.Pos)
-	if file == nil {
-		return true
-	}
-	state := e.stateOf(pass, file)
-	return !state.generated && (r.Name == rules.NolintName || !e.suppressed(state, pass.Fset.PositionFor(d.Pos, false).Line, r.Name, check))
+	return e.fileAdmit(pass, r, check, d)
 }
 
-func (e *engine) filtered(r rules.Rule, filename string, d analysis.Diagnostic) bool {
+// filteredOut reports a test-scope or fixless drop. Only the tests-off drop
+// refuses a fix; the rest follow user configuration.
+func (e *engine) filteredOut(r rules.Rule, filename string, d analysis.Diagnostic) (drop bool, reason string) {
 	if r.Reports == rules.ReportWithFix && !hasEdits(d) {
-		return true
+		return true, ""
 	}
 	if !strings.HasSuffix(filename, "_test.go") {
-		return false
+		return false, ""
 	}
-	return !e.cfg.Tests || r.Reports == rules.ReportOutsideTests
+	if !e.cfg.Tests {
+		return true, refuseTests
+	}
+	return r.Reports == rules.ReportOutsideTests, ""
+}
+
+func (e *engine) outOfScope(pass *analysis.Pass, filename string) bool {
+	return !insideDir(e.cfg.ExcludeBase, filename) && !insideDir(pkgDir(pass), filename)
+}
+
+func (e *engine) fileAdmit(pass *analysis.Pass, r rules.Rule, check string, d analysis.Diagnostic) (keep bool, reason string) {
+	file := fileAt(pass.Files, d.Pos)
+	if file == nil {
+		return true, ""
+	}
+	state := e.stateOf(pass, file)
+	if state.generated {
+		return false, refuseGen
+	}
+	line := pass.Fset.PositionFor(d.Pos, false).Line
+	if r.Name == rules.NolintName || !e.suppressed(state, line, r.Name, check) {
+		return true, ""
+	}
+	return false, ""
+}
+
+// refuse records a refused fix for a `go vet -fix` run. Report runs ignore
+// refusals so their output never changes.
+func (e *engine) refuse(pass *analysis.Pass, d analysis.Diagnostic, reason string) {
+	if !e.fix {
+		return
+	}
+	filename := realName(pass.Fset, d.Pos)
+	rel := filename
+	if r, err := filepath.Rel(e.cfg.ExcludeBase, filename); err == nil && !climbsOut(r) {
+		rel = filepath.ToSlash(r)
+	}
+	key := rel + "\x00" + reason
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.refused == nil {
+		e.refused = map[string]bool{}
+	}
+	if e.refused[key] {
+		return
+	}
+	e.refused[key] = true
+	out := e.err
+	if out == nil {
+		out = os.Stderr
+	}
+	fmt.Fprintf(out, "gglint: refused %s: %s\n", rel, reason)
 }
 
 func hasEdits(d analysis.Diagnostic) bool {

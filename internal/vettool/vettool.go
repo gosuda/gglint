@@ -23,7 +23,7 @@ func Main(args []string) int {
 		unitchecker.Main()
 		return 0
 	}
-	analyzers, err := build(path, args[len(args)-1])
+	analyzers, err := build(path, args[len(args)-1], wantFix(args))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gglint: internal: %v\n", err)
 		return 3
@@ -60,7 +60,20 @@ func vetxOnly(unitConfig string) (bool, error) {
 	return unit.VetxOnly, nil
 }
 
-func build(path, unitConfig string) ([]*analysis.Analyzer, error) {
+func wantFix(args []string) bool {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		name := strings.TrimLeft(arg, "-")
+		if name == "fix" || strings.HasPrefix(name, "fix=") {
+			return true
+		}
+	}
+	return false
+}
+
+func build(path, unitConfig string, fix bool) ([]*analysis.Analyzer, error) {
 	factsOnly, err := vetxOnly(unitConfig)
 	if err != nil {
 		return nil, err
@@ -76,6 +89,12 @@ func build(path, unitConfig string) ([]*analysis.Analyzer, error) {
 	e, selected, err := newEngine(cfg)
 	if err != nil {
 		return nil, err
+	}
+	e.fix = fix
+	if fix {
+		// Single-threaded startup owns this read: unitchecker runs the
+		// analyzers, and their refusal lines, only after build returns.
+		e.err = os.Stderr
 	}
 	if factsOnly {
 		return e.factsOnly(selected), nil
