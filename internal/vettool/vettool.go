@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -86,10 +87,15 @@ func stageUnit(path, directory string) (string, error) {
 	if unit.VetxOnly {
 		return "", nil
 	}
-	// Fixes stay inside the main module: units from standard packages,
-	// dependencies and module-less files report normally, but no fix
-	// archive is staged for them, so publication cannot rewrite them.
-	if unit.Module == nil || !unit.Module.Main {
+
+	if unit.Module != nil {
+		if !unit.Module.Main {
+			return "", nil
+		}
+	} else if !verifiedModuleUnit(&unit) {
+		// Synthetic file packages carry no module metadata: verify their
+		// files against the enclosing module instead of skipping their
+		// fixes silently.
 		return "", nil
 	}
 	file, err := os.CreateTemp(directory, "unit-*.cfg")
@@ -108,6 +114,57 @@ func stageUnit(path, directory string) (string, error) {
 		return "", fmt.Errorf("write fix unit: %w", err)
 	}
 	return file.Name(), nil
+}
+
+// verifiedModuleUnit reports whether every file in the unit sits inside one
+// main module and outside its vendor directories. Synthetic file packages
+// carry no module metadata, so their scope is verified by directory.
+func verifiedModuleUnit(unit *unitchecker.Config) bool {
+	if len(unit.GoFiles) == 0 {
+		return false
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	root := ""
+	for _, name := range unit.GoFiles {
+		abs := name
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(cwd, name)
+		}
+		dir := filepath.Dir(abs)
+		found, ok := config.EnclosingModule(dir)
+		if !ok || (root != "" && found != root) {
+			return false
+		}
+		root = found
+		// The standard library ships its own go.mod (module std) but is
+		// never the main module: never stage fixes for it.
+		if path, ok := modulePathOf(root); !ok || path == "std" {
+			return false
+		}
+		if config.InModuleVendor(root, dir) {
+			return false
+		}
+	}
+	return root != ""
+}
+
+// modulePathOf reports the module path declared by the go.mod in root.
+func modulePathOf(root string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return "", false
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+		if path, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			if name := strings.TrimSpace(path); name != "" {
+				return name, true
+			}
+		}
+	}
+	return "", false
 }
 
 func vetxOnly(unitConfig string) (bool, error) {

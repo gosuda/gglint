@@ -58,6 +58,8 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 	}
 	dec := jsontext.NewDecoder(&stdout)
 	var files []string
+	mainDir := ""
+	mainChecked := false
 	for {
 		var pkg struct {
 			Dir                                          string
@@ -82,7 +84,31 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 		if pkg.Dir == "" {
 			continue
 		}
-		if pkg.Standard || pkg.Module == nil || !pkg.Module.Main || config.InModuleVendor(pkg.Module.Dir, pkg.Dir) {
+		if pkg.Standard {
+			continue
+		}
+		moduleDir := ""
+		if pkg.Module != nil {
+			if !pkg.Module.Main {
+				continue
+			}
+			moduleDir = pkg.Module.Dir
+		} else {
+			// Synthetic file packages carry no module metadata: verify
+			// their directory against the active main module instead of
+			// skipping their fixes silently.
+			if !mainChecked {
+				mainChecked = true
+				if dir, err := mainModuleDir(ctx, inv.WorkDir); err == nil {
+					mainDir = dir
+				}
+			}
+			if mainDir == "" {
+				continue
+			}
+			moduleDir = mainDir
+		}
+		if config.InModuleVendor(moduleDir, pkg.Dir) {
 			continue
 		}
 		// IgnoredGoFiles are existing sources the build excludes for this
@@ -96,6 +122,25 @@ func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
 	}
 	slices.Sort(files)
 	return slices.Compact(files), nil
+}
+
+// mainModuleDir resolves the active main module directory for workDir. It
+// fails when workDir is not inside a module, so callers fail closed.
+func mainModuleDir(ctx context.Context, workDir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Dir}}")
+	cmd.Dir = workDir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("resolve main module: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if dir := strings.TrimSpace(stdout.String()); dir != "" {
+		return dir, nil
+	}
+	return "", fmt.Errorf("resolve main module: empty directory")
 }
 
 // SnapshotGoFiles opens only the selected source files. Each package directory
