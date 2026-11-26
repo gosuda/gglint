@@ -22,10 +22,15 @@ env:
 
 jobs:
   check:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork)
+    # Fork pull requests are the only runs Depot CI cannot cover, so the
+    # GitHub-hosted matrix runs only there. Pushes, internal pull requests
+    # and the merge queue are proven by .depot/workflows/ci.yml instead.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork)
     name: ${{ matrix.check }}
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
