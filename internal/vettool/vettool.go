@@ -88,14 +88,7 @@ func stageUnit(path, directory string) (string, error) {
 		return "", nil
 	}
 
-	if unit.Module != nil {
-		if !unit.Module.Main {
-			return "", nil
-		}
-	} else if !verifiedModuleUnit(&unit) {
-		// Synthetic file packages carry no module metadata: verify their
-		// files against the enclosing module instead of skipping their
-		// fixes silently.
+	if !stageEligible(&unit) {
 		return "", nil
 	}
 	file, err := os.CreateTemp(directory, "unit-*.cfg")
@@ -116,6 +109,18 @@ func stageUnit(path, directory string) (string, error) {
 	return file.Name(), nil
 }
 
+// stageEligible reports whether fixes for the unit may be staged: main
+// modules always, metadata-less units only when verified in-module.
+func stageEligible(unit *unitchecker.Config) bool {
+	if unit.Module != nil {
+		return unit.Module.Main
+	}
+	// Synthetic file packages carry no module metadata: verify their
+	// files against the enclosing module instead of skipping their
+	// fixes silently.
+	return verifiedModuleUnit(unit)
+}
+
 // verifiedModuleUnit reports whether every file in the unit sits inside one
 // main module and outside its vendor directories. Synthetic file packages
 // carry no module metadata, so their scope is verified by directory.
@@ -127,8 +132,24 @@ func verifiedModuleUnit(unit *unitchecker.Config) bool {
 	if err != nil {
 		return false
 	}
+	root, ok := unitModuleRoot(unit.GoFiles, cwd)
+	if !ok {
+		return false
+	}
+	// The standard library ships its own go.mod (module std) but is
+	// never the main module: never stage fixes for it.
+	if path, ok := modulePathOf(root); !ok || path == "std" {
+		return false
+	}
+	return true
+}
+
+// unitModuleRoot returns the single enclosing module of every file, or
+// reports false when a file sits outside any module, files span modules,
+// or a file sits under a vendor directory.
+func unitModuleRoot(files []string, cwd string) (string, bool) {
 	root := ""
-	for _, name := range unit.GoFiles {
+	for _, name := range files {
 		abs := name
 		if !filepath.IsAbs(abs) {
 			abs = filepath.Join(cwd, name)
@@ -136,19 +157,14 @@ func verifiedModuleUnit(unit *unitchecker.Config) bool {
 		dir := filepath.Dir(abs)
 		found, ok := config.EnclosingModule(dir)
 		if !ok || (root != "" && found != root) {
-			return false
+			return "", false
 		}
 		root = found
-		// The standard library ships its own go.mod (module std) but is
-		// never the main module: never stage fixes for it.
-		if path, ok := modulePathOf(root); !ok || path == "std" {
-			return false
-		}
 		if config.InModuleVendor(root, dir) {
-			return false
+			return "", false
 		}
 	}
-	return root != ""
+	return root, root != ""
 }
 
 // modulePathOf reports the module path declared by the go.mod in root.

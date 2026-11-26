@@ -3,13 +3,25 @@ package vettool
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/unitchecker"
 )
+
+// stdFile names a file inside the standard library without the deprecated
+// runtime.GOROOT: the toolchain running the test reports its own root.
+func stdFile(t *testing.T, rel string) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "go", "env", "GOROOT").Output()
+	if err != nil {
+		t.Fatalf("go env GOROOT: %v", err)
+	}
+	return filepath.Join(strings.TrimSpace(string(out)), rel)
+}
 
 func TestStageUnitSkipsUnitsOutsideMainModule(t *testing.T) {
 	t.Parallel()
@@ -19,7 +31,7 @@ func TestStageUnitSkipsUnitsOutsideMainModule(t *testing.T) {
 		goFiles    []string
 		wantStaged bool
 	}{
-		{"standard package", nil, []string{filepath.Join(runtime.GOROOT(), "src", "fmt", "doc.go")}, false},
+		{"standard package", nil, []string{stdFile(t, filepath.Join("src", "fmt", "doc.go"))}, false},
 		{"dependency", &analysis.Module{Path: "example.com/dep"}, []string{"p.go"}, false},
 		{"main module", &analysis.Module{Path: "example.com/m", Main: true}, []string{"p.go"}, true},
 	} {
