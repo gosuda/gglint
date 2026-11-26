@@ -172,28 +172,36 @@ The rewrite rules `modernize`, `gofumpt`, `gosimple`, `misspell`, and `usetestin
 
 ### Automatic fixes
 
-`gglint run -fix` recomputes diagnostics from the current file content in the
-same run: fixes are never stored, so there is no cross-run staleness. What the
+`gglint run -fix` recomputes diagnostics from the current file content in a
+fresh fix session. It stages candidate files in a private temporary directory,
+then validates the complete batch before writing source files. The package
+selection also covers sibling packages named on the command line. What the
 fixer writes and what it refuses is fixed by this contract:
 
 - Admitted: a fix is applied only to a `.go` file in the analyzed packages
   that is not generated, with test files admitted only when tests are on.
-  After the fix, every changed file must still parse when it parsed before.
+  Every edit in a suggested fix must be admitted. After the fix, every changed
+  file must still parse when it parsed before. A rejected file prevents the
+  staged batch from being written.
 - Refused with a message: a suggested fix the gate will not apply leaves its
   file byte-identical and prints `gglint: refused <path>: <reason>` on
   stderr. The reasons are `outside the analysis scope`, `generated file`,
   `test file excluded when tests are off`, `does not parse after fix`,
-  `changed without an applied fix`, and `created during fix`. A refused file
-  is restored to its pre-fix bytes, so a refusal never leaves a partial
-  write behind.
+  `changed without an applied fix`, `deleted during fix`, and `created during
+  fix`. An unexpected source change is restored through an already-open
+  package directory. Restoring a file replaces a symlink at its destination
+  instead of following it. Ordinary refusals continue to the final report;
+  analysis, publication or restoration failures remain errors.
 - Suggested only: every finding without an applied fix stays in the report.
   Rules without fixes, such as `checkimports` denials, and files the fixer
   cannot parse never change on disk.
 
 Applying the fix twice yields a byte-identical file, and repeated runs on a
-clean tree change nothing. Do not modify files concurrently with `-fix`: the
-gate restores files that fail its post-fix checks, but a concurrent write
-that still parses is indistinguishable from an applied fix.
+clean tree change nothing. Fix sessions do not reuse cached fix actions, so
+an unchanged refused file receives its refusal on every run. Compilation and
+ordinary report caches remain available. Do not modify files concurrently
+with `-fix`: the gate detects and restores unrecorded source changes, but it
+does not provide filesystem-wide transaction isolation.
 
 ### Complexity limits
 

@@ -1,6 +1,12 @@
 package driver
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -8,67 +14,170 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-// GoSnapshot maps a workdir-relative slash path of a Go source file to the
-// bytes seen before a `-fix` run. VerifyFixed compares the snapshot with the
-// tree after the fix and refuses every change the fixer was not admitted to
-// make, so a refused edit never leaves a partial write behind.
-type GoSnapshot map[string][]byte
+// GoSnapshot owns the source bytes and open package directories until Close.
+type GoSnapshot map[string]SnapshotFile
 
-// SnapshotGoFiles reads every regular Go source file under workDir through a
-// root-scoped handle, so a path swapped for a symlink mid-walk cannot escape
-// the tree. A read failure aborts the fix before anything runs.
-func SnapshotGoFiles(workDir string) (GoSnapshot, error) {
-	root, err := os.OpenRoot(workDir)
-	if err != nil {
-		return nil, err
+type SnapshotFile struct {
+	Bytes     []byte
+	name      string
+	mode      fs.FileMode
+	directory *snapshotDirectory
+}
+
+type snapshotDirectory struct {
+	root  *os.Root
+	path  string
+	names map[string]bool
+}
+
+// PackageGoFiles resolves only the requested packages, including their test
+// sources so a tests-off run can verify that those files remain unchanged.
+func PackageGoFiles(ctx context.Context, inv Invocation) ([]string, error) {
+	args := []string{"list", "-e", "-json"}
+	if len(inv.BuildTags) > 0 {
+		args = append(args, "-tags="+strings.Join(inv.BuildTags, ","))
 	}
-	defer func() { _ = root.Close() }()
-	out := GoSnapshot{}
-	err = filepath.WalkDir(workDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	args = append(args, inv.Patterns...)
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = inv.WorkDir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
+		return nil, fmt.Errorf("list fix packages: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	dec := jsontext.NewDecoder(&stdout)
+	var files []string
+	for {
+		var pkg struct {
+			Dir                                          string
+			GoFiles, CgoFiles, TestGoFiles, XTestGoFiles []string
+		}
+		if err := json.UnmarshalDecode(dec, &pkg); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return nil, fmt.Errorf("decode fix packages: %w", err)
+		}
+		if pkg.Dir == "" {
+			continue
+		}
+		for _, group := range [][]string{pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles} {
+			for _, name := range group {
+				files = append(files, filepath.Join(pkg.Dir, name))
 			}
-			return nil
 		}
-		if !strings.HasSuffix(d.Name(), ".go") {
-			return nil
-		}
-		return addSnapshotFile(out, root, workDir, path)
-	})
-	if err != nil {
-		return nil, err
 	}
+	slices.Sort(files)
+	return slices.Compact(files), nil
+}
+
+// SnapshotGoFiles opens only the selected source files. Each package directory
+// stays open, so later reads and restores cannot follow a substituted parent.
+func SnapshotGoFiles(workDir string, filenames ...string) (GoSnapshot, error) {
+	if info, err := os.Stat(workDir); err != nil {
+		return nil, err
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("source workdir is not a directory: %s", workDir)
+	}
+	out := GoSnapshot{}
+	directories := map[string]*snapshotDirectory{}
+	complete := false
+	defer func() {
+		if !complete {
+			for _, directory := range directories {
+				_ = directory.root.Close()
+			}
+		}
+	}()
+	for _, filename := range filenames {
+		if !strings.HasSuffix(filename, ".go") {
+			continue
+		}
+		path := filepath.Clean(absolute(filename, workDir))
+		rel, err := filepath.Rel(workDir, path)
+		if err != nil {
+			return nil, err
+		}
+		parent := filepath.Dir(path)
+		directory := directories[parent]
+		if directory == nil {
+			root, err := os.OpenRoot(parent)
+			if err != nil {
+				return nil, fmt.Errorf("open source directory %s: %w", parent, err)
+			}
+			directory = &snapshotDirectory{root: root, path: parent}
+			directories[parent] = directory
+			directory.names, err = rootNames(root)
+			if err != nil {
+				return nil, err
+			}
+		}
+		name := filepath.Base(path)
+		info, err := directory.root.Lstat(name)
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("source is not a regular file: %s", path)
+		}
+		data, err := readRootFile(directory.root, name)
+		if err != nil {
+			return nil, err
+		}
+		out[filepath.ToSlash(rel)] = SnapshotFile{Bytes: data, name: name, mode: info.Mode(), directory: directory}
+	}
+	complete = true
 	return out, nil
 }
 
-func addSnapshotFile(out GoSnapshot, root *os.Root, workDir, path string) error {
-	rel, err := filepath.Rel(workDir, path)
+func (s GoSnapshot) Close() error {
+	var failures []error
+	for _, directory := range s.directories() {
+		if err := directory.root.Close(); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (s GoSnapshot) directories() []*snapshotDirectory {
+	seen := map[*snapshotDirectory]bool{}
+	var out []*snapshotDirectory
+	for _, file := range s {
+		if !seen[file.directory] {
+			seen[file.directory] = true
+			out = append(out, file.directory)
+		}
+	}
+	slices.SortFunc(out, func(a, b *snapshotDirectory) int { return strings.Compare(a.path, b.path) })
+	return out
+}
+
+func rootNames(root *os.Root) (map[string]bool, error) {
+	dir, err := root.Open(".")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	name := filepath.ToSlash(rel)
-	info, err := root.Lstat(name)
+	entries, err := dir.ReadDir(-1)
+	if closeErr := dir.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil
+	names := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		names[entry.Name()] = true
 	}
-	data, err := readRootFile(root, name)
-	if err != nil {
-		return err
-	}
-	out[name] = data
-	return nil
+	return names, nil
 }
 
 func readRootFile(root *os.Root, name string) ([]byte, error) {
@@ -76,23 +185,31 @@ func readRootFile(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(f)
-	if cerr := f.Close(); err == nil {
-		err = cerr
+	opened, err := f.Stat()
+	if err == nil {
+		var current fs.FileInfo
+		current, err = root.Lstat(name)
+		if err == nil && (!current.Mode().IsRegular() || !os.SameFile(opened, current)) {
+			err = fmt.Errorf("source changed while opening %s", name)
+		}
+	}
+	var data []byte
+	if err == nil {
+		data, err = io.ReadAll(f)
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
 	}
 	return data, err
 }
 
-// FixViolation is one post-fix change the gate refuses. Pre holds the bytes to
-// restore, or nil when the path was created by the fix and must be removed.
 type FixViolation struct {
 	Path   string
 	Reason string
 	Pre    []byte
+	file   SnapshotFile
 }
 
-// Reasons VerifyFixed reports. Like the vettool refusal reasons they belong to
-// the publication contract in the README section "Automatic fixes".
 const (
 	ViolateCreated = "created during fix"
 	ViolateDeleted = "deleted during fix"
@@ -100,34 +217,50 @@ const (
 	ViolateTests   = "test file excluded when tests are off"
 	ViolateParse   = "does not parse after fix"
 	ViolateStale   = "changed without an applied fix"
+	ViolateScope   = "outside the analysis scope"
 )
 
-// VerifyFixed compares a pre-fix snapshot with the current tree. applied names
-// the relative paths the fix run applied; a nil map skips the staleness check
-// because the fixer does not account its writes. tests mirrors the run
-// configuration: test files are admitted only when tests are enabled.
+// VerifyFixed accounts for every selected source change against actual archive
+// members. Directory handles, file names and initial bytes come from the snapshot.
 func VerifyFixed(workDir string, pre GoSnapshot, applied map[string]bool, tests bool) []FixViolation {
-	post, err := SnapshotGoFiles(workDir)
-	if err != nil {
-		return []FixViolation{{Path: ".", Reason: "cannot rescan after fix: " + err.Error()}}
-	}
 	var out []FixViolation
 	for path, before := range pre {
-		after, ok := post[path]
-		if !ok {
-			out = append(out, FixViolation{Path: path, Reason: ViolateDeleted, Pre: before})
-			continue
+		violation := FixViolation{Path: path, Pre: before.Bytes, file: before}
+		info, err := before.directory.root.Lstat(before.name)
+		if errors.Is(err, os.ErrNotExist) {
+			violation.Reason = ViolateDeleted
+		} else if err != nil {
+			violation.Reason = "cannot inspect after fix: " + err.Error()
+		} else if !info.Mode().IsRegular() {
+			violation.Reason = ViolateStale
+		} else {
+			after, err := readRootFile(before.directory.root, before.name)
+			if err != nil {
+				violation.Reason = "cannot read after fix: " + err.Error()
+			} else if !bytes.Equal(before.Bytes, after) {
+				violation.Reason, _ = refuseChange(path, before.Bytes, after, applied, tests)
+			}
 		}
-		if slices.Equal(before, after) {
-			continue
-		}
-		if reason, ok := refuseChange(path, before, after, applied, tests); ok {
-			out = append(out, FixViolation{Path: path, Reason: reason, Pre: before})
+		if violation.Reason != "" {
+			out = append(out, violation)
 		}
 	}
-	for path := range post {
-		if _, ok := pre[path]; !ok {
-			out = append(out, FixViolation{Path: path, Reason: ViolateCreated})
+	for _, directory := range pre.directories() {
+		names, err := rootNames(directory.root)
+		if err != nil {
+			out = append(out, FixViolation{Path: directory.path, Reason: "cannot inspect after fix: " + err.Error()})
+			continue
+		}
+		for name := range names {
+			if directory.names[name] || !strings.HasSuffix(name, ".go") {
+				continue
+			}
+			rel, err := filepath.Rel(workDir, filepath.Join(directory.path, name))
+			if err != nil {
+				out = append(out, FixViolation{Path: name, Reason: err.Error()})
+				continue
+			}
+			out = append(out, FixViolation{Path: filepath.ToSlash(rel), Reason: ViolateCreated, file: SnapshotFile{name: name, directory: directory}})
 		}
 	}
 	slices.SortFunc(out, func(a, b FixViolation) int { return strings.Compare(a.Path, b.Path) })
@@ -151,29 +284,119 @@ func refuseChange(path string, before, after []byte, applied map[string]bool, te
 }
 
 func generated(src []byte) bool {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, parser.ParseComments)
+	file, err := parser.ParseFile(token.NewFileSet(), "", src, parser.ParseComments)
 	return err == nil && file != nil && ast.IsGenerated(file)
 }
 
 func parses(src []byte) bool {
-	fset := token.NewFileSet()
-	_, err := parser.ParseFile(fset, "", src, parser.ParseComments)
+	_, err := parser.ParseFile(token.NewFileSet(), "", src, parser.ParseComments)
 	return err == nil
 }
 
-// Undo restores the pre-fix state: it rewrites the snapshotted bytes, or
-// removes a path the fix created.
-func (v FixViolation) Undo(workDir string) error {
-	path := filepath.Join(workDir, filepath.FromSlash(v.Path))
+// Undo replaces a leaf inside the already-open package directory. It never
+// follows a substituted leaf or parent symlink when restoring source bytes.
+func (v FixViolation) Undo(_ string) error {
+	if v.file.directory == nil {
+		return fmt.Errorf("restore %s: no source directory", v.Path)
+	}
 	if v.Pre == nil {
-		if err := os.Remove(path); err != nil {
+		if err := v.file.directory.root.Remove(v.file.name); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove %s: %w", v.Path, err)
 		}
 		return nil
 	}
-	if err := os.WriteFile(path, v.Pre, 0o600); err != nil {
-		return fmt.Errorf("restore %s: %w", v.Path, err)
+	return replaceSource(v.file, v.Pre)
+}
+
+func replaceSource(file SnapshotFile, data []byte) error {
+	name := ".gglint-fix-" + rand.Text()
+	root := file.directory.root
+	out, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, file.mode.Perm())
+	if err != nil {
+		return fmt.Errorf("stage %s: %w", file.name, err)
+	}
+	defer func() { _ = root.Remove(name) }()
+	_, err = out.Write(data)
+	if err == nil {
+		err = out.Chmod(file.mode.Perm())
+	}
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("stage %s: %w", file.name, err)
+	}
+	if err := root.Rename(name, file.name); err != nil {
+		return fmt.Errorf("publish %s: %w", file.name, err)
 	}
 	return nil
+}
+
+// ApplyFixed validates the complete staged batch before publishing any file.
+// Policy refusals leave the batch unchanged; write errors restore prior writes.
+func ApplyFixed(workDir string, pre GoSnapshot, fixed map[string][]byte, tests bool) ([]FixViolation, error) {
+	violations := VerifyFixed(workDir, pre, map[string]bool{}, tests)
+	if len(violations) > 0 {
+		return violations, restoreViolations(workDir, violations)
+	}
+	applied := map[string]bool{}
+	contents := map[string][]byte{}
+	for filename, data := range fixed {
+		rel, err := filepath.Rel(workDir, absolute(filename, workDir))
+		if err != nil {
+			return nil, err
+		}
+		path := filepath.ToSlash(rel)
+		before, exists := pre[path]
+		if !exists {
+			violations = append(violations, FixViolation{Path: path, Reason: ViolateScope})
+			continue
+		}
+		if bytes.Equal(before.Bytes, data) {
+			continue
+		}
+		applied[path] = true
+		if reason, refused := refuseChange(path, before.Bytes, data, applied, tests); refused {
+			violations = append(violations, FixViolation{Path: path, Reason: reason})
+		} else if !parses(before.Bytes) {
+			violations = append(violations, FixViolation{Path: path, Reason: ViolateParse})
+		} else {
+			if previous, exists := contents[path]; exists && !bytes.Equal(previous, data) {
+				return nil, fmt.Errorf("conflicting staged fixes for %s", path)
+			}
+			contents[path] = data
+		}
+	}
+	slices.SortFunc(violations, func(a, b FixViolation) int { return strings.Compare(a.Path, b.Path) })
+	if len(violations) > 0 {
+		return violations, nil
+	}
+	paths := make([]string, 0, len(contents))
+	for path := range contents {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	var published []FixViolation
+	for _, path := range paths {
+		before := pre[path]
+		if err := replaceSource(before, contents[path]); err != nil {
+			return nil, errors.Join(err, restoreViolations(workDir, published))
+		}
+		published = append(published, FixViolation{Path: path, Pre: before.Bytes, file: before})
+	}
+	violations = VerifyFixed(workDir, pre, applied, tests)
+	if len(violations) > 0 {
+		return violations, errors.Join(restoreViolations(workDir, published), restoreViolations(workDir, violations))
+	}
+	return nil, nil
+}
+
+func restoreViolations(workDir string, violations []FixViolation) error {
+	var failures []error
+	for _, violation := range violations {
+		if err := violation.Undo(workDir); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }

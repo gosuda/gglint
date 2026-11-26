@@ -140,6 +140,34 @@ func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysi
 	if !keep && reason != "" && hasEdits(d) {
 		e.refuse(pass, d, reason)
 	}
+	if keep && e.fix {
+		for _, fix := range d.SuggestedFixes {
+			for _, edit := range fix.TextEdits {
+				part := d
+				part.Pos, part.End = edit.Pos, edit.End
+				admitted, why := e.admit(pass, r, check, part)
+				var target *ast.File
+				positionFile := pass.Fset.File(edit.Pos)
+				for _, file := range pass.Files {
+					if positionFile != nil && pass.Fset.File(file.Pos()) == positionFile {
+						target = file
+						break
+					}
+				}
+				if target == nil || !strings.HasSuffix(realName(pass.Fset, edit.Pos), ".go") {
+					admitted, why = false, refuseScope
+				} else if e.stateOf(pass, target).generated {
+					admitted, why = false, refuseGen
+				}
+				if !admitted {
+					if why != "" {
+						e.refuse(pass, part, why)
+					}
+					return false
+				}
+			}
+		}
+	}
 	return keep
 }
 

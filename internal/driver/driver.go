@@ -1,9 +1,13 @@
 package driver
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -39,16 +43,64 @@ func Vet(ctx context.Context, inv Invocation) ([]finding.Finding, error) {
 	return append(typecheck, findings...), nil
 }
 
-func Fix(ctx context.Context, inv Invocation) ([]string, error) {
-	out, err := execute(ctx, inv, "-fix")
+type FixResult struct {
+	Refusals []string
+	Files    map[string][]byte
+}
+
+func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
+	directory, err := os.MkdirTemp("", "gglint-fixes-")
 	if err != nil {
-		return nil, err
+		return FixResult{}, loadError(err.Error())
+	}
+	defer func() { _ = os.RemoveAll(directory) }()
+	out, err := execute(ctx, inv, "-json", "-fix-output="+directory)
+	result := FixResult{Refusals: Refusals(out.stderr), Files: map[string][]byte{}}
+	if err != nil {
+		return result, err
 	}
 	_, sourceOnly := parseStderr(out.stderr, inv.WorkDir)
 	if out.failed && !sourceOnly {
-		return nil, loadError(strings.TrimSpace(string(out.stderr)))
+		return result, loadError(strings.TrimSpace(string(out.stderr)))
 	}
-	return Refusals(out.stderr), nil
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return result, fmt.Errorf("read staged fixes: %w", err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".fix.zip") {
+			if err := readFixArchive(filepath.Join(directory, entry.Name()), result.Files); err != nil {
+				return result, err
+			}
+		}
+	}
+	return result, nil
+}
+
+func readFixArchive(path string, files map[string][]byte) error {
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		return fmt.Errorf("open staged fixes: %w", err)
+	}
+	defer func() { _ = archive.Close() }()
+	for _, file := range archive.File {
+		reader, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("open staged file %s: %w", file.Name, err)
+		}
+		data, err := io.ReadAll(reader)
+		if closeErr := reader.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return fmt.Errorf("read staged file %s: %w", file.Name, err)
+		}
+		if previous, ok := files[file.Name]; ok && !bytes.Equal(previous, data) {
+			return fmt.Errorf("conflicting staged fixes for %s", file.Name)
+		}
+		files[file.Name] = data
+	}
+	return nil
 }
 
 // RefusalPrefix marks a vettool refusal line on stderr. The vettool prints
@@ -75,8 +127,9 @@ type output struct {
 	failed         bool
 }
 
-func execute(ctx context.Context, inv Invocation, modeFlag string) (output, error) {
-	args := []string{"vet", "-vettool=" + inv.Exe, modeFlag, "-config=" + inv.ConfigFile}
+func execute(ctx context.Context, inv Invocation, modeFlags ...string) (output, error) {
+	args := []string{"vet", "-vettool=" + inv.Exe, "-config=" + inv.ConfigFile}
+	args = append(args, modeFlags...)
 	if len(inv.BuildTags) > 0 {
 		args = append(args, "-tags="+strings.Join(inv.BuildTags, ","))
 	}

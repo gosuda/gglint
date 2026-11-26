@@ -261,8 +261,8 @@ func TestGoCommandLine(t *testing.T) {
 	}{
 		{"vet", false, nil, []string{"-config=/cache/config.json", "-json", "-vettool=/opt/gglint"}},
 		{"vet with tags", false, []string{"a", "b"}, []string{"-config=/cache/config.json", "-json", "-tags=a,b", "-vettool=/opt/gglint"}},
-		{"fix", true, nil, []string{"-config=/cache/config.json", "-fix", "-vettool=/opt/gglint"}},
-		{"fix with tags", true, []string{"integration"}, []string{"-config=/cache/config.json", "-fix", "-tags=integration", "-vettool=/opt/gglint"}},
+		{"fix", true, nil, []string{"-config=/cache/config.json", "-fix-output=<stage>", "-json", "-vettool=/opt/gglint"}},
+		{"fix with tags", true, []string{"integration"}, []string{"-config=/cache/config.json", "-fix-output=<stage>", "-json", "-tags=integration", "-vettool=/opt/gglint"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -285,6 +285,11 @@ func TestGoCommandLine(t *testing.T) {
 				t.Fatalf("args = %q, want vet <flags> ./a ./b/...", args)
 			}
 			flags := slices.Sorted(slices.Values(args[1 : len(args)-2]))
+			for index, value := range flags {
+				if strings.HasPrefix(value, "-fix-output=") {
+					flags[index] = "-fix-output=<stage>"
+				}
+			}
 			if !slices.Equal(flags, c.wantFlags) {
 				t.Fatalf("flags = %q, want %q", flags, c.wantFlags)
 			}

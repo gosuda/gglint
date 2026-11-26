@@ -3,7 +3,9 @@ package cli_test
 import (
 	json "encoding/json/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -44,7 +46,10 @@ func TestFixRefusesGeneratedFileWithMessage(t *testing.T) {
 		stdout: agentSummary(0, 0, ""),
 		stderr: "gglint: refused gf/gf.go: generated file\n",
 	}
-	assertResult(t, gglint(t, dir, "run", "-fix", "./gf"), want)
+	env := childEnv(t, dir)
+	for range 2 {
+		assertResult(t, gglintEnv(t, dir, env, "run", "-fix", "./gf"), want)
+	}
 	if got := readFile(t, filepath.Join(pkg, "gf.go")); got != generated {
 		t.Fatalf("generated file changed:\n got: %q\nwant: %q", got, generated)
 	}
@@ -178,5 +183,139 @@ func TestFixContractDocumented(t *testing.T) {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("README does not state %q", want)
 		}
+	}
+}
+
+const modernizeOnly = "mode = \"basic\"\nenable = [\"modernize\"]\ndisable = [\"gofumpt\", \"gosimple\", \"misspell\", \"usetesting\"]\n"
+
+const multilineAtomic = "package counter\n\nimport \"sync/atomic\"\n\nvar count int32\n\nfunc Read() int32 {\n\treturn atomic.LoadInt32(\n\t\t&count,\n\t)\n}\n"
+
+func TestFixKeepsAtomicGroupWhenTestsAreExcluded(t *testing.T) {
+	t.Parallel()
+	dir := workspace(t, modernizeOnly+"[run]\ntests = false\n")
+	pkg := filepath.Join(dir, "counter")
+	if err := os.Mkdir(pkg, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	const production = "package counter\n\nvar count int32\n"
+	const testSource = "package counter\n\nimport (\n\t\"sync/atomic\"\n\t\"testing\"\n)\n\nfunc TestCounter(t *testing.T) {\n\tif atomic.LoadInt32(&count) != 0 {\n\t\tt.Fatal(\"nonzero counter\")\n\t}\n}\n"
+	writeFile(t, filepath.Join(pkg, "counter.go"), production)
+	writeFile(t, filepath.Join(pkg, "counter_test.go"), testSource)
+	got := gglint(t, dir, "run", "-fix", "./counter")
+	if got.code != 1 || !strings.Contains(got.stderr, "counter/counter_test.go: test file excluded when tests are off") || !strings.Contains(got.stdout, "modernize") {
+		t.Fatalf("atomic group result = %+v", got)
+	}
+	if readFile(t, filepath.Join(pkg, "counter.go")) != production || readFile(t, filepath.Join(pkg, "counter_test.go")) != testSource {
+		t.Fatal("a refused atomic group changed one of its files")
+	}
+	check := exec.CommandContext(t.Context(), "go", "test", "-run", "^$", "./counter")
+	check.Dir, check.Env = dir, childEnv(t, dir)
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("refused package no longer compiles: %v\n%s", err, output)
+	}
+}
+
+func TestFixRefusesInvalidSiblingRewriteAndStillReports(t *testing.T) {
+	t.Parallel()
+	dir := workspace(t, modernizeOnly)
+	for _, name := range []string{"neighbor", "counter"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, filepath.Join(dir, "neighbor/neighbor.go"), "package neighbor\n")
+	path := filepath.Join(dir, "counter/counter.go")
+	writeFile(t, path, multilineAtomic)
+	got := gglint(t, filepath.Join(dir, "neighbor"), "run", "-fix", "../counter")
+	if got.code != 1 || !strings.Contains(got.stderr, "gglint: refused ../counter/counter.go: does not parse after fix") || !strings.Contains(got.stdout, "modernize") {
+		t.Fatalf("sibling refusal result = %+v", got)
+	}
+	if after := readFile(t, path); after != multilineAtomic {
+		t.Fatalf("invalid sibling rewrite survived: %q", after)
+	}
+}
+
+func TestFixConflictLeavesOtherPackageUnchanged(t *testing.T) {
+	t.Parallel()
+	dir := workspace(t, "")
+	for _, name := range []string{"conflict", "counter"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const conflicting = "package conflict\n\n// F stores an adress.\nfunc F( ) int {return 1}\n"
+	path := filepath.Join(dir, "counter/counter.go")
+	writeFile(t, filepath.Join(dir, "conflict/conflict.go"), conflicting)
+	writeFile(t, path, multilineAtomic)
+	got := gglint(t, dir, "run", "-fix", "./conflict", "./counter")
+	if got.code != 3 || !strings.Contains(got.stderr, "conflict") {
+		t.Fatalf("fix conflict result = %+v", got)
+	}
+	if after := readFile(t, path); after != multilineAtomic {
+		t.Fatalf("another package's fix escaped a failed run: %q", after)
+	}
+	if after := readFile(t, filepath.Join(dir, "conflict/conflict.go")); after != conflicting {
+		t.Fatalf("conflicting source changed: %q", after)
+	}
+}
+
+func TestTargetedFixIgnoresUnreadableUnselectedDirectory(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires Unix permission enforcement for an ordinary user")
+	}
+	dir := workspace(t, "")
+	blocked := filepath.Join(dir, "container-data")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(blocked, "hidden.go"), "package hidden\n")
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
+	before := readFile(t, filepath.Join(dir, "i/i.go"))
+	got := gglint(t, dir, "run", "-fix", "./i")
+	if got.code != 0 || strings.Contains(got.stderr, "cannot snapshot") {
+		t.Fatalf("targeted fix result = %+v", got)
+	}
+	if after := readFile(t, filepath.Join(dir, "i/i.go")); after == before {
+		t.Fatal("selected ordinary fix did not run")
+	}
+}
+
+func TestFixCLIAccountsForUnrecordedWrite(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("the controlled Go wrapper requires a POSIX shell")
+	}
+	dir := workspace(t, modernizeOnly)
+	pkg := filepath.Join(dir, "stale")
+	if err := os.Mkdir(pkg, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	const before = "package stale\n\nfunc Value() int { return 1 }\n"
+	path := filepath.Join(pkg, "stale.go")
+	writeFile(t, path, before)
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := t.TempDir()
+	const script = "#!/bin/sh\nfor arg do\n  case \"$arg\" in\n    -fix|-fix-output=*) printf 'package stale\\n\\nfunc Value() int { return 7 }\\n' > \"$GGLINT_TEST_TARGET\" ;;\n  esac\ndone\nexec \"$GGLINT_TEST_GO\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(wrapper, "go"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	env := append(childEnv(t, dir),
+		"PATH="+wrapper+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GGLINT_TEST_GO="+realGo,
+		"GGLINT_TEST_TARGET="+path,
+	)
+	got := gglintEnv(t, dir, env, "run", "-fix", "./stale")
+	if got.code != 0 || !strings.Contains(got.stderr, "gglint: refused stale/stale.go: changed without an applied fix") || got.stdout == "" {
+		t.Fatalf("unrecorded write result = %+v", got)
+	}
+	if after := readFile(t, path); after != before {
+		t.Fatalf("unrecorded source change survived: %q", after)
 	}
 }

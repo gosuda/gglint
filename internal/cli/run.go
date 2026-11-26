@@ -135,31 +135,29 @@ func (s *session) lint(ctx context.Context, stderr io.Writer) ([]finding.Finding
 // tree. A refused file is restored to its pre-fix bytes, so a refusal never
 // leaves a partial write behind.
 func (s *session) fix(ctx context.Context, inv driver.Invocation, stderr io.Writer) error {
-	pre, err := driver.SnapshotGoFiles(s.wd)
+	files, err := driver.PackageGoFiles(ctx, inv)
+	if err != nil {
+		return fmt.Errorf("fix refused: cannot select packages: %w", err)
+	}
+	pre, err := driver.SnapshotGoFiles(s.wd, files...)
 	if err != nil {
 		return fmt.Errorf("fix refused: cannot snapshot: %w", err)
 	}
-	refusals, fixErr := driver.Fix(ctx, inv)
-	for _, r := range refusals {
-		if _, err := fmt.Fprintln(stderr, r); err != nil {
-			return fmt.Errorf("internal: %w", err)
-		}
-	}
+	defer func() { _ = pre.Close() }()
+	result, fixErr := driver.Fix(ctx, inv)
 	if fixErr != nil {
-		return fixErr
+		result.Files = nil
 	}
-	var violated []string
-	for _, v := range driver.VerifyFixed(s.wd, pre, nil, s.cfg.Tests) {
-		if uerr := v.Undo(s.wd); uerr != nil {
-			violated = append(violated, v.Path+": "+v.Reason+" (restore failed: "+uerr.Error()+")")
-			continue
+	violations, applyErr := driver.ApplyFixed(s.wd, pre, result.Files, s.cfg.Tests)
+	for _, violation := range violations {
+		result.Refusals = append(result.Refusals, driver.RefusalPrefix+violation.Path+": "+violation.Reason)
+	}
+	for _, r := range result.Refusals {
+		if _, err := fmt.Fprintln(stderr, r); err != nil {
+			return errors.Join(fixErr, applyErr, fmt.Errorf("internal: %w", err))
 		}
-		violated = append(violated, v.Path+": "+v.Reason+"; file restored")
 	}
-	if len(violated) > 0 {
-		return fmt.Errorf("fix refused: %s", strings.Join(violated, "; "))
-	}
-	return nil
+	return errors.Join(fixErr, applyErr)
 }
 
 func (s *session) invocation() (driver.Invocation, error) {

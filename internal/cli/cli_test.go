@@ -94,9 +94,14 @@ func childEnv(t *testing.T, dir string) []string {
 
 func gglint(t *testing.T, dir string, args ...string) result {
 	t.Helper()
+	return gglintEnv(t, dir, childEnv(t, dir), args...)
+}
+
+func gglintEnv(t *testing.T, dir string, env []string, args ...string) result {
+	t.Helper()
 	cmd := exec.CommandContext(t.Context(), binary, args...)
 	cmd.Dir = dir
-	cmd.Env = childEnv(t, dir)
+	cmd.Env = env
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
