@@ -143,26 +143,7 @@ func (e *engine) keep(pass *analysis.Pass, r rules.Rule, check string, d analysi
 	if keep && e.fix {
 		for _, fix := range d.SuggestedFixes {
 			for _, edit := range fix.TextEdits {
-				part := d
-				part.Pos, part.End = edit.Pos, edit.End
-				admitted, why := e.admit(pass, r, check, part)
-				var target *ast.File
-				positionFile := pass.Fset.File(edit.Pos)
-				for _, file := range pass.Files {
-					if positionFile != nil && pass.Fset.File(file.Pos()) == positionFile {
-						target = file
-						break
-					}
-				}
-				if target == nil || !strings.HasSuffix(realName(pass.Fset, edit.Pos), ".go") {
-					admitted, why = false, refuseScope
-				} else if e.stateOf(pass, target).generated {
-					admitted, why = false, refuseGen
-				}
-				if !admitted {
-					if why != "" {
-						e.refuse(pass, part, why)
-					}
+				if !e.admitEdit(pass, r, check, d, edit) {
 					return false
 				}
 			}
@@ -424,4 +405,39 @@ func (d *directive) match(rule, check string) bool {
 		}
 	}
 	return hit
+}
+
+// admitEdit reports whether one suggested edit stays in a fix run, refusing
+// it on stderr when it does not.
+func (e *engine) admitEdit(pass *analysis.Pass, r rules.Rule, check string, d analysis.Diagnostic, edit analysis.TextEdit) bool {
+	part := d
+	part.Pos, part.End = edit.Pos, edit.End
+	admitted, why := e.admit(pass, r, check, part)
+	if target, ok := editTarget(pass, edit.Pos); ok {
+		if !strings.HasSuffix(realName(pass.Fset, edit.Pos), ".go") {
+			admitted, why = false, refuseScope
+		} else if e.stateOf(pass, target).generated {
+			admitted, why = false, refuseGen
+		}
+	} else {
+		admitted, why = false, refuseScope
+	}
+	if !admitted && why != "" {
+		e.refuse(pass, part, why)
+	}
+	return admitted
+}
+
+// editTarget returns the file holding pos, or false when no file does.
+func editTarget(pass *analysis.Pass, pos token.Pos) (*ast.File, bool) {
+	positionFile := pass.Fset.File(pos)
+	if positionFile == nil {
+		return nil, false
+	}
+	for _, file := range pass.Files {
+		if pass.Fset.File(file.Pos()) == positionFile {
+			return file, true
+		}
+	}
+	return nil, false
 }

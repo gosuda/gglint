@@ -178,42 +178,9 @@ func SnapshotGoFiles(workDir string, filenames ...string) (GoSnapshot, error) {
 		if !strings.HasSuffix(filename, ".go") {
 			continue
 		}
-		path := filepath.Clean(absolute(filename, workDir))
-		rel, err := filepath.Rel(workDir, path)
-		if err != nil {
+		if err := snapshotOne(out, directories, workDir, filename); err != nil {
 			return nil, err
 		}
-		parent := filepath.Dir(path)
-		directory := directories[parent]
-		if directory == nil {
-			root, err := os.OpenRoot(parent)
-			if err != nil {
-				return nil, fmt.Errorf("open source directory %s: %w", parent, err)
-			}
-			directory = &snapshotDirectory{root: root, path: parent}
-			directories[parent] = directory
-			directory.names, err = rootNames(root)
-			if err != nil {
-				return nil, err
-			}
-		}
-		name := filepath.Base(path)
-		info, err := directory.root.Lstat(name)
-		if err != nil {
-			return nil, err
-		}
-		if !info.Mode().IsRegular() {
-			// Symlinks, FIFOs and other non-regular sources stay out of the
-			// snapshot: go list reports symlinked files, but the verifier
-			// cannot own their bytes. A staged fix that targets a skipped
-			// path is refused as outside the analysis scope.
-			continue
-		}
-		data, err := readRootFile(directory.root, name)
-		if err != nil {
-			return nil, err
-		}
-		out[filepath.ToSlash(rel)] = SnapshotFile{Bytes: data, name: name, mode: info.Mode(), directory: directory}
 	}
 	complete = true
 	return out, nil
@@ -306,45 +273,59 @@ const (
 func VerifyFixed(workDir string, pre GoSnapshot, applied map[string]bool, tests bool) []FixViolation {
 	var out []FixViolation
 	for path, before := range pre {
-		violation := FixViolation{Path: path, Pre: before.Bytes, file: before}
-		info, err := before.directory.root.Lstat(before.name)
-		if errors.Is(err, os.ErrNotExist) {
-			violation.Reason = ViolateDeleted
-		} else if err != nil {
-			violation.Reason = "cannot inspect after fix: " + err.Error()
-		} else if !info.Mode().IsRegular() {
-			violation.Reason = ViolateStale
-		} else {
-			after, err := readRootFile(before.directory.root, before.name)
-			if err != nil {
-				violation.Reason = "cannot read after fix: " + err.Error()
-			} else if !bytes.Equal(before.Bytes, after) {
-				violation.Reason, _ = refuseChange(path, before.Bytes, after, applied, tests)
-			}
-		}
-		if violation.Reason != "" {
-			out = append(out, violation)
+		if reason := verifyCurrent(path, before, applied, tests); reason != "" {
+			out = append(out, FixViolation{Path: path, Pre: before.Bytes, file: before, Reason: reason})
 		}
 	}
 	for _, directory := range pre.directories() {
-		names, err := rootNames(directory.root)
-		if err != nil {
-			out = append(out, FixViolation{Path: directory.path, Reason: "cannot inspect after fix: " + err.Error()})
-			continue
-		}
-		for name := range names {
-			if directory.names[name] || !strings.HasSuffix(name, ".go") {
-				continue
-			}
-			rel, err := filepath.Rel(workDir, filepath.Join(directory.path, name))
-			if err != nil {
-				out = append(out, FixViolation{Path: name, Reason: err.Error()})
-				continue
-			}
-			out = append(out, FixViolation{Path: filepath.ToSlash(rel), Reason: ViolateCreated, file: SnapshotFile{name: name, directory: directory}})
-		}
+		out = append(out, findCreated(workDir, directory)...)
 	}
 	slices.SortFunc(out, func(a, b FixViolation) int { return strings.Compare(a.Path, b.Path) })
+	return out
+}
+
+// verifyCurrent reports how one snapshotted file changed, or empty when it
+// did not. Early returns keep each decision flat.
+func verifyCurrent(path string, before SnapshotFile, applied map[string]bool, tests bool) string {
+	info, err := before.directory.root.Lstat(before.name)
+	if errors.Is(err, os.ErrNotExist) {
+		return ViolateDeleted
+	}
+	if err != nil {
+		return "cannot inspect after fix: " + err.Error()
+	}
+	if !info.Mode().IsRegular() {
+		return ViolateStale
+	}
+	after, err := readRootFile(before.directory.root, before.name)
+	if err != nil {
+		return "cannot read after fix: " + err.Error()
+	}
+	if bytes.Equal(before.Bytes, after) {
+		return ""
+	}
+	reason, _ := refuseChange(path, before.Bytes, after, applied, tests)
+	return reason
+}
+
+// findCreated reports go files that appeared in directory after the snapshot.
+func findCreated(workDir string, directory *snapshotDirectory) []FixViolation {
+	names, err := rootNames(directory.root)
+	if err != nil {
+		return []FixViolation{{Path: directory.path, Reason: "cannot inspect after fix: " + err.Error()}}
+	}
+	var out []FixViolation
+	for name := range names {
+		if directory.names[name] || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		rel, err := filepath.Rel(workDir, filepath.Join(directory.path, name))
+		if err != nil {
+			out = append(out, FixViolation{Path: name, Reason: err.Error()})
+			continue
+		}
+		out = append(out, FixViolation{Path: filepath.ToSlash(rel), Reason: ViolateCreated, file: SnapshotFile{name: name, directory: directory}})
+	}
 	return out
 }
 
@@ -396,7 +377,6 @@ func replaceSource(file SnapshotFile, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("stage %s: %w", file.name, err)
 	}
-	defer func() { _ = root.Remove(name) }()
 	_, err = out.Write(data)
 	if err == nil {
 		err = out.Chmod(file.mode.Perm())
@@ -404,11 +384,20 @@ func replaceSource(file SnapshotFile, data []byte) error {
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}
-	if err != nil {
-		return fmt.Errorf("stage %s: %w", file.name, err)
+	if err == nil {
+		if err = root.Rename(name, file.name); err != nil {
+			return errors.Join(fmt.Errorf("publish %s: %w", file.name, err), dropTemp(root, name))
+		}
+		return nil
 	}
-	if err := root.Rename(name, file.name); err != nil {
-		return fmt.Errorf("publish %s: %w", file.name, err)
+	return errors.Join(fmt.Errorf("stage %s: %w", file.name, err), dropTemp(root, name))
+}
+
+// dropTemp removes a staged temporary after a failed write. A missing
+// temporary is already gone; any other removal failure joins the error.
+func dropTemp(root *os.Root, name string) error {
+	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove temporary %s: %w", name, err)
 	}
 	return nil
 }
@@ -420,56 +409,19 @@ func ApplyFixed(workDir string, pre GoSnapshot, fixed map[string][]byte, tests b
 	if len(violations) > 0 {
 		return violations, restoreViolations(workDir, violations)
 	}
-	applied := map[string]bool{}
-	contents := map[string][]byte{}
+	batch := &stageBatch{applied: map[string]bool{}, contents: map[string][]byte{}}
 	for filename, data := range fixed {
-		rel, err := filepath.Rel(workDir, absolute(filename, workDir))
+		staged, err := batch.add(workDir, pre, tests, filename, data)
 		if err != nil {
 			return nil, err
 		}
-		path := filepath.ToSlash(rel)
-		before, exists := pre[path]
-		if !exists {
-			violations = append(violations, FixViolation{Path: path, Reason: ViolateScope})
-			continue
-		}
-		if bytes.Equal(before.Bytes, data) {
-			continue
-		}
-		applied[path] = true
-		if reason, refused := refuseChange(path, before.Bytes, data, applied, tests); refused {
-			violations = append(violations, FixViolation{Path: path, Reason: reason})
-		} else if !parses(before.Bytes) {
-			violations = append(violations, FixViolation{Path: path, Reason: ViolateParse})
-		} else {
-			if previous, exists := contents[path]; exists && !bytes.Equal(previous, data) {
-				return nil, fmt.Errorf("conflicting staged fixes for %s", path)
-			}
-			contents[path] = data
-		}
+		violations = append(violations, staged...)
 	}
 	slices.SortFunc(violations, func(a, b FixViolation) int { return strings.Compare(a.Path, b.Path) })
 	if len(violations) > 0 {
 		return violations, nil
 	}
-	paths := make([]string, 0, len(contents))
-	for path := range contents {
-		paths = append(paths, path)
-	}
-	slices.Sort(paths)
-	var published []FixViolation
-	for _, path := range paths {
-		before := pre[path]
-		if err := replaceSource(before, contents[path]); err != nil {
-			return nil, errors.Join(err, restoreViolations(workDir, published))
-		}
-		published = append(published, FixViolation{Path: path, Pre: before.Bytes, file: before})
-	}
-	violations = VerifyFixed(workDir, pre, applied, tests)
-	if len(violations) > 0 {
-		return violations, errors.Join(restoreViolations(workDir, published), restoreViolations(workDir, violations))
-	}
-	return nil, nil
+	return publishBatch(workDir, pre, batch, tests)
 }
 
 func restoreViolations(workDir string, violations []FixViolation) error {
@@ -480,4 +432,111 @@ func restoreViolations(workDir string, violations []FixViolation) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// snapshotOne records one selected source file. Non-regular files stay out:
+// the verifier cannot own their bytes, and a staged fix that targets a
+// skipped path is refused as outside the analysis scope.
+func snapshotOne(out GoSnapshot, directories map[string]*snapshotDirectory, workDir, filename string) error {
+	path := filepath.Clean(absolute(filename, workDir))
+	rel, err := filepath.Rel(workDir, path)
+	if err != nil {
+		return err
+	}
+	directory, err := snapshotDir(directories, filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	name := filepath.Base(path)
+	info, err := directory.root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	data, err := readRootFile(directory.root, name)
+	if err != nil {
+		return err
+	}
+	out[filepath.ToSlash(rel)] = SnapshotFile{Bytes: data, name: name, mode: info.Mode(), directory: directory}
+	return nil
+}
+
+// snapshotDir returns the open handle for parent, opening it once per snapshot.
+func snapshotDir(directories map[string]*snapshotDirectory, parent string) (*snapshotDirectory, error) {
+	if directory := directories[parent]; directory != nil {
+		return directory, nil
+	}
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		return nil, fmt.Errorf("open source directory %s: %w", parent, err)
+	}
+	names, err := rootNames(root)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	directory := &snapshotDirectory{root: root, path: parent, names: names}
+	directories[parent] = directory
+	return directory, nil
+}
+
+// stageBatch accumulates validated staged fixes before publication.
+type stageBatch struct {
+	applied  map[string]bool
+	contents map[string][]byte
+}
+
+// add validates one staged fix into the batch, reporting its violations or a
+// conflicting duplicate. Unchanged files add nothing.
+func (b *stageBatch) add(workDir string, pre GoSnapshot, tests bool, filename string, data []byte) ([]FixViolation, error) {
+	rel, err := filepath.Rel(workDir, absolute(filename, workDir))
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.ToSlash(rel)
+	before, exists := pre[path]
+	if !exists {
+		return []FixViolation{{Path: path, Reason: ViolateScope}}, nil
+	}
+	if bytes.Equal(before.Bytes, data) {
+		return nil, nil
+	}
+	b.applied[path] = true
+	if reason, refused := refuseChange(path, before.Bytes, data, b.applied, tests); refused {
+		return []FixViolation{{Path: path, Reason: reason}}, nil
+	}
+	if !parses(before.Bytes) {
+		return []FixViolation{{Path: path, Reason: ViolateParse}}, nil
+	}
+	if previous, exists := b.contents[path]; exists && !bytes.Equal(previous, data) {
+		return nil, fmt.Errorf("conflicting staged fixes for %s", path)
+	}
+	b.contents[path] = data
+	return nil, nil
+}
+
+// publishBatch writes validated contents and verifies the tree afterward.
+// A write error restores prior writes; a post-write violation restores both
+// the published batch and the violated files.
+func publishBatch(workDir string, pre GoSnapshot, batch *stageBatch, tests bool) ([]FixViolation, error) {
+	paths := make([]string, 0, len(batch.contents))
+	for path := range batch.contents {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	var published []FixViolation
+	for _, path := range paths {
+		before := pre[path]
+		if err := replaceSource(before, batch.contents[path]); err != nil {
+			return nil, errors.Join(err, restoreViolations(workDir, published))
+		}
+		published = append(published, FixViolation{Path: path, Pre: before.Bytes, file: before})
+	}
+	violations := VerifyFixed(workDir, pre, batch.applied, tests)
+	if len(violations) > 0 {
+		return violations, errors.Join(restoreViolations(workDir, published), restoreViolations(workDir, violations))
+	}
+	return nil, nil
 }
