@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/finding"
+	"github.com/gosuda/gglint/internal/vettool"
 )
 
 type Invocation struct {
@@ -70,7 +73,7 @@ func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
 		return FixResult{}, err
 	}
 	defer func() { _ = os.RemoveAll(directory) }()
-	out, err := execute(ctx, inv, "-json", "-fix-output="+directory)
+	out, err := execute(ctx, inv, fixFlags(inv, directory)...)
 	result := FixResult{Refusals: Refusals(out.stderr), Files: map[string][]byte{}}
 	if err != nil {
 		return result, err
@@ -91,6 +94,23 @@ func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
 		}
 	}
 	return result, nil
+}
+
+// fixFlags builds the go vet flags for a fix run. The invocation's resolved
+// roots travel as a flag because the go command does not forward the
+// process environment to the vettool; without them the vettool would scope
+// staging from its own package directory instead of the invocation.
+func fixFlags(inv Invocation, directory string) []string {
+	flags := []string{"-json", "-fix-output=" + directory}
+	roots := config.ActiveModuleRoots(inv.WorkDir)
+	if len(roots) > 0 {
+		data, err := json.Marshal(roots)
+		if err != nil {
+			return append(flags, "-"+vettool.ActiveRootsFlag+"=[]")
+		}
+		flags = append(flags, "-"+vettool.ActiveRootsFlag+"="+string(data))
+	}
+	return flags
 }
 
 func readFixArchive(path string, files map[string][]byte) error {

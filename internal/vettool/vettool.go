@@ -20,9 +20,17 @@ const (
 	fixOutputFlag = "fix-output"
 )
 
+// ActiveRootsFlag carries the invoking gglint process's resolved main
+// modules to the vettool. It is declared in Main so the go command forwards
+// it: go vet rejects any flag the tool does not name in its flag set.
+const ActiveRootsFlag = "active-roots"
+
 func Main(args []string) int {
+	// Declared so the go command forwards the flag to the tool: go vet
+	// queries the tool's flag set and rejects anything it does not name.
 	flag.String(configFlag, "", "path of the resolved gglint configuration")
 	flag.String(fixOutputFlag, "", "directory for staged automatic fixes")
+	flag.String(ActiveRootsFlag, "", "invocation's resolved main modules as a JSON array")
 	path, found := configPath(args)
 	if !found {
 		unitchecker.Main()
@@ -35,24 +43,35 @@ func Main(args []string) int {
 		return 3
 	}
 	if fixOutput != "" {
-		unit, err := stageUnit(args[len(args)-1], fixOutput)
-		if err != nil {
+		if err := stageFix(args, fixOutput); err != nil {
 			fmt.Fprintf(os.Stderr, "gglint: internal: %v\n", err)
 			return 3
-		}
-		if unit != "" {
-			revised := []string{os.Args[0]}
-			for _, arg := range args[:len(args)-1] {
-				name := strings.TrimLeft(arg, "-")
-				if name != "json" && !strings.HasPrefix(name, "json=") {
-					revised = append(revised, arg)
-				}
-			}
-			os.Args = append(revised, "-fix", unit)
 		}
 	}
 	unitchecker.Main(analyzers...)
 	return 0
+}
+
+// stageFix stages the unit configuration for a fix run and rewrites the
+// process arguments to run the fix through the staged unit.
+func stageFix(args []string, fixOutput string) error {
+	unit, err := stageUnit(args[len(args)-1], fixOutput, parseActiveRoots(args))
+	if err != nil {
+		return err
+	}
+	if unit == "" {
+		return nil
+	}
+	revised := []string{os.Args[0]}
+	for _, arg := range args[:len(args)-1] {
+		name := strings.TrimLeft(arg, "-")
+		if name != "json" && !strings.HasPrefix(name, "json=") {
+			revised = append(revised, arg)
+		}
+	}
+	revised = append(revised, "-fix", unit)
+	os.Args = revised
+	return nil
 }
 
 func configPath(args []string) (string, bool) {
@@ -75,26 +94,27 @@ func optionPath(args []string, option string) (string, bool) {
 	return "", false
 }
 
-func stageUnit(path, directory string) (string, error) {
+func stageUnit(path, directory string, roots []string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read fix unit: %w", err)
 	}
 	var unit unitchecker.Config
-	if err := json.Unmarshal(data, &unit); err != nil {
+	if err = json.Unmarshal(data, &unit); err != nil {
 		return "", fmt.Errorf("decode fix unit: %w", err)
 	}
 	if unit.VetxOnly {
 		return "", nil
 	}
 
-	if !stageEligible(&unit) {
+	if !stageEligible(&unit, roots) {
 		return "", nil
 	}
-	file, err := os.CreateTemp(directory, "unit-*.cfg")
-	if err != nil {
-		return "", fmt.Errorf("create fix unit: %w", err)
+	tmpFile, createErr := os.CreateTemp(directory, "unit-*.cfg")
+	if createErr != nil {
+		return "", fmt.Errorf("create fix unit: %w", createErr)
 	}
+	file := tmpFile
 	unit.FixArchive = file.Name() + ".fix.zip"
 	data, err = json.Marshal(&unit)
 	if err == nil {
@@ -111,20 +131,24 @@ func stageUnit(path, directory string) (string, error) {
 
 // stageEligible reports whether fixes for the unit may be staged: main
 // modules always, metadata-less units only when verified in-module.
-func stageEligible(unit *unitchecker.Config) bool {
+func stageEligible(unit *unitchecker.Config, roots []string) bool {
 	if unit.Module != nil {
 		return unit.Module.Main
 	}
 	// Synthetic file packages carry no module metadata: verify their
 	// files against the enclosing module instead of skipping their
 	// fixes silently.
-	return verifiedModuleUnit(unit)
+	return verifiedModuleUnit(unit, roots)
 }
 
 // verifiedModuleUnit reports whether every file in the unit sits inside one
 // active module and outside its vendor directories. Synthetic file packages
 // carry no module metadata, so their scope is verified by directory.
-func verifiedModuleUnit(unit *unitchecker.Config) bool {
+// A nil roots slice selects workspace discovery from the working directory;
+// the fix invocation passes its resolved roots so both ends stage the same
+// files even when the vettool's package directory sits under a different
+// go.work.
+func verifiedModuleUnit(unit *unitchecker.Config, roots []string) bool {
 	if len(unit.GoFiles) == 0 {
 		return false
 	}
@@ -132,7 +156,9 @@ func verifiedModuleUnit(unit *unitchecker.Config) bool {
 	if err != nil {
 		return false
 	}
-	roots := config.ActiveModuleRoots(cwd)
+	if roots == nil {
+		roots = config.ActiveModuleRoots(cwd)
+	}
 	if len(roots) == 0 {
 		return false
 	}
@@ -146,6 +172,22 @@ func verifiedModuleUnit(unit *unitchecker.Config) bool {
 		return false
 	}
 	return true
+}
+
+// parseActiveRoots decodes the invocation's resolved main modules from the
+// command line. An absent flag means the vettool runs outside a fix
+// invocation, and the caller falls back to workspace discovery. A present
+// but undecodable flag fails closed to no roots.
+func parseActiveRoots(args []string) []string {
+	value, found := optionPath(args, ActiveRootsFlag)
+	if !found {
+		return nil
+	}
+	var roots []string
+	if err := json.Unmarshal([]byte(value), &roots); err != nil {
+		return []string{}
+	}
+	return roots
 }
 
 // unitModuleRoot returns the single enclosing module of every file, or

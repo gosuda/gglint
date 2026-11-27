@@ -10,6 +10,8 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/unitchecker"
+
+	"github.com/gosuda/gglint/internal/config"
 )
 
 // stdFile names a file inside the standard library without the deprecated
@@ -47,7 +49,7 @@ func TestStageUnitSkipsUnitsOutsideMainModule(t *testing.T) {
 				t.Fatal(err)
 			}
 			unit := writeFile(t, "unit.cfg", cfg)
-			got, err := stageUnit(unit, t.TempDir())
+			got, err := stageUnit(unit, t.TempDir(), nil)
 			if err != nil {
 				t.Fatalf("stageUnit: %v", err)
 			}
@@ -141,6 +143,7 @@ func TestStageUnitVerifiesMetadataLessUnits(t *testing.T) {
 			writeModuleFile(t, other, "r.go")
 			writeModuleFile(t, filepath.Join(ws, "b"), "x.go")
 			writeModuleFile(t, filepath.Join(ws, "a", "sub", "nested"), "n.go")
+			writeModuleFile(t, mod, filepath.Join("vendor", "example.com", "dep", "dep.go"))
 			writeGoMod(t, filepath.Join(ws, "a", "sub", "nested"), "module example.com/anested\n")
 			t.Chdir(tc.cwd)
 			got := stageFiles(t, tc.goFiles)
@@ -148,6 +151,19 @@ func TestStageUnitVerifiesMetadataLessUnits(t *testing.T) {
 				t.Fatalf("stageUnit = %q, want staged = %v", got, tc.wantStaged)
 			}
 		})
+	}
+}
+
+func TestUnitModuleRootRejectsVendorByGuard(t *testing.T) {
+	t.Parallel()
+	mod := t.TempDir()
+	writeGoMod(t, mod, "module example.com/m\n")
+	dep := writeModuleFile(t, mod, filepath.Join("vendor", "example.com", "dep", "dep.go"))
+	if _, ok := config.EnclosingModule(filepath.Dir(dep)); !ok {
+		t.Fatal("the vendor fixture must sit inside the module for the guard to decide")
+	}
+	if _, ok := unitModuleRoot([]string{dep}, mod, []string{mod}); ok {
+		t.Fatal("unitModuleRoot admitted a vendored file")
 	}
 }
 
@@ -163,6 +179,11 @@ func writeGoMod(t *testing.T, dir, body string) {
 
 func stageFiles(t *testing.T, files []string) string {
 	t.Helper()
+	return stageFilesWithRoots(t, files, nil)
+}
+
+func stageFilesWithRoots(t *testing.T, files, roots []string) string {
+	t.Helper()
 	cfg, err := json.Marshal(&unitchecker.Config{
 		ID:         "command-line-arguments",
 		ImportPath: "command-line-arguments",
@@ -172,9 +193,19 @@ func stageFiles(t *testing.T, files []string) string {
 		t.Fatal(err)
 	}
 	unit := writeFile(t, "unit.cfg", cfg)
-	got, err := stageUnit(unit, t.TempDir())
+	got, err := stageUnit(unit, t.TempDir(), roots)
 	if err != nil {
 		t.Fatalf("stageUnit: %v", err)
 	}
 	return got
+}
+
+func TestStageUnitStagesFileInsideInvocationRoots(t *testing.T) {
+	t.Parallel()
+	mod := t.TempDir()
+	writeGoMod(t, mod, "module example.com/m\n")
+	file := writeModuleFile(t, mod, "p/p.go")
+	if got := stageFilesWithRoots(t, []string{file}, []string{mod}); got == "" {
+		t.Fatal("stageUnit skipped a file inside the invocation roots")
+	}
 }
