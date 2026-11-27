@@ -3,7 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
+
+	"golang.org/x/mod/modfile"
 )
 
 // SameDir reports whether a and b name the same directory, resolving
@@ -34,22 +35,25 @@ func ContainsRoot(roots []string, dir string) bool {
 
 // ActiveModuleRoots returns the main module roots governing cwd: every
 // workspace member when cwd sits in a workspace, else cwd's own module.
-// It returns nil outside any module, so callers fail closed.
+// It reports nil outside any module, so callers fail closed.
 func ActiveModuleRoots(cwd string) []string {
-	if wd := os.Getenv("GOWORK"); wd == "off" {
+	switch wd := os.Getenv("GOWORK"); wd {
+	case "off":
 		return singleModule(cwd)
-	} else if wd != "" {
+	case "", "auto":
+		// An empty value and "auto" both select workspace discovery.
+		if dir, ok := discoverWorkspace(cwd); ok {
+			return parseWorkspace(dir)
+		}
+		return singleModule(cwd)
+	default:
+		// A relative GOWORK resolves against the invoking directory,
+		// matching the go command run there.
+		if !filepath.IsAbs(wd) {
+			wd = filepath.Join(cwd, wd)
+		}
 		return parseWorkspace(wd)
 	}
-	if dir, ok := discoverWorkspace(cwd); ok {
-		roots := parseWorkspace(dir)
-		// A workspace root holding its own go.mod is a main module too.
-		if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "go.mod")); err == nil {
-			roots = append(roots, filepath.Dir(dir))
-		}
-		return roots
-	}
-	return singleModule(cwd)
 }
 
 // singleModule returns cwd's enclosing module, or nil outside any module.
@@ -86,55 +90,36 @@ func discoverWorkspace(cwd string) (string, bool) {
 	}
 }
 
+// ActiveRootsEnv carries the invoking process's resolved main modules to a
+// child vettool: the child runs with a package directory as its working
+// directory, whose nearest go.work can differ from the invocation's.
+const ActiveRootsEnv = "GGLINT_ACTIVE_ROOTS"
+
 func parseWorkspace(path string) []string {
 	data, err := os.ReadFile(path) //nolint:gosec // path is a discovered go.work file or the GOWORK value the go command itself reads
 	if err != nil {
 		return nil
 	}
-	var roots []string
+	// The go.work grammar owns quoting and comments; only keep members the
+	// go command itself would load. Absolute members stay absolute.
+	work, err := modfile.ParseWork(path, data, nil)
+	if err != nil {
+		return nil
+	}
 	base := filepath.Dir(path)
 	seen := map[string]bool{}
-	add := func(p string) {
-		p = strings.Trim(strings.TrimSpace(p), `"`)
-		if p == "" || seen[p] {
-			return
+	var roots []string
+	for _, use := range work.Use {
+		member := use.Path
+		if !filepath.IsAbs(member) {
+			member = filepath.Join(base, member)
 		}
-		seen[p] = true
-		if abs, err := filepath.Abs(filepath.Join(base, p)); err == nil {
-			roots = append(roots, abs)
+		abs, err := filepath.Abs(member)
+		if err != nil || seen[abs] {
+			continue
 		}
-	}
-	for _, p := range usePaths(string(data)) {
-		add(p)
+		seen[abs] = true
+		roots = append(roots, abs)
 	}
 	return roots
-}
-
-// usePaths extracts the member paths from go.work source, handling the
-// single-path and parenthesized block forms and skipping comments.
-// Quoted paths keep their quotes for the caller to strip.
-func usePaths(src string) []string {
-	var toks []string
-	for line := range strings.Lines(src) {
-		if i := strings.Index(line, "//"); i >= 0 {
-			line = line[:i]
-		}
-		toks = append(toks, strings.Fields(line)...)
-	}
-	var out []string
-	for i := 0; i < len(toks); i++ {
-		if toks[i] != "use" || i+1 >= len(toks) {
-			continue
-		}
-		if toks[i+1] == "(" {
-			i += 2
-			for ; i < len(toks) && toks[i] != ")"; i++ {
-				out = append(out, toks[i])
-			}
-			continue
-		}
-		out = append(out, toks[i+1])
-		i++
-	}
-	return out
 }

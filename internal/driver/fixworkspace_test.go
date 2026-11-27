@@ -82,3 +82,31 @@ func TestWorkspaceMemberWithoutGoWorkEntryIsSkipped(t *testing.T) {
 		}
 	}
 }
+
+func TestPackageGoFilesSkipsUnlistedWorkspaceRootModule(t *testing.T) {
+	// Sequential: the test pins GOWORK so workspace discovery is hermetic.
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	writeGo(t, root, "go.work", "go 1.27\n\nuse ./a\n")
+	writeGo(t, root, "go.mod", "module example.com/root\n")
+	writeGo(t, root, "root.go", fixableFunc)
+	writeGo(t, root, "a/go.mod", "module example.com/a\n")
+	writeGo(t, root, "a/alpha.go", fixableFunc)
+	for _, tc := range []struct {
+		pattern string
+		want    []string
+	}{
+		{"a/alpha.go", []string{filepath.Join(root, "a", "alpha.go")}},
+		{"root.go", nil},
+	} {
+		inv := invocation(root)
+		inv.Patterns = []string{tc.pattern}
+		files, err := driver.PackageGoFiles(t.Context(), inv)
+		if err != nil {
+			t.Fatalf("PackageGoFiles(%s): %v", tc.pattern, err)
+		}
+		if !slices.Equal(files, tc.want) {
+			t.Fatalf("selected(%s) = %q, want %q", tc.pattern, files, tc.want)
+		}
+	}
+}

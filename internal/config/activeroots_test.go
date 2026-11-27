@@ -89,3 +89,49 @@ func TestActiveModuleRootsHonorsGoWorkOff(t *testing.T) {
 		t.Fatalf("GOWORK=off ActiveModuleRoots = %q, want the single module", got)
 	}
 }
+
+func TestActiveModuleRootsTreatsAutoLikeUnset(t *testing.T) {
+	t.Setenv("GOWORK", "auto")
+	mod := t.TempDir()
+	writeConfigFile(t, mod, "go.mod", "module example.com/solo\n")
+	got := config.ActiveModuleRoots(mod)
+	if len(got) != 1 || got[0] != mod {
+		t.Fatalf("GOWORK=auto ActiveModuleRoots = %q, want [%q]", got, mod)
+	}
+	root := t.TempDir()
+	writeConfigFile(t, root, "go.work", "go 1.27\n\nuse ./a\n")
+	writeConfigFile(t, root, "a/go.mod", "module example.com/a\n")
+	got = config.ActiveModuleRoots(filepath.Join(root, "a"))
+	if len(got) != 1 || got[0] != filepath.Join(root, "a") {
+		t.Fatalf("GOWORK=auto ActiveModuleRoots = %q, want the workspace member", got)
+	}
+}
+
+func TestActiveModuleRootsSkipsUnlistedWorkspaceRoot(t *testing.T) {
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	writeConfigFile(t, root, "go.work", "go 1.27\n\nuse ./a\n")
+	writeConfigFile(t, root, "go.mod", "module example.com/root\n")
+	writeConfigFile(t, root, "a/go.mod", "module example.com/a\n")
+	got := config.ActiveModuleRoots(root)
+	want := []string{filepath.Join(root, "a")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ActiveModuleRoots = %q, want %q: the unlisted root module is not a member", got, want)
+	}
+}
+
+func TestActiveModuleRootsResolvesAbsoluteAndQuotedMembers(t *testing.T) {
+	t.Setenv("GOWORK", "")
+	root := t.TempDir()
+	outside := t.TempDir()
+	writeConfigFile(t, outside, "go.mod", "module example.com/outside\n")
+	writeConfigFile(t, root, "my app/go.mod", "module example.com/spaced\n")
+	writeConfigFile(t, root, "go.work", "go 1.27\n\nuse "+outside+"\nuse \"./my app\"\n")
+	got := config.ActiveModuleRoots(root)
+	if !slices.Contains(got, outside) {
+		t.Fatalf("ActiveModuleRoots = %q, want it to contain absolute member %q", got, outside)
+	}
+	if !slices.Contains(got, filepath.Join(root, "my app")) {
+		t.Fatalf("ActiveModuleRoots = %q, want it to contain the quoted member", got)
+	}
+}
