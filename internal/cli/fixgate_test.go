@@ -223,8 +223,8 @@ func TestFixRefusesInvalidSiblingRewriteAndStillReports(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeFile(t, filepath.Join(dir, "neighbor/neighbor.go"), "package neighbor\n")
-	path := filepath.Join(dir, "counter/counter.go")
+	writeFile(t, filepath.Join(dir, "neighbor", "neighbor.go"), "package neighbor\n")
+	path := filepath.Join(dir, "counter", "counter.go")
 	writeFile(t, path, multilineAtomic)
 	got := gglint(t, filepath.Join(dir, "neighbor"), "run", "-fix", "../counter")
 	if got.code != 1 || !strings.Contains(got.stderr, "gglint: refused ../counter/counter.go: does not parse after fix") || !strings.Contains(got.stdout, "modernize") {
@@ -244,8 +244,8 @@ func TestFixConflictLeavesOtherPackageUnchanged(t *testing.T) {
 		}
 	}
 	const conflicting = "package conflict\n\n// F stores an adress.\nfunc F( ) int {return 1}\n"
-	path := filepath.Join(dir, "counter/counter.go")
-	writeFile(t, filepath.Join(dir, "conflict/conflict.go"), conflicting)
+	path := filepath.Join(dir, "counter", "counter.go")
+	writeFile(t, filepath.Join(dir, "conflict", "conflict.go"), conflicting)
 	writeFile(t, path, multilineAtomic)
 	got := gglint(t, dir, "run", "-fix", "./conflict", "./counter")
 	if got.code != 3 || !strings.Contains(got.stderr, "conflict") {
@@ -254,7 +254,7 @@ func TestFixConflictLeavesOtherPackageUnchanged(t *testing.T) {
 	if after := readFile(t, path); after != multilineAtomic {
 		t.Fatalf("another package's fix escaped a failed run: %q", after)
 	}
-	if after := readFile(t, filepath.Join(dir, "conflict/conflict.go")); after != conflicting {
+	if after := readFile(t, filepath.Join(dir, "conflict", "conflict.go")); after != conflicting {
 		t.Fatalf("conflicting source changed: %q", after)
 	}
 }
@@ -273,13 +273,17 @@ func TestTargetedFixIgnoresUnreadableUnselectedDirectory(t *testing.T) {
 	if err := os.Chmod(blocked, 0); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
-	before := readFile(t, filepath.Join(dir, "i/i.go"))
+	t.Cleanup(func() {
+		if err := os.Chmod(blocked, 0o700); err != nil {
+			t.Errorf("restore permissions: %v", err)
+		}
+	})
+	before := readFile(t, filepath.Join(dir, "i", "i.go"))
 	got := gglint(t, dir, "run", "-fix", "./i")
 	if got.code != 0 || strings.Contains(got.stderr, "cannot snapshot") {
 		t.Fatalf("targeted fix result = %+v", got)
 	}
-	if after := readFile(t, filepath.Join(dir, "i/i.go")); after == before {
+	if after := readFile(t, filepath.Join(dir, "i", "i.go")); after == before {
 		t.Fatal("selected ordinary fix did not run")
 	}
 }

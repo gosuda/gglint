@@ -153,7 +153,12 @@ linters:
         text: G304
         linters:
           - gosec
-
+      # A fixture typo that a spell suggestion must overlap: the overlapping
+      # format and spell fixes on one file are what make the fix conflict.
+      - path: internal/cli/fixgate_test\.go
+        text: adress
+        linters:
+          - misspell
 formatters:
   enable:
     - gofumpt
