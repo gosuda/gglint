@@ -1,6 +1,7 @@
 package vettool
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -48,7 +49,11 @@ func TestActiveRootsRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	want := []string{filepath.Join("a", "alpha"), filepath.Join("b", "beta")}
-	if err := os.WriteFile(filepath.Join(dir, activeRootsFile), []byte(`["a/alpha","b/beta"]`), 0o600); err != nil {
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, activeRootsFile), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if got := activeRoots(dir); !slices.Equal(got, want) {
