@@ -15,7 +15,6 @@ import (
 
 	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/finding"
-	"github.com/gosuda/gglint/internal/vettool"
 )
 
 type Invocation struct {
@@ -73,7 +72,11 @@ func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
 		return FixResult{}, err
 	}
 	defer func() { _ = os.RemoveAll(directory) }()
-	out, err := execute(ctx, inv, fixFlags(inv, directory)...)
+	err = writeActiveRoots(inv.WorkDir, directory)
+	if err != nil {
+		return FixResult{}, err
+	}
+	out, err := execute(ctx, inv, fixFlags(directory)...)
 	result := FixResult{Refusals: Refusals(out.stderr), Files: map[string][]byte{}}
 	if err != nil {
 		return result, err
@@ -82,35 +85,58 @@ func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
 	if out.failed && !sourceOnly {
 		return result, loadError(strings.TrimSpace(string(out.stderr)))
 	}
-	entries, err := os.ReadDir(directory)
+	err = collectStagedFixes(directory, result.Files)
 	if err != nil {
-		return result, fmt.Errorf("read staged fixes: %w", err)
-	}
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".fix.zip") {
-			if err := readFixArchive(filepath.Join(directory, entry.Name()), result.Files); err != nil {
-				return result, err
-			}
-		}
+		return result, err
 	}
 	return result, nil
 }
 
-// fixFlags builds the go vet flags for a fix run. The invocation's resolved
-// roots travel as a flag because the go command does not forward the
-// process environment to the vettool; without them the vettool would scope
-// staging from its own package directory instead of the invocation.
-func fixFlags(inv Invocation, directory string) []string {
-	flags := []string{"-json", "-fix-output=" + directory}
-	roots := config.ActiveModuleRoots(inv.WorkDir)
-	if len(roots) > 0 {
-		data, err := json.Marshal(roots)
-		if err != nil {
-			return append(flags, "-"+vettool.ActiveRootsFlag+"=[]")
-		}
-		flags = append(flags, "-"+vettool.ActiveRootsFlag+"="+string(data))
+// collectStagedFixes merges every staged fix archive in directory into files.
+func collectStagedFixes(directory string, files map[string][]byte) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return fmt.Errorf("read staged fixes: %w", err)
 	}
-	return flags
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".fix.zip") {
+			continue
+		}
+		if err := readFixArchive(filepath.Join(directory, entry.Name()), files); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// activeRootsFile carries the invocation's resolved main modules to the
+// vettool. It travels as a manifest in the private staging directory
+// because the go command does not forward the process environment to the
+// vettool and a large workspace would exceed OS argument limits as a flag
+// value. The manifest always exists in a fix run: an empty list means the
+// invocation sits outside any module, so the vettool fails closed instead
+// of rediscovering scope from its own package directory.
+const activeRootsFile = "active-roots.json"
+
+// writeActiveRoots records the main modules governing workDir for the fix
+// run staging in directory. An empty list is written as [] so the vettool
+// distinguishes it from a missing manifest.
+func writeActiveRoots(workDir, directory string) error {
+	data := []byte("[]")
+	if roots := config.ActiveModuleRoots(workDir); len(roots) > 0 {
+		if encoded, err := json.Marshal(roots); err == nil {
+			data = encoded
+		}
+	}
+	if err := os.WriteFile(filepath.Join(directory, activeRootsFile), data, 0o600); err != nil {
+		return fmt.Errorf("write active roots: %w", err)
+	}
+	return nil
+}
+
+// fixFlags builds the go vet flags for a fix run.
+func fixFlags(directory string) []string {
+	return []string{"-json", "-fix-output=" + directory}
 }
 
 func readFixArchive(path string, files map[string][]byte) error {

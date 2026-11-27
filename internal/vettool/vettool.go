@@ -20,17 +20,18 @@ const (
 	fixOutputFlag = "fix-output"
 )
 
-// ActiveRootsFlag carries the invoking gglint process's resolved main
-// modules to the vettool. It is declared in Main so the go command forwards
-// it: go vet rejects any flag the tool does not name in its flag set.
-const ActiveRootsFlag = "active-roots"
+// activeRootsFile names the manifest in the fix staging directory that
+// carries the invoking gglint process's resolved main modules. A missing
+// manifest means the vettool runs outside a fix invocation, so the caller
+// falls back to workspace discovery. A present but undecodable manifest
+// fails closed to no roots.
+const activeRootsFile = "active-roots.json"
 
 func Main(args []string) int {
-	// Declared so the go command forwards the flag to the tool: go vet
+	// Declared so the go command forwards the flags to the tool: go vet
 	// queries the tool's flag set and rejects anything it does not name.
 	flag.String(configFlag, "", "path of the resolved gglint configuration")
 	flag.String(fixOutputFlag, "", "directory for staged automatic fixes")
-	flag.String(ActiveRootsFlag, "", "invocation's resolved main modules as a JSON array")
 	path, found := configPath(args)
 	if !found {
 		unitchecker.Main()
@@ -52,10 +53,8 @@ func Main(args []string) int {
 	return 0
 }
 
-// stageFix stages the unit configuration for a fix run and rewrites the
-// process arguments to run the fix through the staged unit.
 func stageFix(args []string, fixOutput string) error {
-	unit, err := stageUnit(args[len(args)-1], fixOutput, parseActiveRoots(args))
+	unit, err := stageUnit(args[len(args)-1], fixOutput, activeRoots(fixOutput))
 	if err != nil {
 		return err
 	}
@@ -145,9 +144,9 @@ func stageEligible(unit *unitchecker.Config, roots []string) bool {
 // active module and outside its vendor directories. Synthetic file packages
 // carry no module metadata, so their scope is verified by directory.
 // A nil roots slice selects workspace discovery from the working directory;
-// the fix invocation passes its resolved roots so both ends stage the same
-// files even when the vettool's package directory sits under a different
-// go.work.
+// a fix invocation reads its resolved roots from the staging manifest so
+// both ends stage the same files even when the vettool's package directory
+// sits under a different go.work.
 func verifiedModuleUnit(unit *unitchecker.Config, roots []string) bool {
 	if len(unit.GoFiles) == 0 {
 		return false
@@ -166,25 +165,24 @@ func verifiedModuleUnit(unit *unitchecker.Config, roots []string) bool {
 	if !ok {
 		return false
 	}
-	// The standard library ships its own go.mod (module std) but is
-	// never the main module: never stage fixes for it.
 	if path, ok := modulePathOf(root); !ok || path == "std" {
 		return false
 	}
 	return true
 }
 
-// parseActiveRoots decodes the invocation's resolved main modules from the
-// command line. An absent flag means the vettool runs outside a fix
-// invocation, and the caller falls back to workspace discovery. A present
-// but undecodable flag fails closed to no roots.
-func parseActiveRoots(args []string) []string {
-	value, found := optionPath(args, ActiveRootsFlag)
-	if !found {
+// activeRoots decodes the invocation's resolved main modules from the
+// manifest the driver wrote into the fix staging directory. A missing
+// manifest means the vettool runs outside a fix invocation, so the caller
+// falls back to workspace discovery by returning nil. Any other failure
+// fails closed to an explicitly empty list, which stages nothing.
+func activeRoots(fixOutput string) []string {
+	data, err := os.ReadFile(filepath.Join(fixOutput, activeRootsFile))
+	if err != nil {
 		return nil
 	}
 	var roots []string
-	if err := json.Unmarshal([]byte(value), &roots); err != nil {
+	if err := json.Unmarshal(data, &roots); err != nil || roots == nil {
 		return []string{}
 	}
 	return roots
