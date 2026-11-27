@@ -90,11 +90,7 @@ func discoverWorkspace(cwd string) (string, bool) {
 	}
 }
 
-// ActiveRootsEnv carries the invoking process's resolved main modules to a
-// child vettool: the child runs with a package directory as its working
-// directory, whose nearest go.work can differ from the invocation's.
-const ActiveRootsEnv = "GGLINT_ACTIVE_ROOTS"
-
+// parseWorkspace reports the member directories of a workspace file.
 func parseWorkspace(path string) []string {
 	data, err := os.ReadFile(path) //nolint:gosec // path is a discovered go.work file or the GOWORK value the go command itself reads
 	if err != nil {
