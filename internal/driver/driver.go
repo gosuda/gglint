@@ -1,13 +1,19 @@
 package driver
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/gosuda/gglint/internal/config"
 	"github.com/gosuda/gglint/internal/finding"
 )
 
@@ -39,16 +45,143 @@ func Vet(ctx context.Context, inv Invocation) ([]finding.Finding, error) {
 	return append(typecheck, findings...), nil
 }
 
-func Fix(ctx context.Context, inv Invocation) error {
-	out, err := execute(ctx, inv, "-fix")
+type FixResult struct {
+	Refusals []string
+	Files    map[string][]byte
+}
+
+// stageDir creates the private staging directory for one fix run and
+// resolves it to absolute: the vettool starts in each package directory,
+// so a relative TMPDIR would otherwise resolve the staging directory
+// against the wrong directory for subpackages.
+func stageDir() (string, error) {
+	directory, err := os.MkdirTemp("", "gglint-fixes-")
 	if err != nil {
-		return err
+		return "", loadError(err.Error())
+	}
+	directory, err = filepath.Abs(directory)
+	if err != nil {
+		return "", loadError(err.Error())
+	}
+	return directory, nil
+}
+
+func Fix(ctx context.Context, inv Invocation) (FixResult, error) {
+	directory, err := stageDir()
+	if err != nil {
+		return FixResult{}, err
+	}
+	defer func() { _ = os.RemoveAll(directory) }()
+	err = writeActiveRoots(inv.WorkDir, directory)
+	if err != nil {
+		return FixResult{}, err
+	}
+	out, err := execute(ctx, inv, fixFlags(directory)...)
+	result := FixResult{Refusals: Refusals(out.stderr), Files: map[string][]byte{}}
+	if err != nil {
+		return result, err
 	}
 	_, sourceOnly := parseStderr(out.stderr, inv.WorkDir)
 	if out.failed && !sourceOnly {
-		return loadError(strings.TrimSpace(string(out.stderr)))
+		return result, loadError(strings.TrimSpace(string(out.stderr)))
+	}
+	err = collectStagedFixes(directory, result.Files)
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// collectStagedFixes merges every staged fix archive in directory into files.
+func collectStagedFixes(directory string, files map[string][]byte) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return fmt.Errorf("read staged fixes: %w", err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".fix.zip") {
+			continue
+		}
+		if err := readFixArchive(filepath.Join(directory, entry.Name()), files); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// activeRootsFile carries the invocation's resolved main modules to the
+// vettool. It travels as a manifest in the private staging directory
+// because the go command does not forward the process environment to the
+// vettool and a large workspace would exceed OS argument limits as a flag
+// value. The manifest always exists in a fix run: an empty list means the
+// invocation sits outside any module, so the vettool fails closed instead
+// of rediscovering scope from its own package directory.
+const activeRootsFile = "active-roots.json"
+
+// writeActiveRoots records the main modules governing workDir for the fix
+// run staging in directory. An empty list is written as [] so the vettool
+// distinguishes it from a missing manifest.
+func writeActiveRoots(workDir, directory string) error {
+	data := []byte("[]")
+	if roots := config.ActiveModuleRoots(workDir); len(roots) > 0 {
+		if encoded, err := json.Marshal(roots); err == nil {
+			data = encoded
+		}
+	}
+	if err := os.WriteFile(filepath.Join(directory, activeRootsFile), data, 0o600); err != nil {
+		return fmt.Errorf("write active roots: %w", err)
+	}
+	return nil
+}
+
+// fixFlags builds the go vet flags for a fix run.
+func fixFlags(directory string) []string {
+	return []string{"-json", "-fix-output=" + directory}
+}
+
+func readFixArchive(path string, files map[string][]byte) error {
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		return fmt.Errorf("open staged fixes: %w", err)
+	}
+	defer func() { _ = archive.Close() }()
+	for _, file := range archive.File {
+		reader, err := file.Open()
+		if err != nil {
+			return fmt.Errorf("open staged file %s: %w", file.Name, err)
+		}
+		data, err := io.ReadAll(reader)
+		if closeErr := reader.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return fmt.Errorf("read staged file %s: %w", file.Name, err)
+		}
+		if previous, ok := files[file.Name]; ok && !bytes.Equal(previous, data) {
+			return fmt.Errorf("conflicting staged fixes for %s", file.Name)
+		}
+		files[file.Name] = data
+	}
+	return nil
+}
+
+// RefusalPrefix marks a vettool refusal line on stderr. The vettool prints
+// one per refused suggested fix during a `-fix` run; report runs stay
+// silent. The text after the prefix is the publication contract: it names
+// the refused path and the reason, and the same strings appear in the README
+// section "Automatic fixes".
+const RefusalPrefix = "gglint: refused "
+
+// Refusals extracts the vettool refusal lines from vet stderr, verbatim.
+func Refusals(stderr []byte) []string {
+	var out []string
+	for line := range strings.SplitSeq(string(stderr), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.HasPrefix(line, RefusalPrefix) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 type output struct {
@@ -56,8 +189,9 @@ type output struct {
 	failed         bool
 }
 
-func execute(ctx context.Context, inv Invocation, modeFlag string) (output, error) {
-	args := []string{"vet", "-vettool=" + inv.Exe, modeFlag, "-config=" + inv.ConfigFile}
+func execute(ctx context.Context, inv Invocation, modeFlags ...string) (output, error) {
+	args := []string{"vet", "-vettool=" + inv.Exe, "-config=" + inv.ConfigFile}
+	args = append(args, modeFlags...)
 	if len(inv.BuildTags) > 0 {
 		args = append(args, "-tags="+strings.Join(inv.BuildTags, ","))
 	}

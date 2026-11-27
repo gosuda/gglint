@@ -261,8 +261,8 @@ func TestGoCommandLine(t *testing.T) {
 	}{
 		{"vet", false, nil, []string{"-config=/cache/config.json", "-json", "-vettool=/opt/gglint"}},
 		{"vet with tags", false, []string{"a", "b"}, []string{"-config=/cache/config.json", "-json", "-tags=a,b", "-vettool=/opt/gglint"}},
-		{"fix", true, nil, []string{"-config=/cache/config.json", "-fix", "-vettool=/opt/gglint"}},
-		{"fix with tags", true, []string{"integration"}, []string{"-config=/cache/config.json", "-fix", "-tags=integration", "-vettool=/opt/gglint"}},
+		{"fix", true, nil, []string{"-config=/cache/config.json", "-fix-output=<stage>", "-json", "-vettool=/opt/gglint"}},
+		{"fix with tags", true, []string{"integration"}, []string{"-config=/cache/config.json", "-fix-output=<stage>", "-json", "-tags=integration", "-vettool=/opt/gglint"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -273,7 +273,7 @@ func TestGoCommandLine(t *testing.T) {
 			inv.Patterns = []string{"./a", "./b/..."}
 			var err error
 			if c.fix {
-				err = driver.Fix(t.Context(), inv)
+				_, err = driver.Fix(t.Context(), inv)
 			} else {
 				_, err = driver.Vet(t.Context(), inv)
 			}
@@ -285,6 +285,11 @@ func TestGoCommandLine(t *testing.T) {
 				t.Fatalf("args = %q, want vet <flags> ./a ./b/...", args)
 			}
 			flags := slices.Sorted(slices.Values(args[1 : len(args)-2]))
+			for index, value := range flags {
+				if strings.HasPrefix(value, "-fix-output=") {
+					flags[index] = "-fix-output=<stage>"
+				}
+			}
 			if !slices.Equal(flags, c.wantFlags) {
 				t.Fatalf("flags = %q, want %q", flags, c.wantFlags)
 			}
@@ -322,7 +327,7 @@ func TestFixErrorClassification(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("PATH", installGo(t, c.run)+string(os.PathListSeparator)+os.Getenv("PATH"))
-			err := driver.Fix(t.Context(), invocation(t.TempDir()))
+			_, err := driver.Fix(t.Context(), invocation(t.TempDir()))
 			if got := fmt.Sprint(err); got != c.wantErr {
 				t.Fatalf("Fix error = %q, want %q", got, c.wantErr)
 			}
@@ -336,7 +341,7 @@ func TestMissingGoCommandIsLoadError(t *testing.T) {
 	if _, err := driver.Vet(t.Context(), inv); err == nil || !strings.HasPrefix(err.Error(), "load: ") {
 		t.Fatalf("Vet error = %v, want a load: error", err)
 	}
-	if err := driver.Fix(t.Context(), inv); err == nil || !strings.HasPrefix(err.Error(), "load: ") {
+	if _, err := driver.Fix(t.Context(), inv); err == nil || !strings.HasPrefix(err.Error(), "load: ") {
 		t.Fatalf("Fix error = %v, want a load: error", err)
 	}
 }
@@ -350,7 +355,7 @@ func TestCanceledContextIsReportedAsCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatalf("Vet = %+v, %v; want no findings and context.Canceled", got, err)
 	}
-	if err := driver.Fix(ctx, inv); !errors.Is(err, context.Canceled) {
+	if _, err := driver.Fix(ctx, inv); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Fix error = %v, want context.Canceled", err)
 	}
 }

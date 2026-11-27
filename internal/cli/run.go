@@ -35,7 +35,7 @@ func parseRunFlags(args []string, stderr io.Writer) (runOptions, error) {
 	fs.StringVar(&opts.configPath, "config", "", "path of gglint.toml")
 	fs.StringVar(&opts.mode, "mode", "", "basic, standard, or strict")
 	fs.StringVar(&opts.format, "format", report.FormatAgent, "agent, text, or json")
-	fs.BoolVar(&opts.fix, "fix", false, "apply suggested fixes before reporting")
+	fs.BoolVar(&opts.fix, "fix", false, "apply admitted fixes, refuse the rest with a message, then report what is left")
 	fs.StringVar(&opts.newFromRev, "new-from-rev", "", "report only findings in lines changed since REV")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
@@ -86,7 +86,7 @@ func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if s.printed != "" && say(stderr, "config %s", s.printed) != nil {
 		return exitFailure
 	}
-	findings, err := s.lint(ctx)
+	findings, err := s.lint(ctx, stderr)
 	switch {
 	case err == nil:
 		return s.finish(stdout, stderr, findings)
@@ -110,13 +110,13 @@ func (s *session) finish(stdout, stderr io.Writer, findings []finding.Finding) i
 	return exitFindings
 }
 
-func (s *session) lint(ctx context.Context) ([]finding.Finding, error) {
+func (s *session) lint(ctx context.Context, stderr io.Writer) ([]finding.Finding, error) {
 	inv, err := s.invocation()
 	if err != nil {
 		return nil, fmt.Errorf("internal: %w", err)
 	}
 	if s.opts.fix {
-		if fixErr := driver.Fix(ctx, inv); fixErr != nil {
+		if fixErr := s.fix(ctx, inv, stderr); fixErr != nil {
 			return nil, fixErr
 		}
 	}
@@ -128,6 +128,35 @@ func (s *session) lint(ctx context.Context) ([]finding.Finding, error) {
 		raw[i].Rule, raw[i].Check = rules.Token(raw[i].Rule, s.selected)
 	}
 	return finding.Prepare(ctx, raw, finding.Options{WorkDir: s.wd, Tests: s.cfg.Tests, NewFromRev: s.opts.newFromRev})
+}
+
+// fix runs the fixer, surfaces every refused fix on stderr, and verifies the
+// tree. A refused file is restored to its pre-fix bytes, so a refusal never
+// leaves a partial write behind.
+func (s *session) fix(ctx context.Context, inv driver.Invocation, stderr io.Writer) error {
+	files, err := driver.PackageGoFiles(ctx, inv)
+	if err != nil {
+		return fmt.Errorf("fix refused: cannot select packages: %w", err)
+	}
+	pre, err := driver.SnapshotGoFiles(s.wd, files...)
+	if err != nil {
+		return fmt.Errorf("fix refused: cannot snapshot: %w", err)
+	}
+	defer func() { _ = pre.Close() }()
+	result, fixErr := driver.Fix(ctx, inv)
+	if fixErr != nil {
+		result.Files = nil
+	}
+	violations, applyErr := driver.ApplyFixed(s.wd, pre, result.Files, s.cfg.Tests)
+	for _, violation := range violations {
+		result.Refusals = append(result.Refusals, driver.RefusalPrefix+violation.Path+": "+violation.Reason)
+	}
+	for _, r := range result.Refusals {
+		if _, err := fmt.Fprintln(stderr, r); err != nil {
+			return errors.Join(fixErr, applyErr, fmt.Errorf("internal: %w", err))
+		}
+	}
+	return errors.Join(fixErr, applyErr)
 }
 
 func (s *session) invocation() (driver.Invocation, error) {

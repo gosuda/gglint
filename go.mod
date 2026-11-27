@@ -29,6 +29,7 @@ require (
 	github.com/timakin/bodyclose v0.0.0-20261107224203-8bb60b19bea4
 	go-simpler.org/musttag v0.14.0
 	go.augendre.info/fatcontext v0.10.1
+	golang.org/x/mod v0.43.0
 	golang.org/x/tools v0.53.0
 	honnef.co/go/tools v0.8.2
 	mvdan.cc/gofumpt v0.12.0
@@ -52,7 +53,6 @@ require (
 	github.com/quasilyte/regex/syntax v0.0.0-20210819130434-b3f0c404a727 // indirect
 	github.com/quasilyte/stdinfo v0.0.0-20220114132959-f7386bf02567 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20251023183803-a4bb9ffd2546 // indirect
-	golang.org/x/mod v0.43.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/tools/go/packages/packagestest v0.1.1-deprecated // indirect
 )

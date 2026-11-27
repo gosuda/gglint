@@ -94,9 +94,14 @@ func childEnv(t *testing.T, dir string) []string {
 
 func gglint(t *testing.T, dir string, args ...string) result {
 	t.Helper()
+	return gglintEnv(t, dir, childEnv(t, dir), args...)
+}
+
+func gglintEnv(t *testing.T, dir string, env []string, args ...string) result {
+	t.Helper()
 	cmd := exec.CommandContext(t.Context(), binary, args...)
 	cmd.Dir = dir
-	cmd.Env = childEnv(t, dir)
+	cmd.Env = env
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
@@ -788,7 +793,7 @@ func TestFixWithTestsOffLeavesTestFilesByteIdentical(t *testing.T) {
 	testFile := filepath.Join(dir, "fixtests", "f_test.go")
 	before := readFile(t, testFile)
 	writeFile(t, filepath.Join(dir, config.FileName), testsOff)
-	assertResult(t, gglint(t, dir, "run", "-format", "text", "-fix", "./fixtests"), result{stderr: configLine(testsOff)})
+	assertResult(t, gglint(t, dir, "run", "-format", "text", "-fix", "./fixtests"), result{stderr: configLine(testsOff) + "gglint: refused fixtests/f_test.go: test file excluded when tests are off\n"})
 	if got, want := readFile(t, filepath.Join(dir, "fixtests", "f.go")), "package fixtests\n\nfunc Two() int {\n\treturn 2\n}\n"; got != want {
 		t.Errorf("fixed fixtests/f.go = %q, want %q", got, want)
 	}

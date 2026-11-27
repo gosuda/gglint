@@ -52,7 +52,10 @@ func parseStderr(stderr []byte, workDir string) (findings []finding.Finding, sou
 }
 
 func stderrProgress(line string) bool {
-	return strings.TrimSpace(line) == "" || packageHeader.MatchString(line) ||
+	// Refusal lines are extracted by Refusals and surfaced beside the
+	// report; they must not read as a load failure.
+	return strings.HasPrefix(line, RefusalPrefix) ||
+		strings.TrimSpace(line) == "" || packageHeader.MatchString(line) ||
 		moduleDownload.MatchString(line) || toolchainDownload.MatchString(line)
 }
 
